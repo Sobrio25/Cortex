@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AI Agents</string>
+    <string name="agents">Agentes</string>
+    <string name="providers">Proveedores</string>
+    <string name="settings">Configuración</string>
+    <string name="new_agent">Nuevo Agente</string>
+    <string name="agent_name">Nombre del agente</string>
+    <string name="agent_role">Rol / Personalidad</string>
+    <string name="select_provider">Seleccionar proveedor</string>
+    <string name="select_model">Seleccionar modelo</string>
+    <string name="api_key">API Key</string>
+    <string name="save">Guardar</string>
+    <string name="cancel">Cancelar</string>
+    <string name="delete">Eliminar</string>
+    <string name="chat">Chat</string>
+    <string name="files">Archivos</string>
+    <string name="upload_file">Subir archivo</string>
+    <string name="type_message">Escribe un mensaje…</string>
+    <string name="send">Enviar</string>
+    <string name="no_agents">No tienes agentes creados</string>
+    <string name="create_first_agent">Crea tu primer agente de IA</string>
+    <string name="openrouter">OpenRouter</string>
+    <string name="google_ai">Google AI (Gemini)</string>
+    <string name="openai">OpenAI</string>
+    <string name="ollama">Ollama (Local)</string>
+    <string name="minimax">MiniMax</string>
+    <string name="moonshot">Moonshot (Kimi)</string>
+    <string name="anthropic">Anthropic (Claude)</string>
+    <string name="base_url">URL Base</string>
+    <string name="configure_provider">Configurar proveedor</string>
+    <string name="provider_configured">Proveedor configurado</string>
+    <string name="error_api_key">API Key requerida</string>
+    <string name="error_connection">Error de conexión</string>
+
+    <!-- Onboarding -->
+    <string name="onboarding_welcome_title">Bienvenido a AI Agents</string>
+    <string name="onboarding_cortex_intro">¡Hola! Soy Cortex, tu coordinador de IA. Te ayudaré a configurar todo.</string>
+    <string name="onboarding_select_language">Selecciona tu idioma</string>
+    <string name="onboarding_your_name">¿Cómo te llamas?</string>
+    <string name="onboarding_your_nickname">¿Cómo te gusta que te digan?</string>
+    <string name="onboarding_name_hint">Tu nombre completo</string>
+    <string name="onboarding_nickname_hint">Tu nombre preferido</string>
+    <string name="onboarding_greeting">¡Mucho gusto, %1$s!</string>
+    <string name="onboarding_continue">Continuar</string>
+    <string name="onboarding_skip">Omitir</string>
+    <string name="onboarding_back">Atrás</string>
+    <string name="onboarding_get_started">¡Comenzar!</string>
+    <string name="onboarding_step_of">Paso %1$d de %2$d</string>
+
+    <string name="onboarding_providers_title">Proveedores de IA</string>
+    <string name="onboarding_providers_desc">Conecta tus servicios de IA como OpenAI, Anthropic, Google AI, y más. Necesitas al menos un proveedor para empezar a chatear con tus agentes.</string>
+    <string name="onboarding_configure_providers">Configurar Proveedores</string>
+
+    <string name="onboarding_mcp_title">Servidores de Herramientas (MCP)</string>
+    <string name="onboarding_mcp_desc">Extiende las capacidades de tus agentes con herramientas como búsqueda web, gestión de archivos, GitHub, Notion, y más a través de servidores MCP.</string>
+    <string name="onboarding_configure_mcp">Configurar MCP</string>
+
+    <string name="onboarding_agents_title">Agentes de IA</string>
+    <string name="onboarding_agents_desc">Crea agentes de IA especializados con personalidades, roles y capacidades únicas. Cada agente puede usar diferentes modelos y herramientas.</string>
+    <string name="onboarding_create_agents">Crear Agentes</string>
+
+    <string name="onboarding_workspaces_title">Espacios de Trabajo</string>
+    <string name="onboarding_workspaces_desc">Organiza tus agentes en espacios de trabajo para diferentes proyectos. Cada espacio tiene su propio equipo de agentes trabajando juntos.</string>
+    <string name="onboarding_setup_workspaces">Configurar Espacios</string>
+
+    <string name="onboarding_cortex_personality_title">Personalizar a Cortex</string>
+    <string name="onboarding_cortex_personality_desc">Ajusta la personalidad de Cortex según tu estilo. Siempre puedes cambiarlo después.</string>
+    <string name="onboarding_cortex_name">Nombre del asistente</string>
+    <string name="onboarding_cortex_name_hint">Cortex</string>
+    <string name="onboarding_sarcasm">Sarcasmo</string>
+    <string name="onboarding_sarcasm_low">Serio</string>
+    <string name="onboarding_sarcasm_high">Mordaz</string>
+    <string name="onboarding_creativity">Creatividad</string>
+    <string name="onboarding_creativity_low">Convencional</string>
+    <string name="onboarding_creativity_high">Innovador</string>
+    <string name="onboarding_formality">Formalidad</string>
+    <string name="onboarding_formality_low">Casual</string>
+    <string name="onboarding_formality_high">Formal</string>
+    <string name="onboarding_empathy">Empatía</string>
+    <string name="onboarding_empathy_low">Objetivo</string>
+    <string name="onboarding_empathy_high">Empático</string>
+    <string name="onboarding_technical">Precisión Técnica</string>
+    <string name="onboarding_technical_low">Conceptual</string>
+    <string name="onboarding_technical_high">Preciso</string>
+
+    <string name="onboarding_ready_title">¡Todo listo!</string>
+    <string name="onboarding_ready_desc">Siempre puedes configurar estos ajustes después desde el menú de configuración. ¡Disfruta!</string>
+
+    <!-- Settings -->
+    <string name="settings_agents_title">Agentes</string>
+    <string name="settings_agents_subtitle">Gestionar agentes y personalidad</string>
+    <string name="settings_providers_title">Proveedores</string>
+    <string name="settings_providers_subtitle">API keys y modelos</string>
+    <string name="settings_local_models_title">Modelos Locales</string>
+    <string name="settings_local_models_subtitle">Modelos on-device con MediaPipe</string>
+    <string name="settings_mcp_title">Skills y MCP</string>
+    <string name="settings_mcp_subtitle">Servidores de herramientas</string>
+    <string name="settings_memory_title">Memoria</string>
+    <string name="settings_memory_subtitle">Memoria persistente de Cortex</string>
+</resources>

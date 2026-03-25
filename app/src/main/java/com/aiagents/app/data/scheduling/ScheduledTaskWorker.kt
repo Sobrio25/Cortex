@@ -1,0 +1,234 @@
+package com.aiagents.app.data.scheduling
+
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.hilt.work.HiltWorker
+import androidx.work.CoroutineWorker
+import androidx.work.WorkerParameters
+import com.aiagents.app.MainActivity
+import com.aiagents.app.R
+import com.aiagents.app.data.local.ScheduledTaskDao
+import com.aiagents.app.data.local.SecurePreferences
+import com.aiagents.app.data.repository.AgentRepository
+import com.aiagents.app.data.repository.FileRepository
+import com.aiagents.app.domain.model.Message
+import com.aiagents.app.domain.model.MessageRole
+import com.aiagents.app.domain.model.ToolCall
+import com.aiagents.app.domain.model.ToolResult
+import dagger.assisted.Assisted
+import dagger.assisted.AssistedInject
+
+/**
+ * WorkManager worker that executes a scheduled agent task in the background.
+ * Handles a simplified tool loop (non-interactive tools only).
+ */
+@HiltWorker
+class ScheduledTaskWorker @AssistedInject constructor(
+    @Assisted appContext: Context,
+    @Assisted workerParams: WorkerParameters,
+    private val scheduledTaskDao: ScheduledTaskDao,
+    private val repository: AgentRepository,
+    private val fileRepository: FileRepository,
+    private val securePreferences: SecurePreferences,
+    private val taskSchedulerManager: TaskSchedulerManager
+) : CoroutineWorker(appContext, workerParams) {
+
+    companion object {
+        private const val TAG = "ScheduledTaskWorker"
+        const val KEY_TASK_ID = "task_id"
+        private const val CHANNEL_ID = "scheduled_tasks"
+        private const val MAX_TOOL_ITERATIONS = 10
+    }
+
+    override suspend fun doWork(): Result {
+        val taskId = inputData.getLong(KEY_TASK_ID, -1L)
+        if (taskId < 0) return Result.failure()
+
+        val task = scheduledTaskDao.getById(taskId)
+        if (task == null || !task.enabled) {
+            Log.w(TAG, "Task $taskId not found or disabled")
+            return Result.success()
+        }
+
+        Log.d(TAG, "Executing scheduled task $taskId: '${task.label}'")
+
+        return try {
+            val resultText = executeAgentTask(task.agentName, task.prompt, task.workspaceId)
+            val summary = resultText.take(500)
+
+            // Schedule next run if recurring
+            val nextRun = taskSchedulerManager.computeNextRun(
+                task.scheduleType, task.scheduleValue, System.currentTimeMillis()
+            )
+
+            if (nextRun != null) {
+                scheduledTaskDao.markExecuted(taskId, System.currentTimeMillis(), summary, nextRun)
+                taskSchedulerManager.scheduleAlarm(task.copy(nextRunAt = nextRun, lastRunAt = System.currentTimeMillis()))
+            } else {
+                // One-time task — disable after execution
+                scheduledTaskDao.markExecuted(taskId, System.currentTimeMillis(), summary, 0L)
+                scheduledTaskDao.setEnabled(taskId, false)
+            }
+
+            sendNotification(task.label.ifBlank { "Scheduled Task" }, summary)
+            Log.d(TAG, "Task $taskId completed successfully")
+            Result.success()
+        } catch (e: Exception) {
+            Log.e(TAG, "Task $taskId failed", e)
+            // Still schedule next run on failure
+            val nextRun = taskSchedulerManager.computeNextRun(
+                task.scheduleType, task.scheduleValue, System.currentTimeMillis()
+            )
+            if (nextRun != null) {
+                scheduledTaskDao.markExecuted(taskId, System.currentTimeMillis(), "Error: ${e.message}", nextRun)
+                taskSchedulerManager.scheduleAlarm(task.copy(nextRunAt = nextRun))
+            }
+            Result.retry()
+        }
+    }
+
+    /**
+     * Execute an agent's prompt with tool support. Simplified loop for background execution.
+     */
+    private suspend fun executeAgentTask(agentName: String?, prompt: String, workspaceId: Long): String {
+        val agent = if (agentName != null) {
+            repository.getAgentByName(agentName) ?: repository.getOrchestratorAgent()
+        } else {
+            repository.getOrchestratorAgent()
+        } ?: throw IllegalStateException("No agent available")
+
+        val messages = mutableListOf(Message(role = MessageRole.USER, content = prompt))
+        var finalContent = ""
+
+        repeat(MAX_TOOL_ITERATIONS) { iteration ->
+            val response = repository.chatWithTools(
+                agent = agent,
+                messages = messages,
+                enableTerminal = agent.enableTerminal,
+                workspaceFolderPath = fileRepository.getWorkspaceFolderPath(workspaceId)
+            ).getOrThrow()
+
+            finalContent = response.content ?: ""
+
+            val toolCalls = response.toolCalls
+            if (toolCalls.isNullOrEmpty()) {
+                return finalContent // Done — no more tool calls
+            }
+
+            // Add assistant message with tool calls
+            messages.add(Message(role = MessageRole.ASSISTANT, content = finalContent, toolCalls = toolCalls))
+
+            // Execute each tool call
+            for (tc in toolCalls) {
+                val result = executeToolInBackground(agent, tc, workspaceId)
+                messages.add(Message(
+                    role = MessageRole.TOOL,
+                    content = result.content,
+                    toolResults = listOf(result)
+                ))
+            }
+        }
+
+        return finalContent
+    }
+
+    /**
+     * Execute a tool call in background context. Only supports non-interactive tools.
+     */
+    private suspend fun executeToolInBackground(
+        agent: com.aiagents.app.domain.model.Agent,
+        toolCall: ToolCall,
+        workspaceId: Long
+    ): ToolResult {
+        val name = toolCall.function.name
+        val args = toolCall.function.arguments
+        val id = toolCall.id
+        val wsPath = fileRepository.getWorkspaceFolderPath(workspaceId)
+
+        return try {
+            val content = when (name) {
+                // File operations
+                "read_text_file", "read_image_file", "read_pdf_file", "write_file", "list_files" -> {
+                    repository.getFileToolHandler().executeTool(id, name, args, workspaceId).content
+                }
+                // Web search
+                "duckduckgo_search" -> {
+                    repository.getDuckDuckGoSearchToolHandler().executeTool(id, args).content
+                }
+                "brave_web_search" -> {
+                    repository.getBraveSearchToolHandler().executeTool(id, args, repository.getBraveApiKey()).content
+                }
+                "serpapi_search" -> {
+                    repository.getSerpAPIToolHandler().executeTool(id, args, repository.getSerpApiKey()).content
+                }
+                // Memory
+                in com.aiagents.app.data.terminal.MemoryToolHandler.ALL_TOOL_NAMES -> {
+                    repository.getMemoryToolHandler().executeTool(id, name, args).content
+                }
+                // Terminal
+                "execute_command" -> {
+                    val handler = repository.getToolHandler()
+                    val request = handler.parseToolCall(toolCall)
+                    if (request != null) {
+                        val result = handler.executeWithPermission(request, wsPath)
+                        handler.formatResultForLLM(result)
+                    } else "Error parsing command"
+                }
+                // GitHub
+                in com.aiagents.app.data.terminal.GitHubToolHandler.ALL_TOOL_NAMES -> {
+                    repository.getGitHubToolHandler().executeTool(id, name, args).content
+                }
+                // Notion
+                in com.aiagents.app.data.terminal.NotionToolHandler.ALL_TOOL_NAMES -> {
+                    repository.getNotionToolHandler().executeTool(id, name, args).content
+                }
+                // Slack
+                in com.aiagents.app.data.terminal.SlackToolHandler.ALL_TOOL_NAMES -> {
+                    repository.getSlackToolHandler().executeTool(id, name, args).content
+                }
+                // App control
+                "app_control" -> {
+                    repository.getAppControlToolHandler().executeTool(id, args, workspaceId).content
+                }
+                else -> "Tool '$name' is not available in background execution."
+            }
+            ToolResult(id, name, content)
+        } catch (e: Exception) {
+            Log.e(TAG, "Background tool error: $name", e)
+            ToolResult(id, name, "Error: ${e.message}")
+        }
+    }
+
+    private fun sendNotification(title: String, body: String) {
+        val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        // Ensure channel exists
+        val channel = NotificationChannel(
+            CHANNEL_ID, "Scheduled Tasks",
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply { description = "Results from scheduled agent tasks" }
+        nm.createNotificationChannel(channel)
+
+        val openIntent = PendingIntent.getActivity(
+            applicationContext, 0,
+            Intent(applicationContext, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(title)
+            .setContentText(body.take(200))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body.take(500)))
+            .setContentIntent(openIntent)
+            .setAutoCancel(true)
+            .build()
+
+        nm.notify(System.currentTimeMillis().toInt(), notification)
+    }
+}

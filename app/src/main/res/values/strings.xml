@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AI Agents</string>
+    <string name="agents">Agents</string>
+    <string name="providers">Providers</string>
+    <string name="settings">Settings</string>
+    <string name="new_agent">New Agent</string>
+    <string name="agent_name">Agent name</string>
+    <string name="agent_role">Role / Personality</string>
+    <string name="select_provider">Select provider</string>
+    <string name="select_model">Select model</string>
+    <string name="api_key">API Key</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    <string name="delete">Delete</string>
+    <string name="chat">Chat</string>
+    <string name="files">Files</string>
+    <string name="upload_file">Upload file</string>
+    <string name="type_message">Type a message…</string>
+    <string name="send">Send</string>
+    <string name="no_agents">No agents created</string>
+    <string name="create_first_agent">Create your first AI agent</string>
+    <string name="openrouter">OpenRouter</string>
+    <string name="google_ai">Google AI (Gemini)</string>
+    <string name="openai">OpenAI</string>
+    <string name="ollama">Ollama (Local)</string>
+    <string name="minimax">MiniMax</string>
+    <string name="moonshot">Moonshot (Kimi)</string>
+    <string name="anthropic">Anthropic (Claude)</string>
+    <string name="base_url">Base URL</string>
+    <string name="configure_provider">Configure provider</string>
+    <string name="provider_configured">Provider configured</string>
+    <string name="error_api_key">API Key required</string>
+    <string name="error_connection">Connection error</string>
+
+    <!-- Onboarding -->
+    <string name="onboarding_welcome_title">Welcome to AI Agents</string>
+    <string name="onboarding_cortex_intro">Hi! I\'m Cortex, your AI coordinator. I\'ll help you set everything up.</string>
+    <string name="onboarding_select_language">Select your language</string>
+    <string name="onboarding_your_name">What\'s your name?</string>
+    <string name="onboarding_your_nickname">What should I call you?</string>
+    <string name="onboarding_name_hint">Your full name</string>
+    <string name="onboarding_nickname_hint">Your preferred name</string>
+    <string name="onboarding_greeting">Nice to meet you, %1$s!</string>
+    <string name="onboarding_continue">Continue</string>
+    <string name="onboarding_skip">Skip</string>
+    <string name="onboarding_back">Back</string>
+    <string name="onboarding_get_started">Get Started!</string>
+    <string name="onboarding_step_of">Step %1$d of %2$d</string>
+
+    <string name="onboarding_providers_title">AI Providers</string>
+    <string name="onboarding_providers_desc">Connect your AI services like OpenAI, Anthropic, Google AI, and more. You need at least one provider to start chatting with your agents.</string>
+    <string name="onboarding_configure_providers">Configure Providers</string>
+
+    <string name="onboarding_mcp_title">Tool Servers (MCP)</string>
+    <string name="onboarding_mcp_desc">Extend your agents with powerful tools like web search, file management, GitHub, Notion, and more through MCP servers.</string>
+    <string name="onboarding_configure_mcp">Configure MCP</string>
+
+    <string name="onboarding_agents_title">AI Agents</string>
+    <string name="onboarding_agents_desc">Create specialized AI agents with unique personalities, roles, and capabilities. Each agent can use different models and tools.</string>
+    <string name="onboarding_create_agents">Create Agents</string>
+
+    <string name="onboarding_workspaces_title">Workspaces</string>
+    <string name="onboarding_workspaces_desc">Organize your agents into workspaces for different projects. Each workspace has its own team of agents working together.</string>
+    <string name="onboarding_setup_workspaces">Set Up Workspaces</string>
+
+    <string name="onboarding_cortex_personality_title">Customize Cortex</string>
+    <string name="onboarding_cortex_personality_desc">Adjust Cortex\'s personality to match your style. You can always change this later.</string>
+    <string name="onboarding_cortex_name">Assistant name</string>
+    <string name="onboarding_cortex_name_hint">Cortex</string>
+    <string name="onboarding_sarcasm">Sarcasm</string>
+    <string name="onboarding_sarcasm_low">Serious</string>
+    <string name="onboarding_sarcasm_high">Witty</string>
+    <string name="onboarding_creativity">Creativity</string>
+    <string name="onboarding_creativity_low">Conventional</string>
+    <string name="onboarding_creativity_high">Innovative</string>
+    <string name="onboarding_formality">Formality</string>
+    <string name="onboarding_formality_low">Casual</string>
+    <string name="onboarding_formality_high">Formal</string>
+    <string name="onboarding_empathy">Empathy</string>
+    <string name="onboarding_empathy_low">Objective</string>
+    <string name="onboarding_empathy_high">Empathetic</string>
+    <string name="onboarding_technical">Technical Precision</string>
+    <string name="onboarding_technical_low">Conceptual</string>
+    <string name="onboarding_technical_high">Precise</string>
+
+    <string name="onboarding_ready_title">You\'re all set!</string>
+    <string name="onboarding_ready_desc">You can always configure these settings later from the settings menu. Enjoy!</string>
+
+    <!-- Settings -->
+    <string name="settings_agents_title">Agents</string>
+    <string name="settings_agents_subtitle">Manage agents and personality</string>
+    <string name="settings_providers_title">Providers</string>
+    <string name="settings_providers_subtitle">API keys and models</string>
+    <string name="settings_local_models_title">Local Models</string>
+    <string name="settings_local_models_subtitle">On-device models with MediaPipe</string>
+    <string name="settings_mcp_title">Skills &amp; MCP</string>
+    <string name="settings_mcp_subtitle">Tool servers</string>
+    <string name="settings_memory_title">Memory</string>
+    <string name="settings_memory_subtitle">Cortex persistent memory</string>
+</resources>
