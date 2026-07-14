@@ -29,7 +29,6 @@ fun LocalModelsScreen(
     val models by viewModel.models.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val isDownloading by viewModel.isDownloading.collectAsState()
-    val availableStorage by viewModel.availableStorage.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val successMessage by viewModel.successMessage.collectAsState()
     val huggingFaceToken by viewModel.huggingFaceToken.collectAsState()
@@ -174,45 +173,6 @@ fun LocalModelsScreen(
                 }
             }
 
-            // Info de almacenamiento
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Storage,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = "Almacenamiento disponible",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                            Text(
-                                text = viewModel.formatBytes(availableStorage),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                        }
-                    }
-                }
-            }
-
             // Botón de ayuda
             item {
                 Card(
@@ -258,47 +218,6 @@ fun LocalModelsScreen(
                 }
             }
 
-            // Nota sobre tool calling
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.Top
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Warning,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = "Tool Calling (ejecución de comandos)",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                            Spacer(Modifier.height(2.dp))
-                            Text(
-                                text = "Solo los modelos marcados con ✅ soportan tool calling. Los demás modelos funcionan para chat pero no pueden ejecutar comandos de terminal.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                        }
-                    }
-                }
-            }
-
             item {
                 Text(
                     text = "Modelos disponibles",
@@ -316,6 +235,7 @@ fun LocalModelsScreen(
                     downloadProgress = downloadProgress[model.id] ?: 0f,
                     hasToken = huggingFaceToken.isNotBlank(),
                     onDownload = { viewModel.downloadModel(model) },
+                    onCancelDownload = { viewModel.cancelDownload(model.id) },
                     onDelete = { viewModel.deleteModel(model) },
                     onShowTokenDialog = { showTokenDialog = true },
                     onShowHelp = { showHelpDialog = true },
@@ -353,13 +273,13 @@ fun LocalModelsScreen(
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Buscar en HuggingFace",
+                                text = "Buscar cualquier modelo",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Text(
-                                text = "Encuentra modelos .task compatibles con MediaPipe",
+                                text = "Busca en todo Hugging Face y filtra bundles para Android",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
@@ -590,6 +510,7 @@ fun ModelCard(
     downloadProgress: Float,
     hasToken: Boolean,
     onDownload: () -> Unit,
+    onCancelDownload: (() -> Unit)? = null,
     onDelete: () -> Unit,
     onShowTokenDialog: () -> Unit,
     onShowHelp: () -> Unit,
@@ -665,19 +586,33 @@ fun ModelCard(
                 // Botones de acción
                 when {
                     isDownloading -> {
-                        Box(
-                            modifier = Modifier.size(52.dp),
-                            contentAlignment = Alignment.Center
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            CircularProgressIndicator(
-                                progress = { downloadProgress },
-                                modifier = Modifier.size(44.dp),
-                                strokeWidth = 3.dp
-                            )
-                            Text(
-                                text = "${(downloadProgress * 100).toInt()}%",
-                                style = MaterialTheme.typography.labelSmall
-                            )
+                            Box(
+                                modifier = Modifier.size(52.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    progress = { downloadProgress },
+                                    modifier = Modifier.size(44.dp),
+                                    strokeWidth = 3.dp
+                                )
+                                Text(
+                                    text = "${(downloadProgress * 100).toInt()}%",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                            Spacer(Modifier.width(4.dp))
+                            if (onCancelDownload != null) {
+                                IconButton(onClick = onCancelDownload) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Cancelar descarga",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
                         }
                     }
                     model.isDownloaded -> {

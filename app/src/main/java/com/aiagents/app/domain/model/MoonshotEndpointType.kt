@@ -29,10 +29,4 @@ enum class MoonshotEndpointType {
             CODING -> "CODING"
         }
 
-    val defaultModels: List<String>
-        get() = when (this) {
-            GLOBAL -> listOf("kimi-k2.5", "kimi-k2-thinking", "kimi-k2-turbo-preview")
-            CHINA -> listOf("kimi-k2.5", "kimi-k2-thinking", "kimi-k2-turbo-preview")
-            CODING -> listOf("k2p5", "kimi-k2-thinking")
-        }
 }

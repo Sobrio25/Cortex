@@ -98,7 +98,7 @@ class OpenRouterClient(
             val finalReasoning = reasoningFromField?.ifBlank { null } 
                 ?: reasoningFromTags?.ifBlank { null }
             
-            Log.d("OpenRouterClient", "Response received: content=${cleanContent?.take(100)}, tools=${toolCalls?.size ?: 0}, reasoning=${finalReasoning?.take(100) ?: "null"}")
+            Log.d("OpenRouterClient", "Response received: hasContent=${!cleanContent.isNullOrBlank()}, tools=${toolCalls?.size ?: 0}, hasReasoning=${!finalReasoning.isNullOrBlank()}")
             
             Result.success(ChatResponseWithTools(cleanContent, toolCalls, finishReason, finalReasoning))
         } catch (e: Exception) {
@@ -139,9 +139,20 @@ class OpenRouterClient(
     }
 
     override suspend fun getAvailableModels(): Result<List<String>> {
+        return getAvailableModelInfos().map { models -> models.map { it.id } }
+    }
+
+    override suspend fun getAvailableModelInfos(): Result<List<RemoteModelInfo>> {
         return try {
             val response = api.getModels("Bearer $apiKey")
-            Result.success(response.data.map { it.id })
+            Result.success(
+                response.data.map { model ->
+                    RemoteModelInfo(
+                        id = model.id,
+                        contextWindow = model.contextLength?.takeIf { it > 0 }
+                    )
+                }
+            )
         } catch (e: Exception) {
             Log.e("OpenRouterClient", "Error getting models", e)
             Result.failure(e)
@@ -248,7 +259,7 @@ data class ModelsResponse(
 
 data class ModelData(
     val id: String,
-    val name: String? = null
+    val name: String? = null,
+    @SerializedName(value = "context_length", alternate = ["max_model_len"])
+    val contextLength: Int? = null
 )
-
-

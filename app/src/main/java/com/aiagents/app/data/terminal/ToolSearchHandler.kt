@@ -26,23 +26,17 @@ class ToolSearchHandler @Inject constructor() {
             // Scheduling — always core so agents can manage cron jobs
             "schedule_task",
             // Memory
-            "memory_search", "memory_save", "memory_list", "memory_delete", "memory_update", "memory_link",
+            "memory", "memory_search", "memory_list",
+            // Skill creation requested by the user
+            "skill_create", "skill_list",
             // Agent selection & delegation (Cortex routing)
-            "select_agent", "delegate_to_agent",
+            "select_agent", DelegationToolHandler.TOOL_NAME,
             // Terminal
             "execute_command",
             // Code execution
             "run_code", "preview_web", "preview_project",
             // Web search — always available so agents don't resort to Python scripts
-            "duckduckgo_search", "brave_web_search", "serpapi_search",
-            // Google Workspace — core shortcuts always available
-            "gws_gmail_send", "gws_gmail_list", "gws_gmail_read", "gws_gmail_search",
-            "gws_drive_list", "gws_drive_search",
-            "gws_calendar_list", "gws_calendar_create",
-            "gws_sheets_read", "gws_sheets_write", "gws_sheets_create",
-            "gws_docs_read", "gws_docs_create",
-            "gws_slides_create",
-            "gws_execute", "gws_list_services", "gws_list_methods"
+            "web_search", "web_fetch", "serpapi_search"
         )
 
         fun getToolDefinitionsJson(): List<Map<String, Any>> = listOf(
@@ -50,7 +44,7 @@ class ToolSearchHandler @Inject constructor() {
                 "type" to "function",
                 "function" to mapOf(
                     "name" to TOOL_NAME,
-                    "description" to "Search for available tools by keyword. IMPORTANT: You MUST use this tool before using any capability not already in your tool list. Do NOT attempt to call tools you haven't discovered yet. Use for: Google Workspace (gmail, drive, calendar, sheets, docs, slides), presentations/slides/pptx, web search, maps, reminders, github, obsidian, notion, canva, slack, device control, and more. Returns matching tools that become available for use.",
+                    "description" to "Search for available tools by keyword. IMPORTANT: You MUST use this tool before using any capability not already in your tool list. Do NOT attempt to call tools you haven't discovered yet. Google Workspace actions are the exception: delegate them with spawn_subagents and a scoped google_* capability. Use this search for presentations/pptx, web search, maps, reminders, github, obsidian, notion, canva, slack, device control, and more. Returns matching tools that become available for use.",
                     "parameters" to mapOf(
                         "type" to "object",
                         "properties" to mapOf(
@@ -84,6 +78,15 @@ class ToolSearchHandler @Inject constructor() {
         // Scheduling
         ToolEntry("schedule_task", "scheduling", "Create, list, delete, toggle scheduled agent tasks (cron jobs). Execute prompts at specific times: once, daily, weekly, interval", setOf("schedule", "cron", "timer", "alarm", "recurring", "daily", "weekly", "interval", "automatic", "programar", "programado", "automatico", "diario", "semanal", "repetir", "horario", "tarea")),
 
+        // Memory
+        ToolEntry("memory", "memory", "Curate Cortex's bounded 2,200-character MEMORY.md with atomic add, replace, remove, or batch operations", setOf("memory", "remember", "forget", "replace", "preference", "durable", "memoria", "recordar", "olvidar", "preferencia", "permanente")),
+        ToolEntry("memory_search", "memory_archive", "Search the legacy semantic memory archive on demand", setOf("memory", "archive", "search", "history", "past", "memoria", "archivo", "buscar", "historial")),
+        ToolEntry("memory_list", "memory_archive", "List entries from the legacy semantic memory archive", setOf("memory", "archive", "list", "history", "memoria", "archivo", "listar", "historial")),
+
+        // Skills
+        ToolEntry("skill_create", "skills", "Create a reusable skill as a draft for user review", setOf("skill", "create", "workflow", "reusable", "habilidad", "crear", "automatizar", "flujo")),
+        ToolEntry("skill_list", "skills", "List installed skills and their states", setOf("skill", "list", "installed", "draft", "active", "habilidades", "listar", "borrador")),
+
         // Agent Creator
         ToolEntry("create_agent", "agents", "Create a new AI agent with custom prompt and personality", setOf("agent", "create", "new", "design", "build", "agente", "crear", "nuevo", "diseñar")),
         ToolEntry("delete_agent", "agents", "Delete an existing agent by name (requires user confirmation)", setOf("agent", "delete", "remove", "agente", "eliminar", "borrar", "quitar")),
@@ -104,7 +107,11 @@ class ToolSearchHandler @Inject constructor() {
         // Device control
         ToolEntry("device_control", "device", "Control device: open/list/inspect/uninstall apps, camera, volume, brightness, flashlight, Spotify. Also get_app_info (detailed app capabilities) and query_capable_apps (find apps by intent/mime type)", setOf("app", "open", "list", "uninstall", "remove", "camera", "photo", "volume", "brightness", "flashlight", "spotify", "music", "settings", "device", "abrir", "aplicacion", "desinstalar", "eliminar", "lista", "foto", "volumen", "linterna", "musica", "info", "capabilities", "intents", "inspect", "details", "capacidades", "detalles", "query", "pdf", "share", "compartir")),
 
-        // Brave Search
+        // Unified web search (SerpAPI or OpenAI; independent from DuckDuckGo/Brave)
+        ToolEntry("web_search", "web_search", "Search the current web through SerpAPI or OpenAI with source URLs", setOf("search", "web", "internet", "google", "find", "lookup", "news", "information", "buscar", "precio", "noticias", "actual")),
+        ToolEntry("web_fetch", "web_search", "Read and extract text from a public web page safely", setOf("web", "fetch", "open", "page", "url", "read", "website", "leer", "pagina", "sitio", "enlace")),
+
+        // Legacy optional search providers
         ToolEntry("duckduckgo_search", "web_search", "Search the web via DuckDuckGo (free, no API key)", setOf("search", "web", "internet", "google", "find", "lookup", "news", "information", "buscar", "precio", "noticias")),
         ToolEntry("brave_web_search", "web_search", "Search the web via Brave Search", setOf("search", "web", "internet", "google", "find", "lookup", "news", "information", "buscar", "precio", "noticias")),
 

@@ -39,7 +39,7 @@ class DeepSeekClient(
             val requestBody = buildJsonRequest(model, messages, systemPrompt, temperature, maxTokens, null)
             
             val request = Request.Builder()
-                .url("$baseUrl/v1/chat/completions")
+                .url("${baseUrl.trimEnd('/')}/chat/completions")
                 .addHeader("Authorization", "Bearer $apiKey")
                 .addHeader("Content-Type", "application/json")
                 .post(requestBody.toRequestBody(jsonMediaType))
@@ -84,7 +84,7 @@ class DeepSeekClient(
             val requestBody = buildJsonRequest(model, messages, systemPrompt, temperature, maxTokens, tools)
             
             val request = Request.Builder()
-                .url("$baseUrl/v1/chat/completions")
+                .url("${baseUrl.trimEnd('/')}/chat/completions")
                 .addHeader("Authorization", "Bearer $apiKey")
                 .addHeader("Content-Type", "application/json")
                 .post(requestBody.toRequestBody(jsonMediaType))
@@ -155,7 +155,7 @@ class DeepSeekClient(
 
         return streamOpenAICompatible(
             okHttpClient = okHttpClient,
-            url = "$baseUrl/v1/chat/completions",
+            url = "${baseUrl.trimEnd('/')}/chat/completions",
             headers = mapOf(
                 "Authorization" to "Bearer $apiKey",
                 "Content-Type" to "application/json"
@@ -164,15 +164,26 @@ class DeepSeekClient(
         ).withRealtimeThinkTagParsing()
     }
 
-    override suspend fun getAvailableModels(): Result<List<String>> = Result.success(
-        listOf(
-            "deepseek-chat",
-            "deepseek-reasoner"
-        )
-    )
-    // Modelos DeepSeek disponibles a febrero 2026:
-    // - deepseek-chat: DeepSeek-V3.2 (Non-thinking Mode), 128K contexto
-    // - deepseek-reasoner: DeepSeek-V3.2 (Thinking Mode), 128K contexto, soporta reasoning
+    override suspend fun getAvailableModels(): Result<List<String>> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("${baseUrl.trimEnd('/')}/models")
+                .addHeader("Authorization", "Bearer $apiKey")
+                .get()
+                .build()
+            okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(IOException("API error: ${response.code}"))
+                }
+                val body = response.body?.string()
+                    ?: return@withContext Result.failure(IOException("Empty response"))
+                Result.success(gson.fromJson(body, ModelsResponse::class.java).data.map { it.id })
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting models", e)
+            Result.failure(e)
+        }
+    }
 
     private fun buildJsonRequest(
         model: String,

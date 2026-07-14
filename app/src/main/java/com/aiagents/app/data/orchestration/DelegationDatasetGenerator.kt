@@ -2,6 +2,7 @@ package com.aiagents.app.data.orchestration
 
 import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.domain.model.Agent
+import com.aiagents.app.domain.model.isOrchestrator
 import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -95,7 +96,7 @@ class DelegationDatasetGenerator @Inject constructor(
      */
     suspend fun generateDataset(): String {
         val agents = repository.getAllAgentsOnce()
-            .filter { it.name != "Cortex" && it.whenToUse.isNotEmpty() }
+            .filter { !it.isOrchestrator && it.whenToUse.isNotEmpty() }
 
         val lines = mutableListOf<String>()
 
@@ -178,7 +179,7 @@ class DelegationDatasetGenerator @Inject constructor(
      */
     suspend fun getDatasetSummary(): String {
         val agents = repository.getAllAgentsOnce()
-            .filter { it.name != "Cortex" && it.whenToUse.isNotEmpty() }
+            .filter { !it.isOrchestrator && it.whenToUse.isNotEmpty() }
 
         if (agents.isEmpty()) {
             return "No hay agentes especializados configurados. Agrega agentes con keywords en 'Cuando usar' para generar un dataset."

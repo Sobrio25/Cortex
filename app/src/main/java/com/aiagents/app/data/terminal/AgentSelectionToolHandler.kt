@@ -2,6 +2,7 @@ package com.aiagents.app.data.terminal
 
 import android.util.Log
 import com.aiagents.app.data.local.AgentDao
+import com.aiagents.app.domain.model.AgentRoles
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import javax.inject.Inject
@@ -48,40 +49,49 @@ class AgentSelectionToolHandler @Inject constructor(
     private val gson = Gson()
 
     suspend fun executeTool(toolCallId: String, arguments: String): AgentSelectionResult {
+        val orchestratorName = try {
+            agentDao.getAgentByRole(AgentRoles.ORCHESTRATOR)?.name ?: "Orchestrator"
+        } catch (_: Exception) {
+            "Orchestrator"
+        }
         return try {
             val args = gson.fromJson(arguments, JsonObject::class.java) ?: JsonObject()
             val taskDescription = args.get("task_description")?.asString
                 ?: return AgentSelectionResult(
                     toolCallId = toolCallId,
                     success = false,
-                    agentName = "Cortex",
+                    agentName = orchestratorName,
                     reason = "Parámetro 'task_description' requerido",
                     confidence = "low"
                 )
 
-            selectBestAgent(toolCallId, taskDescription)
+            selectBestAgent(toolCallId, taskDescription, orchestratorName)
         } catch (e: Exception) {
             Log.e(TAG, "Error selecting agent", e)
             AgentSelectionResult(
                 toolCallId = toolCallId,
                 success = false,
-                agentName = "Cortex",
+                agentName = orchestratorName,
                 reason = "Error al seleccionar agente: ${e.message}",
                 confidence = "low"
             )
         }
     }
 
-    private suspend fun selectBestAgent(toolCallId: String, taskDescription: String): AgentSelectionResult {
+    private suspend fun selectBestAgent(
+        toolCallId: String,
+        taskDescription: String,
+        orchestratorName: String
+    ): AgentSelectionResult {
         val agents = agentDao.getAllAgentsOnce()
-            .filter { it.name != "Cortex" && it.whenToUse.isNotEmpty() }
+            .filter { it.role != AgentRoles.ORCHESTRATOR && it.whenToUse.isNotEmpty() }
             .map { it.toDomain() }
 
         if (agents.isEmpty()) {
             return AgentSelectionResult(
                 toolCallId = toolCallId,
                 success = true,
-                agentName = "Cortex",
+                agentName = orchestratorName,
                 reason = "No hay agentes especializados disponibles",
                 confidence = "high"
             )
@@ -89,7 +99,7 @@ class AgentSelectionToolHandler @Inject constructor(
 
         val taskWords = normalizeText(taskDescription).split("\\s+".toRegex()).toSet()
 
-        var bestAgent: String = "Cortex"
+        var bestAgent: String = orchestratorName
         var bestScore = 0
         var bestReason = "Ningún agente especializado coincide con la tarea"
 

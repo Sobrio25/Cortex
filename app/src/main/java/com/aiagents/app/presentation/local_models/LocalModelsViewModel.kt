@@ -5,8 +5,16 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.Constraints
+import androidx.work.Data
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.aiagents.app.data.local.CustomLocalModelDao
 import com.aiagents.app.data.local.LocalModelRepository
+import com.aiagents.app.data.local.ModelDownloadWorker
 import com.aiagents.app.data.model.CustomLocalModelEntity
 import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.domain.model.LocalModel
@@ -17,6 +25,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
@@ -27,8 +37,10 @@ class LocalModelsViewModel @Inject constructor(
     private val modelRepository: LocalModelRepository,
     private val agentRepository: AgentRepository,
     private val customLocalModelDao: CustomLocalModelDao,
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context
 ) : ViewModel() {
+
+    private val workManager = WorkManager.getInstance(context)
 
     private val _models = MutableStateFlow<List<LocalModel>>(emptyList())
     val models: StateFlow<List<LocalModel>> = _models.asStateFlow()
@@ -59,6 +71,57 @@ class LocalModelsViewModel @Inject constructor(
     init {
         loadModels()
         loadStorageInfo()
+        observeDownloadProgress()
+    }
+
+    private fun observeDownloadProgress() {
+        viewModelScope.launch {
+            workManager.getWorkInfosByTagFlow(ModelDownloadWorker.WORK_TAG).collect { workInfos ->
+                val progressMap = mutableMapOf<String, Float>()
+                val downloadingMap = mutableMapOf<String, Boolean>()
+                val knownModelIds = _models.value.mapTo(mutableSetOf()) { it.id }
+
+                val workByModel = workInfos.mapNotNull { workInfo ->
+                    val modelId = ModelDownloadWorker.modelIdFromTags(workInfo.tags)
+                        ?: workInfo.tags.firstOrNull { it in knownModelIds }
+                    modelId?.let {
+                        modelId to workInfo
+                    }
+                }.groupBy({ it.first }, { it.second })
+
+                for ((modelId, modelWorkInfos) in workByModel) {
+                    val activeWork = modelWorkInfos
+                        .filterNot { it.state.isFinished }
+                        .maxByOrNull { workInfo ->
+                            when (workInfo.state) {
+                                WorkInfo.State.RUNNING -> 3
+                                WorkInfo.State.ENQUEUED -> 2
+                                WorkInfo.State.BLOCKED -> 1
+                                else -> 0
+                            }
+                        }
+                        ?: continue
+
+                    when (activeWork.state) {
+                        WorkInfo.State.RUNNING -> {
+                            downloadingMap[modelId] = true
+                            val progress = activeWork.progress.getInt(ModelDownloadWorker.PROGRESS_KEY, 0)
+                            progressMap[modelId] = progress / 100f
+                        }
+                        WorkInfo.State.ENQUEUED,
+                        WorkInfo.State.BLOCKED -> {
+                            downloadingMap[modelId] = true
+                            progressMap[modelId] = activeWork.progress
+                                .getInt(ModelDownloadWorker.PROGRESS_KEY, 0) / 100f
+                        }
+                        else -> Unit
+                    }
+                }
+
+                _downloadProgress.value = progressMap
+                _isDownloading.value = downloadingMap
+            }
+        }
     }
 
     fun loadModels() {
@@ -98,66 +161,87 @@ class LocalModelsViewModel @Inject constructor(
             return
         }
 
+        if (!isNetworkAvailable()) {
+            _errorMessage.value = "No hay conexión a internet. Conéctate a una red WiFi para descargar modelos."
+            return
+        }
+
+        if (model.requiresHFToken && !modelRepository.hasHuggingFaceToken()) {
+            _errorMessage.value = "Este modelo requiere un token de HuggingFace. Configura tu token en la sección de arriba antes de descargar."
+            return
+        }
+
+        if (model.sizeBytes > 0) {
+            val requiredSpace = (model.sizeBytes * 1.1).toLong()
+            if (requiredSpace > _availableStorage.value) {
+                _errorMessage.value = "Espacio insuficiente. Necesitas al menos ${formatBytes(requiredSpace)} libres."
+                return
+            }
+        }
+
+        val inputData = Data.Builder()
+            .putString(ModelDownloadWorker.KEY_MODEL_ID, model.id)
+            .putString(ModelDownloadWorker.KEY_MODEL_NAME, model.name)
+            .putString(ModelDownloadWorker.KEY_MODEL_URL, model.huggingFaceUrl)
+            .putString(ModelDownloadWorker.KEY_FILE_NAME, model.fileName)
+            .putLong(ModelDownloadWorker.KEY_SIZE_BYTES, model.sizeBytes)
+            .putBoolean(
+                ModelDownloadWorker.KEY_EXACT_SIZE,
+                model.sizeBytes > 0 && (
+                    model.id.startsWith("hf-") || customModels.value.any { it.id == model.id }
+                )
+            )
+            .build()
+
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        val workRequest = OneTimeWorkRequestBuilder<ModelDownloadWorker>()
+            .setInputData(inputData)
+            .setConstraints(constraints)
+            .addTag(ModelDownloadWorker.WORK_TAG)
+            .addTag(ModelDownloadWorker.modelTag(model.id))
+            .build()
+
+        workManager.enqueueUniqueWork(
+            "download_${model.id}",
+            ExistingWorkPolicy.REPLACE,
+            workRequest
+        )
+
+        observeWorkCompletion(workRequest.id, model)
+    }
+
+    private fun observeWorkCompletion(workId: java.util.UUID, model: LocalModel) {
         viewModelScope.launch {
-            // Verificar conexión a internet
-            if (!isNetworkAvailable()) {
-                _errorMessage.value = "No hay conexión a internet. Conéctate a una red WiFi para descargar modelos."
-                return@launch
+            val workInfo = workManager.getWorkInfoByIdFlow(workId)
+                .filterNotNull()
+                .first { it.state.isFinished }
+
+            when (workInfo.state) {
+                    WorkInfo.State.SUCCEEDED -> {
+                        loadModels()
+                        loadStorageInfo()
+                        if (agentRepository.getActiveProvider() == null ||
+                            modelRepository.getDownloadedModels().size == 1) {
+                            agentRepository.setActiveProvider(ProviderType.LOCAL)
+                        }
+                        agentRepository.addSelectedModel(ProviderType.LOCAL, model.id)
+                        _successMessage.value = "✓ ${model.name} descargado correctamente. Proveedor LOCAL activado."
+                    }
+                    WorkInfo.State.FAILED -> {
+                        val detail = workInfo.outputData
+                            .getString(ModelDownloadWorker.OUTPUT_ERROR_MESSAGE)
+                            ?: "Verifica tu conexión e intenta de nuevo"
+                        _errorMessage.value = "Error descargando ${model.name}: $detail"
+                    }
+                    WorkInfo.State.CANCELLED -> {
+                        _downloadProgress.value = _downloadProgress.value - model.id
+                        _isDownloading.value = _isDownloading.value - model.id
+                    }
+                    else -> Unit
             }
-
-            // Advertir si el modelo requiere token pero no está configurado
-            if (model.requiresHFToken && !modelRepository.hasHuggingFaceToken()) {
-                _errorMessage.value = "Este modelo requiere un token de HuggingFace. Configura tu token en la sección de arriba antes de descargar."
-                return@launch
-            }
-
-            // Verificar espacio disponible (con margen de seguridad del 10%)
-            if (model.sizeBytes > 0) {
-                val requiredSpace = (model.sizeBytes * 1.1).toLong()
-                if (requiredSpace > _availableStorage.value) {
-                    _errorMessage.value = "Espacio insuficiente. Necesitas al menos ${formatBytes(requiredSpace)} libres."
-                    return@launch
-                }
-            }
-
-            _isDownloading.value = _isDownloading.value + (model.id to true)
-
-            modelRepository.downloadModel(model) { progress ->
-                _downloadProgress.value = _downloadProgress.value + (model.id to progress)
-            }.onSuccess { path ->
-                loadModels()
-                loadStorageInfo()
-                // Activar automáticamente el proveedor LOCAL al descargar el primer modelo
-                if (agentRepository.getActiveProvider() == null ||
-                    modelRepository.getDownloadedModels().size == 1) {
-                    agentRepository.setActiveProvider(ProviderType.LOCAL)
-                }
-                // Agregar el modelo a la lista de modelos seleccionados para que aparezca en el chat
-                agentRepository.addSelectedModel(ProviderType.LOCAL, model.id)
-                _successMessage.value = "✓ ${model.name} descargado correctamente. Proveedor LOCAL activado."
-            }.onFailure { error ->
-                val errorMsg = when {
-                    error.message?.contains("HTTP 401") == true ->
-                        "Token inválido o expirado. Verifica tu token de HuggingFace en huggingface.co/settings/tokens"
-                    error.message?.contains("HTTP 403") == true ->
-                        "Acceso denegado. Necesitas:\n1. Aceptar la licencia en huggingface.co/google/gemma-2b-it\n2. Configurar tu token de HuggingFace arriba"
-                    error.message?.contains("HTTP 404") == true ->
-                        "Modelo no encontrado. La URL puede haber cambiado."
-                    error.message?.contains("HTTP 429") == true ->
-                        "Demasiadas solicitudes. Espera unos minutos e intenta de nuevo."
-                    error.message?.contains("timeout", ignoreCase = true) == true ->
-                        "Tiempo de espera agotado. Intenta con una conexión WiFi más estable."
-                    error.message?.contains("Unable to resolve host") == true ->
-                        "No se pudo conectar con HuggingFace. Verifica tu conexión a internet."
-                    error.message?.contains("URL de descarga") == true ->
-                        error.message ?: "Error desconocido"
-                    else -> "Error: ${error.message ?: "Error desconocido"}"
-                }
-                _errorMessage.value = "Error descargando ${model.name}:\n$errorMsg"
-            }
-
-            _isDownloading.value = _isDownloading.value - model.id
-            _downloadProgress.value = _downloadProgress.value - model.id
         }
     }
 
@@ -177,7 +261,12 @@ class LocalModelsViewModel @Inject constructor(
     }
 
     fun importModel(sourceFile: File, modelName: String): Boolean {
-        val targetFileName = if (modelName.endsWith(".task") || modelName.endsWith(".bin")) {
+        val normalizedName = modelName.lowercase()
+        val targetFileName = if (
+            normalizedName.endsWith(".task") ||
+            normalizedName.endsWith(".bin") ||
+            normalizedName.endsWith(".litertlm")
+        ) {
             modelName
         } else {
             "$modelName.task"
@@ -187,12 +276,9 @@ class LocalModelsViewModel @Inject constructor(
             onSuccess = {
                 loadModels()
                 loadStorageInfo()
-                // Activar LOCAL al importar el primer modelo
                 if (agentRepository.getActiveProvider() == null) {
                     agentRepository.setActiveProvider(ProviderType.LOCAL)
                 }
-                // Agregar el modelo a la lista de modelos seleccionados
-                // Extraer el id del modelo del nombre del archivo (sin extensión)
                 val modelId = targetFileName.substringBeforeLast(".")
                 agentRepository.addSelectedModel(ProviderType.LOCAL, modelId)
                 _successMessage.value = "✓ Modelo importado correctamente."
@@ -203,6 +289,10 @@ class LocalModelsViewModel @Inject constructor(
                 false
             }
         )
+    }
+
+    fun cancelDownload(modelId: String) {
+        workManager.cancelUniqueWork("download_$modelId")
     }
 
     fun clearError() {

@@ -9,6 +9,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavType
@@ -28,6 +29,7 @@ import com.aiagents.app.presentation.onboarding.OnboardingViewModel
 import com.aiagents.app.presentation.providers.ProvidersScreen
 import com.aiagents.app.presentation.settings.GoogleWorkspaceSettingsScreen
 import com.aiagents.app.presentation.settings.SettingsScreen
+import com.aiagents.app.presentation.skills.SkillsScreen
 import com.aiagents.app.presentation.workspaces.WorkspacesScreen
 import com.aiagents.app.presentation.workspace_detail.WorkspaceDetailScreen
 import kotlinx.coroutines.launch
@@ -45,6 +47,7 @@ sealed class Screen(val route: String) {
     data object LocalModels : Screen("settings/local_models")
     data object MCP : Screen("settings/mcp")
     data object Memory : Screen("settings/memory")
+    data object Skills : Screen("settings/skills")
     data object GoogleWorkspace : Screen("settings/google_workspace")
     data object WorkspaceDetail : Screen("workspace/{workspaceId}") {
         fun createRoute(workspaceId: Long) = "workspace/$workspaceId"
@@ -68,10 +71,11 @@ fun MainScreen() {
 private fun OnboardingFlow(onboardingViewModel: OnboardingViewModel) {
     val selectedLanguage by onboardingViewModel.selectedLanguage.collectAsState()
     val context = LocalContext.current
+    val currentConfiguration = LocalConfiguration.current
 
-    val localizedContext = remember(selectedLanguage, context) {
+    val localizedContext = remember(selectedLanguage, context, currentConfiguration) {
         val locale = java.util.Locale(selectedLanguage)
-        val config = android.content.res.Configuration(context.resources.configuration).apply {
+        val config = android.content.res.Configuration(currentConfiguration).apply {
             setLocale(locale)
         }
         val configResources = context.createConfigurationContext(config).resources
@@ -278,8 +282,12 @@ private fun MainAppContent() {
                     onNavigateToAgents = { navController.navigate(Screen.Agents.route) },
                     onNavigateToProviders = { navController.navigate(Screen.Providers.route) },
                     onNavigateToLocalModels = { navController.navigate(Screen.LocalModels.route) },
+                    onNavigateToMemory = { navController.navigate(Screen.Memory.route) },
+                    onNavigateToSkills = { navController.navigate(Screen.Skills.route) },
                     onNavigateToMCP = { navController.navigate(Screen.MCP.route) },
-                    onNavigateToMemory = { navController.navigate(Screen.Memory.route) }
+                    onNavigateToGoogleWorkspace = {
+                        navController.navigate(Screen.GoogleWorkspace.route)
+                    }
                 )
             }
             composable(Screen.Agents.route) {
@@ -300,12 +308,16 @@ private fun MainAppContent() {
             }
             composable(Screen.MCP.route) {
                 MCPScreen(
-                    onBack = { navController.popBackStack() },
-                    onNavigateToGoogleWorkspace = { navController.navigate(Screen.GoogleWorkspace.route) }
+                    onBack = { navController.popBackStack() }
                 )
             }
             composable(Screen.Memory.route) {
                 MemoryScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.Skills.route) {
+                SkillsScreen(
                     onBack = { navController.popBackStack() }
                 )
             }

@@ -15,6 +15,7 @@ import com.aiagents.app.data.terminal.PresentationToolHandler
 import com.aiagents.app.data.terminal.PubMedToolHandler
 import com.aiagents.app.data.terminal.AcademicSearchToolHandler
 import com.aiagents.app.data.terminal.WeatherToolHandler
+import com.aiagents.app.data.location.LocationProvider
 import com.aiagents.app.data.terminal.ImageGenerationToolHandler
 import com.aiagents.app.data.terminal.CommandPermissionManager
 import com.aiagents.app.data.local.FinanceDao
@@ -134,8 +135,9 @@ object TerminalModule {
     @Provides
     @Singleton
     fun provideWeatherToolHandler(
-        okHttpClient: OkHttpClient
-    ): WeatherToolHandler = WeatherToolHandler(okHttpClient)
+        okHttpClient: OkHttpClient,
+        locationProvider: LocationProvider
+    ): WeatherToolHandler = WeatherToolHandler(okHttpClient, locationProvider)
 
     @Provides
     @Singleton
@@ -165,7 +167,6 @@ object TerminalModule {
     @Provides
     @Singleton
     fun provideGoogleWorkspaceOAuthManager(
-        okHttpClient: OkHttpClient,
         securePreferences: SecurePreferences
-    ): GoogleWorkspaceOAuthManager = GoogleWorkspaceOAuthManager(okHttpClient, securePreferences)
+    ): GoogleWorkspaceOAuthManager = GoogleWorkspaceOAuthManager(securePreferences)
 }

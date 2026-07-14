@@ -67,17 +67,29 @@ interface WorkspaceDao {
     @Query("UPDATE workspaces SET selectedModel = :model, updatedAt = :updatedAt WHERE id = :workspaceId")
     suspend fun setSelectedModel(workspaceId: Long, model: String, updatedAt: Long = System.currentTimeMillis())
 
+    @Query("UPDATE workspaces SET selectedModel = '', updatedAt = :updatedAt WHERE selectedModel LIKE :providerPrefix || '%'")
+    suspend fun clearSelectedModelsForProvider(
+        providerPrefix: String,
+        updatedAt: Long = System.currentTimeMillis()
+    )
+
     @Query("UPDATE workspaces SET externalStorageUri = :uri, updatedAt = :updatedAt WHERE id = :workspaceId")
     suspend fun setExternalStorageUri(workspaceId: Long, uri: String?, updatedAt: Long = System.currentTimeMillis())
 }
 
 @Dao
 interface MessageDao {
-    @Query("SELECT * FROM messages WHERE workspaceId = :workspaceId ORDER BY timestamp ASC")
+    @Query("SELECT * FROM messages WHERE workspaceId = :workspaceId ORDER BY timestamp ASC, id ASC")
     fun getMessagesForWorkspace(workspaceId: Long): Flow<List<MessageEntity>>
 
-    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY timestamp ASC")
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY timestamp ASC, id ASC")
     fun getMessagesForConversation(conversationId: Long): Flow<List<MessageEntity>>
+
+    @Query("SELECT * FROM messages WHERE workspaceId = :workspaceId AND role IN ('USER', 'ASSISTANT') ORDER BY timestamp DESC LIMIT :limit")
+    suspend fun getRecentConversationMessagesForWorkspace(workspaceId: Long, limit: Int): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND role IN ('USER', 'ASSISTANT') ORDER BY timestamp DESC LIMIT :limit")
+    suspend fun getRecentConversationMessages(conversationId: Long, limit: Int): List<MessageEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: MessageEntity): Long
@@ -90,6 +102,27 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE id = :id")
     suspend fun deleteMessage(id: Long)
+
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId AND role = 'SYSTEM' AND content LIKE :checkpointPrefix || '%'")
+    suspend fun deleteContextCheckpointsForConversation(conversationId: Long, checkpointPrefix: String)
+
+    @Query("DELETE FROM messages WHERE workspaceId = :workspaceId AND conversationId IS NULL AND role = 'SYSTEM' AND content LIKE :checkpointPrefix || '%'")
+    suspend fun deleteContextCheckpointsForWorkspace(workspaceId: Long, checkpointPrefix: String)
+
+    @Transaction
+    suspend fun saveContextCheckpoint(
+        workspaceId: Long,
+        conversationId: Long?,
+        checkpointPrefix: String,
+        checkpoint: MessageEntity
+    ): Long {
+        if (conversationId != null) {
+            deleteContextCheckpointsForConversation(conversationId, checkpointPrefix)
+        } else {
+            deleteContextCheckpointsForWorkspace(workspaceId, checkpointPrefix)
+        }
+        return insertMessage(checkpoint)
+    }
 }
 
 @Dao

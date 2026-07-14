@@ -121,7 +121,7 @@ class OllamaClient(
             val finalReasoning = reasoningFromField?.ifBlank { null } 
                 ?: reasoningFromTags?.ifBlank { null }
             
-            Log.d("OllamaClient", "Response received: content=${cleanContent?.take(100)}, tools=${toolCalls?.size ?: 0}")
+            Log.d("OllamaClient", "Response received: hasContent=${!cleanContent.isNullOrBlank()}, tools=${toolCalls?.size ?: 0}")
             if (toolCalls?.isNotEmpty() == true) {
                 Log.d("OllamaClient", "Tool calls detected: ${toolCalls.map { it.function.name }}")
             }
@@ -257,24 +257,30 @@ class OllamaClient(
     }.flowOn(Dispatchers.IO)
 
     override suspend fun getAvailableModels(): Result<List<String>> {
+        return getAvailableModelInfos().map { models -> models.map { it.id } }
+    }
+
+    override suspend fun getAvailableModelInfos(): Result<List<RemoteModelInfo>> {
         return try {
             val response = api.getModels()
-            val models = response.models.map { it.name }
+            val models = response.models.map { model ->
+                val contextWindow = runCatching {
+                    api.showModel(OllamaShowRequest(model.name)).modelInfo.entries
+                        .firstNotNullOfOrNull { (key, value) ->
+                            if (key.endsWith(".context_length")) {
+                                (value as? Number)?.toInt()?.takeIf { it > 0 }
+                            } else {
+                                null
+                            }
+                        }
+                }.getOrNull()
+                RemoteModelInfo(id = model.name, contextWindow = contextWindow)
+            }
             Log.d("OllamaClient", "Available models: ${models.size}")
             Result.success(models)
         } catch (e: Exception) {
-            Log.e("OllamaClient", "Error getting models from Ollama, using defaults", e)
-            // Modelos por defecto que soportan tool calling (Feb 2026)
-            Result.success(listOf(
-                "qwen3",
-                "qwen3.5",
-                "qwen3-coder",
-                "granite4",
-                "devstral-2",
-                "ministral-3",
-                "gpt-oss",
-                "functiongemma"
-            ))
+            Log.e("OllamaClient", "Error getting models from Ollama", e)
+            Result.failure(e)
         }
     }
 
@@ -286,6 +292,9 @@ class OllamaClient(
 
         @GET("api/tags")
         suspend fun getModels(): OllamaModelsResponse
+
+        @POST("api/show")
+        suspend fun showModel(@Body request: OllamaShowRequest): OllamaShowResponse
     }
 }
 
@@ -331,4 +340,13 @@ data class OllamaModelsResponse(
 
 data class OllamaModel(
     val name: String
+)
+
+data class OllamaShowRequest(
+    val model: String
+)
+
+data class OllamaShowResponse(
+    @SerializedName("model_info")
+    val modelInfo: Map<String, Any> = emptyMap()
 )

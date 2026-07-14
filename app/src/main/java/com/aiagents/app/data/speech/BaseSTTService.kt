@@ -1,10 +1,13 @@
 package com.aiagents.app.data.speech
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.aiagents.app.domain.service.STTService
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +46,12 @@ abstract class BaseSTTService(protected val context: Context) : STTService {
     }
 
     protected fun startRecording(): ByteArray? {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w("BaseSTTService", "Permiso de micrófono no concedido")
+            return null
+        }
         val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
             .coerceAtLeast(SAMPLE_RATE * BUFFER_SIZE_MULTIPLIER)
 

@@ -127,7 +127,7 @@ class MoonshotClient(
             val finalReasoning = reasoningFromField?.ifBlank { null }
                 ?: reasoningFromTags?.ifBlank { null }
 
-            Log.d(TAG, "Response: content=${cleanContent?.take(100)}, tools=${toolCalls?.size ?: 0}")
+            Log.d(TAG, "Response: hasContent=${!cleanContent.isNullOrBlank()}, tools=${toolCalls?.size ?: 0}")
 
             Result.success(ChatResponseWithTools(cleanContent, toolCalls, finishReason, finalReasoning))
         } catch (e: retrofit2.HttpException) {
@@ -193,7 +193,7 @@ class MoonshotClient(
             val finishReason = response.stopReason
             val reasoning = response.content?.firstOrNull { it.type == "thinking" }?.thinking
 
-            Log.d(TAG, "Response: content=${content?.take(100)}, tools=${toolCalls?.size ?: 0}")
+            Log.d(TAG, "Response: hasContent=${!content.isNullOrBlank()}, tools=${toolCalls?.size ?: 0}")
 
             Result.success(ChatResponseWithTools(content, toolCalls, finishReason, reasoning))
         } catch (e: retrofit2.HttpException) {
@@ -358,15 +358,24 @@ class MoonshotClient(
     // ── Model listing ────────────────────────────────────────────────────────
 
     override suspend fun getAvailableModels(): Result<List<String>> {
-        if (isCodingMode) {
-            return Result.success(listOf("k2p5", "kimi-k2-thinking"))
-        }
+        return getAvailableModelInfos().map { models -> models.map { it.id } }
+    }
+
+    override suspend fun getAvailableModelInfos(): Result<List<RemoteModelInfo>> {
         return try {
-            val response = openAiApi!!.getModels("Bearer $apiKey")
-            Result.success(response.data.map { it.id })
+            val response = if (isCodingMode) {
+                codingApi!!.getModels(apiKey = apiKey, authorization = "Bearer $apiKey")
+            } else {
+                openAiApi!!.getModels("Bearer $apiKey")
+            }
+            Result.success(
+                response.data.map { model ->
+                    RemoteModelInfo(model.id, model.contextLength?.takeIf { it > 0 })
+                }
+            )
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting models, using defaults", e)
-            Result.success(listOf("kimi-k2.5", "kimi-k2-thinking", "kimi-k2-turbo-preview"))
+            Log.e(TAG, "Error getting models", e)
+            Result.failure(e)
         }
     }
 
@@ -391,5 +400,11 @@ class MoonshotClient(
             @Header("x-api-key") apiKey: String,
             @Body request: AnthropicRequest
         ): AnthropicResponse
+
+        @GET("models")
+        suspend fun getModels(
+            @Header("x-api-key") apiKey: String,
+            @Header("Authorization") authorization: String
+        ): ModelsResponse
     }
 }

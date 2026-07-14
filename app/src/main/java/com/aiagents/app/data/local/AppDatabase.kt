@@ -13,12 +13,19 @@ import com.aiagents.app.data.model.MemoryLinkEntity
 import com.aiagents.app.data.model.MessageEntity
 import com.aiagents.app.data.model.ConversationEntity
 import com.aiagents.app.data.model.CustomLocalModelEntity
+import com.aiagents.app.data.model.DownloadProgressEntity
 import com.aiagents.app.data.model.FinanceTransactionEntity
 import com.aiagents.app.data.model.ScheduledTaskEntity
+import com.aiagents.app.data.model.SkillEntity
+import com.aiagents.app.data.model.SkillReviewEntity
+import com.aiagents.app.data.model.SubagentExecutionEntity
 import com.aiagents.app.data.model.TodoEntity
 import com.aiagents.app.data.model.MCPServerEntity
 import com.aiagents.app.data.model.STTSettingsEntity
 import com.aiagents.app.data.model.WorkspaceEntity
+import com.aiagents.app.domain.model.SkillCreatorBuiltin
+import com.aiagents.app.domain.model.AndroidAppControlBuiltin
+import com.aiagents.app.domain.model.WeatherWidgetsBuiltin
 
 @Database(
     entities = [
@@ -36,9 +43,13 @@ import com.aiagents.app.data.model.WorkspaceEntity
         CustomLocalModelEntity::class,
         FinanceTransactionEntity::class,
         TodoEntity::class,
-        ScheduledTaskEntity::class
+        ScheduledTaskEntity::class,
+        DownloadProgressEntity::class,
+        SkillEntity::class,
+        SkillReviewEntity::class,
+        SubagentExecutionEntity::class
     ],
-    version = 38,
+    version = 41,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -55,6 +66,10 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun financeDao(): FinanceDao
     abstract fun todoDao(): TodoDao
     abstract fun scheduledTaskDao(): ScheduledTaskDao
+    abstract fun downloadProgressDao(): DownloadProgressDao
+    abstract fun skillDao(): SkillDao
+    abstract fun skillReviewDao(): SkillReviewDao
+    abstract fun subagentExecutionDao(): SubagentExecutionDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -872,6 +887,271 @@ SIEMPRE usa la herramienta pubmed_search para buscar estudios científicos relev
                 """)
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_scheduled_tasks_nextRunAt ON scheduled_tasks(nextRunAt)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_scheduled_tasks_enabled ON scheduled_tasks(enabled)")
+            }
+        }
+
+        /** Restores the download state table represented by the already-exported v39 schema. */
+        val MIGRATION_38_39 = object : Migration(38, 39) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS download_progress (
+                        modelId TEXT NOT NULL PRIMARY KEY,
+                        modelName TEXT NOT NULL,
+                        fileName TEXT NOT NULL,
+                        totalBytes INTEGER NOT NULL,
+                        downloadedBytes INTEGER NOT NULL,
+                        status TEXT NOT NULL,
+                        errorMessage TEXT,
+                        workId TEXT,
+                        updatedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
+        val MIGRATION_39_40 = object : Migration(39, 40) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS skills (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        slug TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        whenToUse TEXT NOT NULL,
+                        instructions TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        origin TEXT NOT NULL,
+                        isImmutable INTEGER NOT NULL,
+                        version INTEGER NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        activatedAt INTEGER,
+                        archivedAt INTEGER
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_skills_slug ON skills(slug)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_skills_status ON skills(status)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_skills_origin ON skills(origin)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS skill_reviews (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        scopeHash TEXT NOT NULL,
+                        messageCount INTEGER NOT NULL,
+                        transcriptFingerprint TEXT NOT NULL,
+                        redactedTranscript TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        summary TEXT NOT NULL,
+                        candidateSkillId INTEGER,
+                        createdAt INTEGER NOT NULL,
+                        completedAt INTEGER,
+                        FOREIGN KEY(candidateSkillId) REFERENCES skills(id) ON UPDATE NO ACTION ON DELETE SET NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_skill_reviews_status ON skill_reviews(status)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_skill_reviews_candidateSkillId ON skill_reviews(candidateSkillId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_skill_reviews_createdAt ON skill_reviews(createdAt)")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_skill_reviews_transcriptFingerprint " +
+                        "ON skill_reviews(transcriptFingerprint)"
+                )
+                ensureBuiltInSkills(db)
+            }
+        }
+
+        val MIGRATION_40_41 = object : Migration(40, 41) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS subagent_executions (
+                        taskId TEXT NOT NULL PRIMARY KEY,
+                        parentTaskId TEXT,
+                        parentConversationId INTEGER NOT NULL,
+                        subConversationId INTEGER,
+                        workspaceId INTEGER NOT NULL,
+                        agentId INTEGER NOT NULL,
+                        agentName TEXT NOT NULL,
+                        goal TEXT NOT NULL,
+                        acceptanceCriteria TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        mode TEXT NOT NULL,
+                        failurePolicy TEXT NOT NULL,
+                        depth INTEGER NOT NULL,
+                        modelKey TEXT NOT NULL,
+                        allowedTools TEXT NOT NULL,
+                        toolPermissions TEXT NOT NULL,
+                        workspacePolicy TEXT NOT NULL,
+                        maxIterations INTEGER NOT NULL,
+                        timeoutMillis INTEGER,
+                        maxResultChars INTEGER NOT NULL,
+                        resultSummary TEXT NOT NULL,
+                        filesModified TEXT NOT NULL,
+                        testsRun TEXT NOT NULL,
+                        exitReason TEXT,
+                        errorCode TEXT,
+                        errorMessage TEXT,
+                        createdAt INTEGER NOT NULL,
+                        startedAt INTEGER,
+                        completedAt INTEGER,
+                        updatedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_subagent_executions_parentConversationId " +
+                        "ON subagent_executions(parentConversationId)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_subagent_executions_parentTaskId " +
+                        "ON subagent_executions(parentTaskId)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_subagent_executions_workspaceId " +
+                        "ON subagent_executions(workspaceId)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_subagent_executions_status " +
+                        "ON subagent_executions(status)"
+                )
+            }
+        }
+
+        fun ensureBuiltInSkills(db: SupportSQLiteDatabase) {
+            val now = System.currentTimeMillis()
+            db.compileStatement(
+                """
+                INSERT OR IGNORE INTO skills (
+                    slug, name, description, whenToUse, instructions, status, origin,
+                    isImmutable, version, createdAt, updatedAt, activatedAt, archivedAt
+                ) VALUES (?, ?, ?, ?, ?, 'ACTIVE', 'BUILTIN', 1, ?, ?, ?, ?, NULL)
+                """.trimIndent()
+            ).apply {
+                bindString(1, SkillCreatorBuiltin.SLUG)
+                bindString(2, SkillCreatorBuiltin.NAME)
+                bindString(3, SkillCreatorBuiltin.DESCRIPTION)
+                bindString(4, SkillCreatorBuiltin.WHEN_TO_USE)
+                bindString(5, SkillCreatorBuiltin.instructions)
+                bindLong(6, SkillCreatorBuiltin.VERSION.toLong())
+                bindLong(7, now)
+                bindLong(8, now)
+                bindLong(9, now)
+                executeInsert()
+                close()
+            }
+
+            db.compileStatement(
+                """
+                INSERT OR IGNORE INTO skills (
+                    slug, name, description, whenToUse, instructions, status, origin,
+                    isImmutable, version, createdAt, updatedAt, activatedAt, archivedAt
+                ) VALUES (?, ?, ?, ?, ?, 'ACTIVE', 'BUILTIN', 1, ?, ?, ?, ?, NULL)
+                """.trimIndent()
+            ).apply {
+                bindString(1, WeatherWidgetsBuiltin.SLUG)
+                bindString(2, WeatherWidgetsBuiltin.NAME)
+                bindString(3, WeatherWidgetsBuiltin.DESCRIPTION)
+                bindString(4, WeatherWidgetsBuiltin.WHEN_TO_USE)
+                bindString(5, WeatherWidgetsBuiltin.instructions)
+                bindLong(6, WeatherWidgetsBuiltin.VERSION.toLong())
+                bindLong(7, now)
+                bindLong(8, now)
+                bindLong(9, now)
+                executeInsert()
+                close()
+            }
+
+            db.compileStatement(
+                """
+                INSERT OR IGNORE INTO skills (
+                    slug, name, description, whenToUse, instructions, status, origin,
+                    isImmutable, version, createdAt, updatedAt, activatedAt, archivedAt
+                ) VALUES (?, ?, ?, ?, ?, 'ACTIVE', 'BUILTIN', 1, ?, ?, ?, ?, NULL)
+                """.trimIndent()
+            ).apply {
+                bindString(1, AndroidAppControlBuiltin.SLUG)
+                bindString(2, AndroidAppControlBuiltin.NAME)
+                bindString(3, AndroidAppControlBuiltin.DESCRIPTION)
+                bindString(4, AndroidAppControlBuiltin.WHEN_TO_USE)
+                bindString(5, AndroidAppControlBuiltin.instructions)
+                bindLong(6, AndroidAppControlBuiltin.VERSION.toLong())
+                bindLong(7, now)
+                bindLong(8, now)
+                bindLong(9, now)
+                executeInsert()
+                close()
+            }
+
+            db.compileStatement(
+                """
+                UPDATE skills SET
+                    name = ?, description = ?, whenToUse = ?, instructions = ?,
+                    status = 'ACTIVE', origin = 'BUILTIN', isImmutable = 1,
+                    version = ?, updatedAt = ?, activatedAt = ?, archivedAt = NULL
+                WHERE slug = ? AND (version != ? OR origin != 'BUILTIN' OR isImmutable = 0)
+                """.trimIndent()
+            ).apply {
+                bindString(1, AndroidAppControlBuiltin.NAME)
+                bindString(2, AndroidAppControlBuiltin.DESCRIPTION)
+                bindString(3, AndroidAppControlBuiltin.WHEN_TO_USE)
+                bindString(4, AndroidAppControlBuiltin.instructions)
+                bindLong(5, AndroidAppControlBuiltin.VERSION.toLong())
+                bindLong(6, now)
+                bindLong(7, now)
+                bindString(8, AndroidAppControlBuiltin.SLUG)
+                bindLong(9, AndroidAppControlBuiltin.VERSION.toLong())
+                executeUpdateDelete()
+                close()
+            }
+
+            db.compileStatement(
+                """
+                UPDATE skills SET
+                    name = ?, description = ?, whenToUse = ?, instructions = ?,
+                    status = 'ACTIVE', origin = 'BUILTIN', isImmutable = 1,
+                    version = ?, updatedAt = ?, activatedAt = ?, archivedAt = NULL
+                WHERE slug = ? AND (version != ? OR origin != 'BUILTIN' OR isImmutable = 0)
+                """.trimIndent()
+            ).apply {
+                bindString(1, WeatherWidgetsBuiltin.NAME)
+                bindString(2, WeatherWidgetsBuiltin.DESCRIPTION)
+                bindString(3, WeatherWidgetsBuiltin.WHEN_TO_USE)
+                bindString(4, WeatherWidgetsBuiltin.instructions)
+                bindLong(5, WeatherWidgetsBuiltin.VERSION.toLong())
+                bindLong(6, now)
+                bindLong(7, now)
+                bindString(8, WeatherWidgetsBuiltin.SLUG)
+                bindLong(9, WeatherWidgetsBuiltin.VERSION.toLong())
+                executeUpdateDelete()
+                close()
+            }
+
+            db.compileStatement(
+                """
+                UPDATE skills SET
+                    name = ?, description = ?, whenToUse = ?, instructions = ?,
+                    status = 'ACTIVE', origin = 'BUILTIN', isImmutable = 1,
+                    version = ?, updatedAt = ?, activatedAt = ?, archivedAt = NULL
+                WHERE slug = ? AND (version != ? OR origin != 'BUILTIN' OR isImmutable = 0)
+                """.trimIndent()
+            ).apply {
+                bindString(1, SkillCreatorBuiltin.NAME)
+                bindString(2, SkillCreatorBuiltin.DESCRIPTION)
+                bindString(3, SkillCreatorBuiltin.WHEN_TO_USE)
+                bindString(4, SkillCreatorBuiltin.instructions)
+                bindLong(5, SkillCreatorBuiltin.VERSION.toLong())
+                bindLong(6, now)
+                bindLong(7, now)
+                bindString(8, SkillCreatorBuiltin.SLUG)
+                bindLong(9, SkillCreatorBuiltin.VERSION.toLong())
+                executeUpdateDelete()
+                close()
             }
         }
 

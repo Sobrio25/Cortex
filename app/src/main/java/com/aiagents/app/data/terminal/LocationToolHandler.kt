@@ -1,7 +1,14 @@
 package com.aiagents.app.data.terminal
 
-import android.util.Log
+import com.aiagents.app.data.location.DeviceLocationResult
+import com.aiagents.app.data.location.LocationErrorCode
+import com.aiagents.app.data.location.LocationFixSource
 import com.aiagents.app.data.location.LocationProvider
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -10,77 +17,84 @@ class LocationToolHandler @Inject constructor(
     private val locationProvider: LocationProvider
 ) {
     companion object {
-        private const val TAG = "LocationToolHandler"
         const val TOOL_NAME = "get_user_location"
 
-        fun getToolDefinitionsJson(): List<Map<String, Any>> {
-            return listOf(
-                mapOf(
-                    "type" to "function",
-                    "function" to mapOf(
-                        "name" to TOOL_NAME,
-                        "description" to "Get user's current GPS location. Returns coordinates, address, city, country. Use when user asks about their location, nearby places, or when you need to determine the user's city for weather queries, local recommendations, or any location-dependent request. If the user asks about weather without specifying a city, call this tool first to get their location.",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to emptyMap<String, Any>(),
-                            "required" to emptyList<String>()
-                        )
+        fun getToolDefinitionsJson(): List<Map<String, Any>> = listOf(
+            mapOf(
+                "type" to "function",
+                "function" to mapOf(
+                    "name" to TOOL_NAME,
+                    "description" to "Get the user's current device location for an explicitly location-dependent request such as nearby places or sharing their position. Weather tools resolve device location privately on their own, so do not call this tool before weather. This tool can return coordinates to the conversation and should be used only when coordinates or a general location are actually needed.",
+                    "parameters" to mapOf(
+                        "type" to "object",
+                        "properties" to emptyMap<String, Any>(),
+                        "required" to emptyList<String>()
                     )
                 )
             )
-        }
+        )
     }
 
     fun hasPermission(): Boolean = locationProvider.hasLocationPermission()
 
-    suspend fun executeTool(toolCallId: String): LocationToolResult {
-        if (!locationProvider.hasLocationPermission()) {
-            return LocationToolResult(
+    suspend fun executeTool(toolCallId: String): LocationToolResult =
+        when (val result = locationProvider.getCurrentLocation(includeAddress = true)) {
+            is DeviceLocationResult.Failure -> LocationToolResult(
                 toolCallId = toolCallId,
                 success = false,
-                content = "Error: El usuario no ha concedido permiso de ubicacion. Pide al usuario que conceda el permiso de ubicacion en la configuracion de la app.",
-                latitude = null,
-                longitude = null
+                content = "Error [${result.code.name}]: ${result.userMessage}",
+                errorCode = result.code
             )
+
+            is DeviceLocationResult.Success -> {
+                val location = result.location
+                val sourceLabel = when (location.source) {
+                    LocationFixSource.CURRENT -> "lectura actual"
+                    LocationFixSource.LAST_KNOWN -> "última ubicación conocida"
+                    LocationFixSource.MEMORY_CACHE -> "lectura reciente"
+                }
+                val updated = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM)
+                    .withLocale(Locale.getDefault())
+                    .withZone(ZoneId.systemDefault())
+                    .format(Instant.ofEpochMilli(location.capturedAtMillis))
+
+                val content = buildString {
+                    appendLine("Ubicación actual del usuario:")
+                    appendLine("Coordenadas: ${location.latitude}, ${location.longitude}")
+                    location.address?.let { appendLine("Dirección: $it") }
+                    location.city?.let { appendLine("Ciudad: $it") }
+                    location.country?.let { appendLine("País: $it") }
+                    location.accuracyMeters?.let {
+                        appendLine("Precisión aproximada: ${it.toInt().coerceAtLeast(1)} m")
+                    }
+                    appendLine("Actualizada: $updated ($sourceLabel)")
+                    if (location.isStale) {
+                        appendLine("Aviso: se utilizó una ubicación conocida reciente, no una lectura GPS nueva.")
+                    }
+                }.trim()
+
+                LocationToolResult(
+                    toolCallId = toolCallId,
+                    success = true,
+                    content = content,
+                    latitude = location.latitude,
+                    longitude = location.longitude,
+                    accuracyMeters = location.accuracyMeters,
+                    capturedAtMillis = location.capturedAtMillis,
+                    isStale = location.isStale
+                )
+            }
         }
-
-        val location = locationProvider.getCurrentLocation()
-        if (location == null) {
-            return LocationToolResult(
-                toolCallId = toolCallId,
-                success = false,
-                content = "Error: No se pudo obtener la ubicacion actual. El GPS puede estar desactivado o no hay senal suficiente.",
-                latitude = null,
-                longitude = null
-            )
-        }
-
-        Log.d(TAG, "Location obtained: ${location.latitude}, ${location.longitude}")
-
-        val content = buildString {
-            appendLine("Ubicacion actual del usuario:")
-            appendLine("Coordenadas: ${location.latitude}, ${location.longitude}")
-            if (location.address != null) appendLine("Direccion: ${location.address}")
-            if (location.city != null) appendLine("Ciudad: ${location.city}")
-            if (location.country != null) appendLine("Pais: ${location.country}")
-            appendLine()
-            appendLine("Usa estas coordenadas para busquedas cercanas. Formato para Google Maps: ${location.latitude},${location.longitude}")
-        }
-
-        return LocationToolResult(
-            toolCallId = toolCallId,
-            success = true,
-            content = content.trim(),
-            latitude = location.latitude,
-            longitude = location.longitude
-        )
-    }
 }
 
 data class LocationToolResult(
     val toolCallId: String,
     val success: Boolean,
     val content: String,
-    val latitude: Double?,
-    val longitude: Double?
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val accuracyMeters: Float? = null,
+    val capturedAtMillis: Long? = null,
+    val isStale: Boolean = false,
+    val errorCode: LocationErrorCode? = null
 )

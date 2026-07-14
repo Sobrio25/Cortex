@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aiagents.app.data.local.MemoryDao
 import com.aiagents.app.data.local.SecurePreferences
+import com.aiagents.app.data.memory.CortexProfileStore
 import com.aiagents.app.data.model.MemoryEntity
 import com.aiagents.app.data.repository.AgentRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -24,7 +25,8 @@ class OnboardingViewModel @Inject constructor(
     private val savedStateHandle: SavedStateHandle,
     private val securePreferences: SecurePreferences,
     private val memoryDao: MemoryDao,
-    private val agentRepository: AgentRepository
+    private val agentRepository: AgentRepository,
+    private val cortexProfileStore: CortexProfileStore
 ) : ViewModel() {
 
     val currentStep = savedStateHandle.getStateFlow("currentStep", 0)
@@ -88,6 +90,8 @@ class OnboardingViewModel @Inject constructor(
             val nickname = userNickname.value.trim()
             val now = System.currentTimeMillis()
 
+            securePreferences.saveUserIdentity(name, nickname)
+
             // Delete any previous onboarding identity memories, then insert fresh
             memoryDao.deleteByCategorySubcategorySource("fact", "user_identity", "onboarding")
 
@@ -111,17 +115,16 @@ class OnboardingViewModel @Inject constructor(
 
             // Update Cortex name, personality and prompt
             val chosenCortexName = cortexName.value.trim().ifBlank { "Cortex" }
+            cortexProfileStore.seedFromOnboarding(
+                agentName = chosenCortexName,
+                userName = name,
+                preferredName = nickname
+            )
             val cortex = agentRepository.getOrchestratorAgent()
             if (cortex != null) {
-                val updatedPrompt = cortex.systemPrompt.replace(
-                    "You are Cortex,",
-                    "You are $chosenCortexName,"
-                )
-
                 agentRepository.updateAgent(
                     cortex.copy(
                         name = chosenCortexName,
-                        systemPrompt = updatedPrompt,
                         sarcasmLevel = sarcasmLevel.value,
                         creativityLevel = creativityLevel.value,
                         formalityLevel = formalityLevel.value,

@@ -357,45 +357,35 @@ class WorkspacesViewModel @Inject constructor(
                 )
 
                 // 4. Call the LLM
-                val systemPrompt = """You are a workspace analyst agent. Your job is to analyze the full conversation history and files of a workspace and produce an AGENTES.md file.
+                val systemPrompt = """You are a context extraction agent. Analyze ALL conversations and files in this workspace to produce an AGENTES.md file. This file is consumed exclusively by AI agents to have full context when assisting the user. It is NOT for human reading — optimize for maximum information density with minimum tokens.
 
-This AGENTES.md will be used by any AI coding assistant (Claude Code, Cursor, Copilot, etc.) to understand the project context and continue working effectively.
+Review every conversation thoroughly. Extract all factual information the agent needs to continue assisting effectively, regardless of the domain (coding, research, planning, personal advice, learning, etc.).
 
-Generate the AGENTES.md with the following sections:
+Structure:
 
 # [Workspace Name]
 
-## Project Overview
-A concise summary of what this workspace/project is about, based on the conversations and files.
+## What this is about
+One paragraph. What is the user working on or trying to accomplish in this workspace.
 
-## Current State
-What has been accomplished so far. Key decisions made. Current status of the work.
+## Key facts
+Bullet list of all factual information extracted from conversations: decisions made, preferences stated, constraints, requirements, names, dates, numbers, services, tools, APIs (by name, never actual keys), dependencies, people involved, specific details the user has shared. Include everything an agent would need to not ask the user to repeat themselves.
 
-## Key Files
-List each file in the workspace with a brief description of its purpose and contents (inferred from conversations).
+## Current state
+What has been done. What worked, what didn't. Key conclusions reached.
 
-## Architecture & Patterns
-Technical patterns, frameworks, languages, and architectural decisions observed in the conversations.
+## Files
+List workspace files with a one-line description of each (inferred from conversations).
 
-## Important Context
-Factual information extracted from conversations that would be critical for any AI to know:
-- API keys or services being used (mention them by name, never include actual keys)
-- External dependencies or integrations
-- Constraints or requirements mentioned by the user
-- Bugs or issues discussed
-
-## Pending Work
-Tasks that were discussed but not completed, or next steps mentioned in conversations.
-
-## Instructions for AI Assistants
-Specific behavioral instructions derived from user preferences observed in the conversations (e.g., preferred language, coding style, frameworks to use or avoid).
+## Pending
+Tasks discussed but not completed. Next steps mentioned. Open questions.
 
 Rules:
-- Write in the same language the user used in the conversations (Spanish or English)
-- Be factual — only include information that can be derived from the provided data
-- Be concise but thorough — this file should give complete context in under 2000 words
-- Do NOT include conversation transcripts — only extracted knowledge
-- Format as clean Markdown"""
+- Write in the language the user used in conversations
+- ONLY factual information derived from the provided data — no assumptions, no filler
+- Be dense — no decorative text, no transition sentences, no redundancy
+- Every line must carry information. If a section has nothing to report, omit it
+- Do NOT include conversation transcripts — only extracted knowledge"""
 
                 val chatMessages = listOf(
                     ChatMessage(

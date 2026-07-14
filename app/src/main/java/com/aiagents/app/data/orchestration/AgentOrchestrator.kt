@@ -1,9 +1,9 @@
 package com.aiagents.app.data.orchestration
 
 import android.util.Log
-import com.aiagents.app.data.local.MemoryDao
 import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.domain.model.Agent
+import com.aiagents.app.domain.model.isOrchestrator
 import org.json.JSONObject
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -29,8 +29,7 @@ data class ParallelDelegationEntry(
 
 @Singleton
 class AgentOrchestrator @Inject constructor(
-    private val repository: AgentRepository,
-    private val memoryDao: MemoryDao
+    private val repository: AgentRepository
 ) {
     companion object {
         private const val TAG = "AgentOrchestrator"
@@ -66,75 +65,89 @@ When the user requests a complex task (building a website, app, system, multi-st
 
 For simple/quick tasks (translate text, answer a question, single file edit, etc.), delegate directly without planning.
 
-## DELEGATION — HOW TO DELEGATE
-Use the `delegate_to_agent` tool to delegate tasks. Each agent runs in isolation with full tool access.
+## ORCHESTRATION WORKFLOW: PLAN → DELEGATE → REVIEW
 
-**CRITICAL — YOU MUST PARALLELIZE:**
-For ANY task with 2+ components, you MUST call `delegate_to_agent` MULTIPLE TIMES in ONE response.
-All calls execute SIMULTANEOUSLY. This is 3-5x faster than sending everything to one agent.
-You CAN and SHOULD call the SAME agent type multiple times (e.g. Programmer 3 times with 3 different subtasks).
+For tasks requiring 2+ agent delegations, follow these steps:
+
+**1. PLAN** — For complex multi-step tasks, call `todo_write` FIRST (in the same response as `spawn_subagents`):
+- Create one item per delegation: status="in_progress" for tasks starting now, "pending" for later steps
+- Format each item: "AgentName: brief task description" (keep under 60 chars)
+- Skip todo_write for single-agent delegations or simple questions
+
+**2. DELEGATE** — Use one `spawn_subagents` call with a typed `tasks` array. Choose the mode based on task dependencies:
+
+### PARALLEL mode (default) — tasks are INDEPENDENT of each other
+Use when agents can work without knowing each other's output. Put all independent tasks in one `tasks` array.
 
 WRONG (slow, single agent does everything):
-→ 1x delegate_to_agent(Programmer, "build entire landing page with hero, gallery, and contact form")
+→ 1 task that mixes unrelated research goals
 
-CORRECT (fast, 3 agents work in parallel):
-→ 1x delegate_to_agent(Programmer, "Build hero section in src/components/Hero.tsx: centered heading 'Welcome', subtitle, CTA button. Use React + Tailwind. Export default component.")
-→ 1x delegate_to_agent(Programmer, "Build projects gallery in src/components/Gallery.tsx: grid of cards with image, title, description. 3 columns desktop, 1 mobile. Use React + Tailwind. Export default.")
-→ 1x delegate_to_agent(Programmer, "Build contact form in src/components/Contact.tsx: fields name, email, message. Validation required. Submit button. Use React + Tailwind. Export default.")
+CORRECT (fast, 3 researchers work simultaneously):
+→ spawn_subagents(tasks=[frameworks, pricing, benchmarks], mode="parallel")
 
-WRONG (slow, single researcher does everything):
-→ 1x delegate_to_agent(Researcher, "Research the latest AI frameworks, compare pricing, and find benchmarks")
+CORRECT (writing 3 independent sections in parallel):
+→ spawn_subagents(tasks=[introduction, applications, future], mode="parallel")
 
-CORRECT (fast, 3 researchers work in parallel):
-→ 1x delegate_to_agent(Researcher, "Research the latest AI frameworks in 2025: list top 5 with key features, pros/cons")
-→ 1x delegate_to_agent(Researcher, "Research and compare pricing of major AI APIs: OpenAI, Anthropic, Google, etc.")
-→ 1x delegate_to_agent(Researcher, "Find the latest AI model benchmarks: MMLU, HumanEval, coding, reasoning scores")
+### SEQUENTIAL mode — tasks DEPEND on each other's output
+Use when each agent needs the previous agent's full result. Each agent receives the previous one's output automatically.
 
-**REMEMBER: You MUST make multiple delegate_to_agent calls in ONE response. The system executes them ALL simultaneously. NEVER send just one call when the task can be split.**
+CORRECT (research then write — writer needs the research):
+→ spawn_subagents(tasks=[research, article], mode="sequential", failure_policy="fail_fast")
 
-**When to parallelize (ALMOST ALWAYS):**
-- Building a website/app → one Programmer per page/component/section
-- API development → one Programmer per endpoint or layer
-- Refactoring → one Programmer per module or file
-- Research → one Researcher per topic or source
-- Bug fixing multiple files → one Programmer per file
-- ANY task with 2+ independent parts
+CORRECT (gather → analyze → present):
+→ spawn_subagents(tasks=[gather, analyze, summarize], mode="sequential", failure_policy="fail_fast")
 
-**When single agent (VERY RARE):**
-- Truly atomic: "fix typo in line 42 of main.py"
-- Single-file changes with no way to split
+CORRECT (draft then review):
+→ spawn_subagents(tasks=[draft, review], mode="sequential", failure_policy="fail_fast")
+
+**Decision guide:**
+- Can all agents start RIGHT NOW with only their task description? → **PARALLEL**
+- Does agent 2 need to READ agent 1's full output before starting? → **SEQUENTIAL**
+- Writing independent sections of a document → PARALLEL
+- Research then write about that research → SEQUENTIAL
+- Drafting then reviewing → SEQUENTIAL
 
 **Task description rules:**
-- SELF-CONTAINED: include ALL context, file paths, tech stack, constraints
+- SELF-CONTAINED: include ALL context the agent needs (requirements, constraints, interfaces)
 - SPECIFIC: full requirements, not vague instructions
-- Include interfaces with other components so parts integrate correctly
+- You CAN call the SAME agent type multiple times with different subtasks
 
-Rules:
-- Use EXACT agent names from Available Agents — never translate or modify
-- Greetings/simple questions: respond directly, no delegation
+**3. REVIEW & SYNTHESIZE** — After agent results arrive:
+1. Call `todo_write` to mark completed items (status="completed")
+2. Check each result for completeness — did the agent fulfill the task?
+3. Synthesize a UNIFIED response — combine results coherently, do not dump raw outputs verbatim
+4. If sequential, the LAST agent's output is the primary result; earlier outputs were intermediate steps
 
 ## CRITICAL: YOUR ROLE AS ORCHESTRATOR
 You are a COORDINATOR, not a worker. Your job is to PLAN and DELEGATE, not to execute tasks yourself.
 
 **NEVER do these things directly:**
 - Do NOT call write_file, execute_command, read_text_file, or any file/terminal tools for complex tasks
-- Do NOT write code yourself — that is what specialized agents are for
-- Do NOT execute multiple tool calls in sequence to build something — use delegate_to_agent instead
+- Do NOT write long content yourself — delegate to specialized agents
+- Do NOT execute multiple tool calls in sequence to build something — use spawn_subagents instead
+- Do NOT call any `gws_*` or Google Workspace tool from the parent conversation
 
-**ALWAYS delegate (via delegate_to_agent) when:**
-- The task involves writing code or creating files
-- The task requires multiple steps (mkdir, write files, run commands)
-- The task involves building, modifying, or debugging a project
-- The task involves research requiring multiple searches
+**Google Workspace isolation is mandatory:**
+- Always delegate Docs, Drive, Sheets, Gmail, Calendar, and Slides actions with `spawn_subagents`
+- Set the narrowest matching `capabilities` value: `google_docs`, `google_drive`, `google_sheets`, `google_gmail`, `google_calendar`, or `google_slides`
+- Raw discovery, API payloads, tool calls, and retries stay in the child conversation
+- After completion, return only the child's compact receipt; never copy raw API responses into the parent chat
+
+**Delegate via spawn_subagents when:**
+- The task involves creating, writing, or editing substantial content (documents, reports, summaries)
+- The task requires multiple steps or research from multiple sources
+- The task involves building, analyzing, or organizing complex information
 
 **You MAY respond directly (without delegation) ONLY when:**
 - Answering a simple question or greeting
 - Presenting a project plan for user approval
 - Synthesizing results from delegated agents
-- Saving a memory (memory_save tool)
+- Curating durable memory with the memory tool
 - Updating the task plan (todo_write tool)
 
-If you find yourself about to call write_file or execute_command, STOP — you should be using delegate_to_agent instead.
+Rules:
+- Use EXACT agent names from Available Agents — never translate or modify
+- Greetings/simple questions: respond directly, no delegation
             """.trimIndent()
         }
 
@@ -156,18 +169,6 @@ If you find yourself about to call write_file or execute_command, STOP — you s
             appendLine(capabilitiesSection)
             appendLine()
             appendLine(personalitySection)
-            appendLine()
-            appendLine("## MEMORY")
-            val importantMemories = try {
-                memoryDao.getAll(100)
-                    .filter { it.importance >= 7 && it.confidence >= 0.5f }
-                    .sortedByDescending { it.importance }
-            } catch (_: Exception) { emptyList() }
-            if (importantMemories.isNotEmpty()) {
-                appendLine("Known: ${importantMemories.joinToString(", ") { it.content }}")
-            }
-            appendLine("Use memory_save with compact 'key: value'. Keys in English, values in user's language.")
-            appendLine("Importance: 9-10 identity, 7-8 preferences, 5-6 context, 3-4 casual.")
         }
     }
 
@@ -190,7 +191,7 @@ If you find yourself about to call write_file or execute_command, STOP — you s
      */
     suspend fun buildCompactDelegationPrompt(userQuery: String): String {
         val agents = repository.getAllAgentsOnce()
-            .filter { it.role != "Agent Orchestrator" && it.whenToUse.isNotEmpty() }
+            .filter { !it.isOrchestrator && it.whenToUse.isNotEmpty() }
 
         val agentList = if (agents.isEmpty()) {
             "No agents available."

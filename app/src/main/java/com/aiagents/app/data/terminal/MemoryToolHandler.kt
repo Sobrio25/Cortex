@@ -65,6 +65,9 @@ class MemoryToolHandler @Inject constructor(
             TOOL_SEARCH, TOOL_SAVE, TOOL_LIST, TOOL_DELETE, TOOL_UPDATE, TOOL_LINK
         )
 
+        /** Legacy Room memory is an on-demand semantic archive, not Cortex's bounded memory. */
+        val READ_TOOL_NAMES = setOf(TOOL_SEARCH, TOOL_LIST)
+
         fun getToolDefinitionsJson(): List<Map<String, Any>> = listOf(
             mapOf("type" to "function", "function" to mapOf(
                 "name" to TOOL_SEARCH,
@@ -136,6 +139,13 @@ class MemoryToolHandler @Inject constructor(
                     "required" to listOf("source_id", "target_id", "link_type"))
             ))
         )
+
+        fun getReadToolDefinitionsJson(): List<Map<String, Any>> =
+            getToolDefinitionsJson().filter { definition ->
+                @Suppress("UNCHECKED_CAST")
+                val function = definition["function"] as? Map<String, Any>
+                function?.get("name") in READ_TOOL_NAMES
+            }
     }
 
     /** Reverse lookup built for the active language only. Rebuilt on language change. */
@@ -258,58 +268,6 @@ class MemoryToolHandler @Inject constructor(
             "[${m.id}] ${m.content}"
         }
         return MemoryToolResult(id, true, formatted)
-    }
-
-    /** Returns all important memories (importance >= 7) for direct prompt injection. */
-    suspend fun getImportantMemories(): List<MemoryEntity> {
-        return memoryDao.getAll(100)
-            .filter { it.importance >= 7 && it.confidence >= 0.5f }
-            .sortedByDescending { it.importance }
-    }
-
-    /**
-     * Compact search for memory injection into delegated agents.
-     * Returns only content text, no metadata, filtered by confidence.
-     */
-    suspend fun searchCompactForInjection(query: String, maxResults: Int = 3): String? {
-        val expandedQueries = expandQueryWithTranslations(query)
-        val allResults = mutableListOf<MemoryEntity>()
-        val seenIds = mutableSetOf<Long>()
-
-        for (q in expandedQueries) {
-            if (allResults.size >= maxResults) break
-            val ftsQuery = q.trim().split("\\s+".toRegex())
-                .filter { it.length > 1 }
-                .joinToString(" ") { "$it*" }
-            if (ftsQuery.isBlank()) continue
-
-            try {
-                val ftsResults = memoryDao.searchFts(ftsQuery, maxResults * 2)
-                    .filter { it.confidence >= 0.5f }
-                for (r in ftsResults) {
-                    if (seenIds.add(r.id) && allResults.size < maxResults) {
-                        allResults.add(r)
-                    }
-                }
-            } catch (_: Exception) { }
-        }
-
-        if (allResults.isEmpty()) {
-            return try {
-                val fallback = memoryDao.getHighConfidence(0.5f, maxResults)
-                if (fallback.isEmpty()) null
-                else fallback.joinToString("\n") { "- ${it.content}" }
-            } catch (_: Exception) { null }
-        }
-
-        val results = allResults
-
-        if (results.isEmpty()) return null
-
-        val now = System.currentTimeMillis()
-        results.forEach { memoryDao.incrementAccess(it.id, now) }
-
-        return results.joinToString("\n") { "- ${it.content}" }
     }
 
     private suspend fun save(id: String, args: com.google.gson.JsonObject): MemoryToolResult {

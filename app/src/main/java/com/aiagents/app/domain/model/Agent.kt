@@ -25,3 +25,11 @@ data class Agent(
     // Agentes del sistema (ocultos en la UI, solo usados internamente por Cortex)
     val isSystemAgent: Boolean = false
 )
+
+object AgentRoles {
+    const val ORCHESTRATOR = "Agent Orchestrator"
+}
+
+/** Stable identity: the user may rename the orchestrator during onboarding. */
+val Agent.isOrchestrator: Boolean
+    get() = role == AgentRoles.ORCHESTRATOR

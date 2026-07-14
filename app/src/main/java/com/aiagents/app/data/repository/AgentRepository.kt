@@ -1,11 +1,14 @@
 package com.aiagents.app.data.repository
 
 import android.util.Log
+import com.aiagents.app.data.auth.OpenAIEndpointPolicy
+import com.aiagents.app.data.auth.ProviderCredentialResolver
 import com.aiagents.app.data.local.AgentDao
 import com.aiagents.app.data.local.CommandPermissionDao
 import com.aiagents.app.data.local.ConversationDao
 import com.aiagents.app.data.local.FileDao
 import com.aiagents.app.data.local.MessageDao
+import com.aiagents.app.data.local.ProviderModelCatalogCache
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.local.WorkspaceDao
 import com.aiagents.app.data.model.AgentEntity
@@ -19,6 +22,9 @@ import com.aiagents.app.data.remote.AIClientFactory
 import com.aiagents.app.data.remote.ChatMessage
 import com.aiagents.app.data.remote.ChatResponseWithTools
 import com.aiagents.app.data.remote.StreamingChunk
+import com.aiagents.app.data.remote.RemoteModelInfo
+import com.aiagents.app.data.runtime.RuntimeContextProvider
+import com.aiagents.app.data.skills.SkillReviewScheduler
 import com.aiagents.app.data.terminal.AgentCreatorToolHandler
 import com.aiagents.app.data.terminal.AgentSelectionToolHandler
 import com.aiagents.app.data.terminal.BraveSearchToolHandler
@@ -39,10 +45,10 @@ import com.aiagents.app.data.terminal.ReminderToolHandler
 import com.aiagents.app.data.terminal.CodeExecutionHandler
 import com.aiagents.app.data.terminal.FinanceToolHandler
 import com.aiagents.app.data.terminal.MemoryToolHandler
+import com.aiagents.app.data.terminal.CortexMemoryToolHandler
 import com.aiagents.app.data.terminal.AcademicSearchToolHandler
 import com.aiagents.app.data.terminal.WeatherToolHandler
 import com.aiagents.app.data.terminal.ImageGenerationToolHandler
-import com.aiagents.app.data.auth.GoogleDriveOAuthManager
 import com.aiagents.app.data.auth.GoogleWorkspaceOAuthManager
 import com.aiagents.app.data.terminal.CalendarToolHandler
 import com.aiagents.app.data.terminal.FileToolHandler
@@ -52,13 +58,18 @@ import com.aiagents.app.data.terminal.ToolHandler
 import com.aiagents.app.data.terminal.AppControlToolHandler
 import com.aiagents.app.data.terminal.ScheduledTaskToolHandler
 import com.aiagents.app.data.terminal.TodoToolHandler
-import com.aiagents.app.data.terminal.SubtaskToolHandler
 import com.aiagents.app.data.terminal.DelegationToolHandler
 import com.aiagents.app.data.terminal.ToolSearchHandler
+import com.aiagents.app.data.terminal.UnifiedWebToolHandler
+import com.aiagents.app.data.terminal.SkillToolHandler
 import com.aiagents.app.domain.model.Agent
+import com.aiagents.app.domain.model.AgentRoles
+import com.aiagents.app.domain.model.isOrchestrator
 import com.aiagents.app.domain.model.AgentFile
 import com.aiagents.app.domain.model.Conversation
 import com.aiagents.app.domain.model.Message
+import com.aiagents.app.domain.model.OpenCodeVariantType
+import com.aiagents.app.domain.model.OpenAIAuthMode
 import com.aiagents.app.domain.model.ProviderType
 import com.aiagents.app.domain.model.ToolCall
 import com.aiagents.app.domain.model.ToolResult
@@ -66,6 +77,8 @@ import com.aiagents.app.domain.model.Workspace
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import com.google.gson.Gson
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -78,6 +91,8 @@ class AgentRepository @Inject constructor(
     private val conversationDao: ConversationDao,
     private val commandPermissionDao: CommandPermissionDao,
     private val securePreferences: SecurePreferences,
+    private val providerModelCatalogCache: ProviderModelCatalogCache,
+    private val providerCredentialResolver: ProviderCredentialResolver,
     private val aiClientFactory: AIClientFactory,
     private val shellExecutor: ShellExecutor,
     private val toolHandler: ToolHandler,
@@ -98,21 +113,24 @@ class AgentRepository @Inject constructor(
     private val notionToolHandler: NotionToolHandler,
     private val slackToolHandler: SlackToolHandler,
     private val googleDriveToolHandler: GoogleDriveToolHandler,
-    private val googleDriveOAuthManager: GoogleDriveOAuthManager,
     private val googleWorkspaceToolHandler: GoogleWorkspaceToolHandler,
     private val googleWorkspaceOAuthManager: GoogleWorkspaceOAuthManager,
     private val reminderToolHandler: ReminderToolHandler,
     private val memoryToolHandler: MemoryToolHandler,
+    private val cortexMemoryToolHandler: CortexMemoryToolHandler,
     private val presentationToolHandler: PresentationToolHandler,
     private val financeToolHandler: FinanceToolHandler,
     private val toolSearchHandler: ToolSearchHandler,
-    private val subtaskToolHandler: SubtaskToolHandler,
+    private val unifiedWebToolHandler: UnifiedWebToolHandler,
+    private val skillToolHandler: SkillToolHandler,
     private val academicSearchToolHandler: AcademicSearchToolHandler,
     private val weatherToolHandler: WeatherToolHandler,
     private val imageGenerationToolHandler: ImageGenerationToolHandler,
     private val appControlToolHandler: AppControlToolHandler,
     private val todoToolHandler: TodoToolHandler,
     private val scheduledTaskToolHandler: ScheduledTaskToolHandler,
+    private val runtimeContextProvider: RuntimeContextProvider,
+    private val skillReviewScheduler: SkillReviewScheduler,
     private val localModelRepository: com.aiagents.app.data.local.LocalModelRepository? = null
 ) {
     fun getAllAgents(): Flow<List<Agent>> {
@@ -172,24 +190,9 @@ class AgentRepository @Inject constructor(
     }
 
     suspend fun getAvailableModelsForProvider(providerType: ProviderType): List<String> {
-        // Para proveedor LOCAL, usar modelos descargados
-        if (providerType == ProviderType.LOCAL) {
-            return localModelRepository?.getDownloadedModels()?.map { it.id } ?: emptyList()
-        }
-
-        // Manejar Moonshot con múltiples endpoints
-        if (providerType == ProviderType.MOONSHOT) {
-            val (apiKey, baseUrl) = getResolvedMoonshotPair() ?: return emptyList()
-            val client = aiClientFactory.createClient(providerType, apiKey, baseUrl)
-            return client.getAvailableModels().getOrDefault(emptyList())
-        }
-
-        // Ollama no requiere API key — solo necesita la URL base
-        val apiKey = if (providerType == ProviderType.OLLAMA) ""
-                     else securePreferences.getApiKey(providerType) ?: return emptyList()
-        val baseUrl = securePreferences.getBaseUrl(providerType)
-        val client = aiClientFactory.createClient(providerType, apiKey, baseUrl)
-        return client.getAvailableModels().getOrDefault(emptyList())
+        return fetchAvailableModelInfos(providerType)
+            .getOrDefault(emptyList())
+            .map { it.id }
     }
 
     suspend fun getAllAvailableModels(): Map<ProviderType, List<String>> {
@@ -205,11 +208,35 @@ class AgentRepository @Inject constructor(
     }
 
     suspend fun addMessage(workspaceId: Long, message: Message, agentId: Long? = null): Long {
-        return messageDao.insertMessage(MessageEntity.fromDomain(message, workspaceId, agentId))
+        val id = messageDao.insertMessage(MessageEntity.fromDomain(message, workspaceId, agentId))
+        scheduleSkillReviewIfEligible(workspaceId, null, message)
+        return id
     }
 
     suspend fun addMessage(workspaceId: Long, conversationId: Long?, message: Message, agentId: Long? = null): Long {
-        return messageDao.insertMessage(MessageEntity.fromDomain(message, workspaceId, agentId, conversationId))
+        val id = messageDao.insertMessage(MessageEntity.fromDomain(message, workspaceId, agentId, conversationId))
+        scheduleSkillReviewIfEligible(workspaceId, conversationId, message)
+        return id
+    }
+
+    private suspend fun scheduleSkillReviewIfEligible(
+        workspaceId: Long,
+        conversationId: Long?,
+        message: Message
+    ) {
+        if (message.role != com.aiagents.app.domain.model.MessageRole.USER) return
+        // Delegated sub-conversation prompts are synthetic and must not count as user messages.
+        if (conversationId != null && conversationDao.getConversationById(conversationId)?.parentConversationId != null) return
+        runCatching {
+            val recent = if (conversationId != null) {
+                messageDao.getRecentConversationMessages(conversationId, 24)
+            } else {
+                messageDao.getRecentConversationMessagesForWorkspace(workspaceId, 24)
+            }.asReversed().map { it.toDomain() }
+            skillReviewScheduler.recordMessage(workspaceId, message, recent)
+        }.onFailure {
+            Log.w("AgentRepository", "Could not schedule skill review", it)
+        }
     }
 
     suspend fun clearMessages(workspaceId: Long) {
@@ -257,6 +284,20 @@ class AgentRepository @Inject constructor(
         messageDao.deleteMessagesForConversation(conversationId)
     }
 
+    suspend fun saveContextCheckpoint(
+        workspaceId: Long,
+        conversationId: Long?,
+        summary: Message,
+        agentId: Long?
+    ) {
+        messageDao.saveContextCheckpoint(
+            workspaceId = workspaceId,
+            conversationId = conversationId,
+            checkpointPrefix = ContextCompactionPolicy.CHECKPOINT_PREFIX,
+            checkpoint = MessageEntity.fromDomain(summary, workspaceId, agentId, conversationId)
+        )
+    }
+
     fun getFilesForWorkspace(workspaceId: Long): Flow<List<AgentFile>> {
         return fileDao.getFilesForWorkspace(workspaceId).map { entities ->
             entities.map { it.toDomain() }
@@ -275,8 +316,10 @@ class AgentRepository @Inject constructor(
         agent: Agent,
         messages: List<Message>,
         overrideModel: String? = null,
-        overrideProvider: ProviderType? = null
+        overrideProvider: ProviderType? = null,
+        memorySessionKey: String? = null
     ): Result<String> {
+        runtimeContextProvider.refreshIdentityFromMemory()
         val activeProvider = overrideProvider ?: getActiveProvider() ?: getFirstConfiguredProvider()
         if (activeProvider == null) {
             Log.e("AgentRepository", "No provider configured")
@@ -291,34 +334,15 @@ class AgentRepository @Inject constructor(
         
         Log.d("AgentRepository", "Chat request - Provider: $activeProvider, Model: $modelToUse")
 
-        // Obtener API key y base URL según el proveedor
-        val (apiKey, baseUrl) = when {
-            activeProvider == ProviderType.LOCAL || activeProvider == ProviderType.OLLAMA -> "" to null
-            activeProvider == ProviderType.MOONSHOT -> {
-                getResolvedMoonshotPair() ?: run {
-                    Log.e("AgentRepository", "API Key not found for any Moonshot endpoint")
-                    return Result.failure(Exception("API Key no configurada para Moonshot"))
-                }
-            }
-            else -> {
-                val key = securePreferences.getApiKey(activeProvider)
-                if (key == null) {
-                    Log.e("AgentRepository", "API Key not found for provider: $activeProvider")
-                    return Result.failure(Exception("API Key no configurada para $activeProvider"))
-                }
-                key to securePreferences.getBaseUrl(activeProvider)
-            }
-        }
+        val credentials = providerCredentialResolver.resolve(activeProvider)
+            ?: return Result.failure(Exception(missingCredentialsMessage(activeProvider)))
+        val (apiKey, baseUrl) = credentials.apiKey to credentials.baseUrl
 
-        if (activeProvider != ProviderType.LOCAL) {
-            Log.d("AgentRepository", "API Key found: ${apiKey.take(8)}...")
-        }
-        Log.d("AgentRepository", "Base URL: $baseUrl")
-        
         val client = aiClientFactory.createClient(activeProvider, apiKey, baseUrl)
         Log.d("AgentRepository", "Client created: ${client::class.simpleName}")
         
-        val chatMessages = messages.map { msg ->
+        val contextMessages = ContextCompactionPolicy.modelHistory(messages)
+        val chatMessages = contextMessages.map { msg ->
             ChatMessage(
                 role = msg.role.name.lowercase(),
                 content = msg.content
@@ -329,7 +353,12 @@ class AgentRepository @Inject constructor(
         return client.chat(
             model = modelToUse,
             messages = chatMessages,
-            systemPrompt = agent.systemPrompt,
+            systemPrompt = runtimeContextProvider.enrich(
+                basePrompt = agent.systemPrompt,
+                agentName = agent.name,
+                agentRole = agent.role,
+                memorySessionKey = memorySessionKey ?: deriveMemorySessionKey(agent, messages)
+            ),
             temperature = agent.temperature,
             maxTokens = agent.maxTokens
         )
@@ -347,39 +376,90 @@ class AgentRepository @Inject constructor(
         maxTokens: Int,
         provider: ProviderType?
     ): Result<String> {
+        runtimeContextProvider.refreshIdentityFromMemory()
         val activeProvider = provider ?: getActiveProvider() ?: getFirstConfiguredProvider()
             ?: return Result.failure(Exception("No provider configured"))
-        val (apiKey, baseUrl) = when {
-            activeProvider == ProviderType.LOCAL || activeProvider == ProviderType.OLLAMA -> "" to null
-            activeProvider == ProviderType.MOONSHOT -> {
-                getResolvedMoonshotPair() ?: return Result.failure(Exception("API Key no configurada para Moonshot"))
-            }
-            else -> {
-                val key = securePreferences.getApiKey(activeProvider) ?: return Result.failure(Exception("No API key for $activeProvider"))
-                key to securePreferences.getBaseUrl(activeProvider)
-            }
-        }
+        val credentials = providerCredentialResolver.resolve(activeProvider)
+            ?: return Result.failure(Exception(missingCredentialsMessage(activeProvider)))
+        val (apiKey, baseUrl) = credentials.apiKey to credentials.baseUrl
         val client = aiClientFactory.createClient(activeProvider, apiKey, baseUrl)
-        return client.chat(model, messages, systemPrompt, temperature, maxTokens)
+        return client.chat(
+            model,
+            messages,
+            runtimeContextProvider.enrich(
+                basePrompt = systemPrompt,
+                agentName = "Internal agent",
+                agentRole = "Internal operation"
+            ),
+            temperature,
+            maxTokens
+        )
     }
 
     suspend fun getAvailableModels(providerType: ProviderType): Result<List<String>> {
+        return fetchAvailableModelInfos(providerType).map { models -> models.map { it.id } }
+    }
+
+    private suspend fun fetchAvailableModelInfos(providerType: ProviderType): Result<List<RemoteModelInfo>> {
         if (providerType == ProviderType.LOCAL) {
-            val models = localModelRepository?.getDownloadedModels()?.map { it.id } ?: emptyList()
+            val models = localModelRepository?.getDownloadedModels().orEmpty().map { model ->
+                RemoteModelInfo(model.id, model.contextLength)
+            }
             return Result.success(models)
         }
-        // Moonshot usa API keys por endpoint, no la key genérica
-        if (providerType == ProviderType.MOONSHOT) {
-            val (key, baseUrl) = getResolvedMoonshotPair() ?: return Result.success(emptyList())
-            val client = aiClientFactory.createClient(providerType, key, baseUrl)
-            return client.getAvailableModels()
+        val credentials = providerCredentialResolver.resolve(providerType)
+            ?: return Result.success(emptyList())
+        val contextMetadataScope = providerContextMetadataScope(providerType)
+        val client = aiClientFactory.createClient(
+            providerType,
+            credentials.apiKey,
+            credentials.baseUrl
+        )
+        return client.getAvailableModelInfos().onSuccess { models ->
+            providerModelCatalogCache.writeContextWindows(
+                providerType,
+                models.mapNotNull { model ->
+                    model.contextWindow?.let { contextWindow -> model.id to contextWindow }
+                }.toMap(),
+                scope = contextMetadataScope
+            )
         }
-        // Ollama no requiere API key — solo necesita la URL base
-        val apiKey = if (providerType == ProviderType.OLLAMA) ""
-                     else securePreferences.getApiKey(providerType) ?: return Result.success(emptyList())
-        val baseUrl = securePreferences.getBaseUrl(providerType)
-        val client = aiClientFactory.createClient(providerType, apiKey, baseUrl)
-        return client.getAvailableModels()
+    }
+
+    private fun providerContextMetadataScope(providerType: ProviderType): String? = when (providerType) {
+        ProviderType.OPENCODE -> getActiveOpenCodeVariant().name
+        ProviderType.MOONSHOT -> getActiveMoonshotEndpoint().name
+        ProviderType.ZAI -> getActiveZAIPlan().name
+        else -> null
+    }
+
+    fun getContextWindowForModel(modelKey: String): Int {
+        val parts = modelKey.split('|', limit = 2)
+        val provider = parts.firstOrNull()
+            ?.let { runCatching { ProviderType.valueOf(it) }.getOrNull() }
+        val modelId = parts.getOrElse(1) { modelKey }
+        val reportedContextWindow = when (provider) {
+            ProviderType.LOCAL -> localModelRepository
+                ?.getAvailableModels()
+                ?.firstOrNull { it.id == modelId }
+                ?.contextLength
+            null -> null
+            else -> providerModelCatalogCache.readContextWindow(
+                provider,
+                modelId,
+                scope = providerContextMetadataScope(provider)
+            )
+        }
+        return TokenCounter.getContextWindowForModel(modelId, provider, reportedContextWindow)
+    }
+
+    suspend fun refreshContextWindowForModel(modelKey: String): Int {
+        val provider = modelKey.substringBefore('|', missingDelimiterValue = "")
+            .let { runCatching { ProviderType.valueOf(it) }.getOrNull() }
+        if (provider != null && provider != ProviderType.LOCAL) {
+            fetchAvailableModelInfos(provider)
+        }
+        return getContextWindowForModel(modelKey)
     }
 
     suspend fun getAvailableModelsForActiveProvider(): Result<List<String>> {
@@ -400,6 +480,23 @@ class AgentRepository @Inject constructor(
     fun isModelSelected(provider: ProviderType, modelId: String): Boolean =
         securePreferences.isModelSelected(provider, modelId)
 
+    suspend fun clearSelectedModelsForProvider(provider: ProviderType) {
+        securePreferences.clearSelectedModels(provider)
+        workspaceDao.clearSelectedModelsForProvider("${provider.name}|")
+    }
+
+    fun getCredentialScope(provider: ProviderType, credential: String, destination: String): String =
+        securePreferences.credentialScope(provider, credential, destination)
+
+    fun getStoredCredentialScope(provider: ProviderType): String? =
+        providerCredentialResolver.resolve(provider)?.let { credentials ->
+            securePreferences.credentialScope(
+                provider,
+                credentials.apiKey,
+                credentials.baseUrl.orEmpty()
+            )
+        }
+
     fun saveApiKey(provider: ProviderType, apiKey: String) {
         securePreferences.saveApiKey(provider, apiKey)
     }
@@ -409,11 +506,18 @@ class AgentRepository @Inject constructor(
     }
 
     fun saveBaseUrl(provider: ProviderType, baseUrl: String) {
+        require(provider != ProviderType.OPENAI) {
+            "OpenAI debe guardarse con saveOpenAIConfig para mantener credencial y destino atómicos"
+        }
         securePreferences.saveBaseUrl(provider, baseUrl)
     }
 
     fun getBaseUrl(provider: ProviderType): String? {
-        return securePreferences.getBaseUrl(provider)
+        if (provider != ProviderType.OPENAI) return securePreferences.getBaseUrl(provider)
+        return when (securePreferences.getOpenAIAuthMode()) {
+            OpenAIAuthMode.API_KEY -> OpenAIEndpointPolicy.OFFICIAL_API_BASE_URL
+            OpenAIAuthMode.OAUTH_BACKEND -> securePreferences.getOpenAIBackendBaseUrl()
+        }
     }
 
     fun hasApiKey(provider: ProviderType): Boolean {
@@ -421,12 +525,14 @@ class AgentRepository @Inject constructor(
         if (provider == ProviderType.LOCAL) {
             return localModelRepository?.getDownloadedModels()?.isNotEmpty() == true
         }
-        // Ollama no requiere API key — siempre está "configurado" (usa URL por defecto si no hay una guardada)
-        if (provider == ProviderType.OLLAMA) return true
-        // Moonshot puede estar configurado con cualquiera de sus 3 endpoints
-        if (provider == ProviderType.MOONSHOT) return isAnyMoonshotEndpointConfigured()
-        return securePreferences.hasApiKey(provider)
+        return providerCredentialResolver.resolve(provider) != null
     }
+
+    fun getOpenAIAuthMode(): OpenAIAuthMode = securePreferences.getOpenAIAuthMode()
+    fun getOpenAIBackendToken(): String? = securePreferences.getOpenAIBackendToken()
+    fun getOpenAIBackendBaseUrl(): String? = securePreferences.getOpenAIBackendBaseUrl()
+    fun saveOpenAIConfig(mode: OpenAIAuthMode, credential: String, backendBaseUrl: String) =
+        securePreferences.saveOpenAIConfig(mode, credential, backendBaseUrl)
 
     fun setActiveProvider(provider: ProviderType) {
         securePreferences.setActiveProvider(provider)
@@ -440,14 +546,24 @@ class AgentRepository @Inject constructor(
         return ProviderType.entries.find { hasApiKey(it) }
     }
 
+    private fun missingCredentialsMessage(provider: ProviderType): String =
+        if (provider == ProviderType.OPENAI && getOpenAIAuthMode() == OpenAIAuthMode.OAUTH_BACKEND) {
+            "OAuth de OpenAI no configurado: guarda una URL HTTPS válida para el backend"
+        } else {
+            "Credenciales no configuradas para $provider"
+        }
+
     suspend fun chatWithTools(
         agent: Agent,
         messages: List<Message>,
         overrideModel: String? = null,
         overrideProvider: ProviderType? = null,
         enableTerminal: Boolean = false,
-        workspaceFolderPath: String? = null
+        workspaceFolderPath: String? = null,
+        allowedToolNames: Set<String>? = null,
+        memorySessionKey: String? = null
     ): Result<ChatResponseWithTools> {
+        runtimeContextProvider.refreshIdentityFromMemory()
         val activeProvider = overrideProvider ?: getActiveProvider() ?: getFirstConfiguredProvider()
         if (activeProvider == null) {
             Log.e("AgentRepository", "No provider configured")
@@ -462,28 +578,14 @@ class AgentRepository @Inject constructor(
         
         Log.d("AgentRepository", "Chat request - Provider: $activeProvider, Model: $modelToUse, Terminal: $enableTerminal")
 
-        // Obtener API key y base URL según el proveedor
-        val (apiKey, baseUrl) = when {
-            activeProvider == ProviderType.LOCAL || activeProvider == ProviderType.OLLAMA -> "" to null
-            activeProvider == ProviderType.MOONSHOT -> {
-                getResolvedMoonshotPair() ?: run {
-                    Log.e("AgentRepository", "API Key not found for any Moonshot endpoint")
-                    return Result.failure(Exception("API Key no configurada para Moonshot"))
-                }
-            }
-            else -> {
-                val key = securePreferences.getApiKey(activeProvider)
-                if (key == null) {
-                    Log.e("AgentRepository", "API Key not found for provider: $activeProvider")
-                    return Result.failure(Exception("API Key no configurada para $activeProvider"))
-                }
-                key to securePreferences.getBaseUrl(activeProvider)
-            }
-        }
+        val credentials = providerCredentialResolver.resolve(activeProvider)
+            ?: return Result.failure(Exception(missingCredentialsMessage(activeProvider)))
+        val (apiKey, baseUrl) = credentials.apiKey to credentials.baseUrl
 
         val client = aiClientFactory.createClient(activeProvider, apiKey, baseUrl)
         
-        val chatMessages = messages.map { msg ->
+        val contextMessages = ContextCompactionPolicy.modelHistory(messages)
+        val chatMessages = contextMessages.map { msg ->
             val toolResult = msg.toolResults.firstOrNull()
             val toolResultContent = toolResult?.content
             val isImageResult = toolResultContent?.startsWith("data:image/") == true
@@ -508,14 +610,22 @@ class AgentRepository @Inject constructor(
             )
         }
         
-        val tools = buildToolDefinitions(agent, enableTerminal, workspaceFolderPath)
+        val tools = buildToolDefinitions(agent, enableTerminal, workspaceFolderPath, allowedToolNames)
 
         val sanitized = sanitizeToolCallHistory(chatMessages)
         Log.d("AgentRepository", "Sending ${sanitized.size} messages to API with ${tools.size} tools")
         return client.chatWithTools(
             model = modelToUse,
             messages = sanitized,
-            systemPrompt = agent.systemPrompt,
+            systemPrompt = buildRuntimeSystemPrompt(
+                agent,
+                messages,
+                tools,
+                enableTerminal,
+                workspaceFolderPath,
+                allowedToolNames,
+                memorySessionKey
+            ),
             temperature = agent.temperature,
             maxTokens = agent.maxTokens,
             tools = tools
@@ -525,14 +635,17 @@ class AgentRepository @Inject constructor(
     /**
      * Streaming version of chatWithTools. Returns a Flow of StreamingChunks.
      */
-    fun chatWithToolsStreaming(
+    suspend fun chatWithToolsStreaming(
         agent: Agent,
         messages: List<Message>,
         overrideModel: String? = null,
         overrideProvider: ProviderType? = null,
         enableTerminal: Boolean = false,
-        workspaceFolderPath: String? = null
+        workspaceFolderPath: String? = null,
+        allowedToolNames: Set<String>? = null,
+        memorySessionKey: String? = null
     ): Flow<StreamingChunk> {
+        runtimeContextProvider.refreshIdentityFromMemory()
         val activeProvider = overrideProvider ?: getActiveProvider() ?: getFirstConfiguredProvider()
         if (activeProvider == null) {
             return kotlinx.coroutines.flow.flow {
@@ -547,27 +660,16 @@ class AgentRepository @Inject constructor(
             }
         }
 
-        val (apiKey, baseUrl) = when {
-            activeProvider == ProviderType.LOCAL || activeProvider == ProviderType.OLLAMA -> "" to null
-            activeProvider == ProviderType.MOONSHOT -> {
-                getResolvedMoonshotPair() ?: return kotlinx.coroutines.flow.flow {
-                    emit(StreamingChunk(error = "API Key no configurada para Moonshot"))
-                }
+        val credentials = providerCredentialResolver.resolve(activeProvider)
+            ?: return kotlinx.coroutines.flow.flow {
+                emit(StreamingChunk(error = missingCredentialsMessage(activeProvider)))
             }
-            else -> {
-                val key = securePreferences.getApiKey(activeProvider)
-                if (key == null) {
-                    return kotlinx.coroutines.flow.flow {
-                        emit(StreamingChunk(error = "API Key no configurada para $activeProvider"))
-                    }
-                }
-                key to securePreferences.getBaseUrl(activeProvider)
-            }
-        }
+        val (apiKey, baseUrl) = credentials.apiKey to credentials.baseUrl
 
         val client = aiClientFactory.createClient(activeProvider, apiKey, baseUrl)
 
-        val chatMessages = messages.map { msg ->
+        val contextMessages = ContextCompactionPolicy.modelHistory(messages)
+        val chatMessages = contextMessages.map { msg ->
             val toolResult = msg.toolResults.firstOrNull()
             val toolResultContent = toolResult?.content
             val isImageResult = toolResultContent?.startsWith("data:image/") == true
@@ -585,14 +687,22 @@ class AgentRepository @Inject constructor(
             )
         }
 
-        val tools = buildToolDefinitions(agent, enableTerminal, workspaceFolderPath)
+        val tools = buildToolDefinitions(agent, enableTerminal, workspaceFolderPath, allowedToolNames)
 
         val sanitized = sanitizeToolCallHistory(chatMessages)
         Log.d("AgentRepository", "Streaming ${sanitized.size} messages to API with ${tools.size} tools")
         return client.chatWithToolsStreaming(
             model = modelToUse,
             messages = sanitized,
-            systemPrompt = agent.systemPrompt,
+            systemPrompt = buildRuntimeSystemPrompt(
+                agent,
+                messages,
+                tools,
+                enableTerminal,
+                workspaceFolderPath,
+                allowedToolNames,
+                memorySessionKey
+            ),
             temperature = agent.temperature,
             maxTokens = agent.maxTokens,
             tools = tools
@@ -610,8 +720,11 @@ class AgentRepository @Inject constructor(
         overrideProvider: ProviderType? = null,
         enableTerminal: Boolean = false,
         workspaceFolderPath: String? = null,
-        imageDataUris: List<String> = emptyList()
+        imageDataUris: List<String> = emptyList(),
+        allowedToolNames: Set<String>? = null,
+        memorySessionKey: String? = null
     ): Result<ChatResponseWithTools> {
+        runtimeContextProvider.refreshIdentityFromMemory()
         val activeProvider = overrideProvider ?: getActiveProvider() ?: getFirstConfiguredProvider()
         if (activeProvider == null) {
             Log.e("AgentRepository", "No provider configured")
@@ -626,28 +739,14 @@ class AgentRepository @Inject constructor(
         
         Log.d("AgentRepository", "Chat with images - Provider: $activeProvider, Model: $modelToUse, Images: ${imageDataUris.size}")
 
-        // Obtener API key y base URL según el proveedor
-        val (apiKey, baseUrl) = when {
-            activeProvider == ProviderType.LOCAL || activeProvider == ProviderType.OLLAMA -> "" to null
-            activeProvider == ProviderType.MOONSHOT -> {
-                getResolvedMoonshotPair() ?: run {
-                    Log.e("AgentRepository", "API Key not found for any Moonshot endpoint")
-                    return Result.failure(Exception("API Key no configurada para Moonshot"))
-                }
-            }
-            else -> {
-                val key = securePreferences.getApiKey(activeProvider)
-                if (key == null) {
-                    Log.e("AgentRepository", "API Key not found for provider: $activeProvider")
-                    return Result.failure(Exception("API Key no configurada para $activeProvider"))
-                }
-                key to securePreferences.getBaseUrl(activeProvider)
-            }
-        }
+        val credentials = providerCredentialResolver.resolve(activeProvider)
+            ?: return Result.failure(Exception(missingCredentialsMessage(activeProvider)))
+        val (apiKey, baseUrl) = credentials.apiKey to credentials.baseUrl
 
         val client = aiClientFactory.createClient(activeProvider, apiKey, baseUrl)
         
-        val chatMessages = messages.map { msg ->
+        val contextMessages = ContextCompactionPolicy.modelHistory(messages)
+        val chatMessages = contextMessages.map { msg ->
             val toolResult = msg.toolResults.firstOrNull()
             val toolResultContent = toolResult?.content
             val isImageResult = toolResultContent?.startsWith("data:image/") == true
@@ -668,14 +767,22 @@ class AgentRepository @Inject constructor(
             )
         }
         
-        val tools = buildToolDefinitions(agent, enableTerminal, workspaceFolderPath)
+        val tools = buildToolDefinitions(agent, enableTerminal, workspaceFolderPath, allowedToolNames)
 
         val sanitized = sanitizeToolCallHistory(chatMessages)
         Log.d("AgentRepository", "Sending ${sanitized.size} messages with ${imageDataUris.size} images")
         return client.chatWithTools(
             model = modelToUse,
             messages = sanitized,
-            systemPrompt = agent.systemPrompt,
+            systemPrompt = buildRuntimeSystemPrompt(
+                agent,
+                messages,
+                tools,
+                enableTerminal,
+                workspaceFolderPath,
+                allowedToolNames,
+                memorySessionKey
+            ),
             temperature = agent.temperature,
             maxTokens = agent.maxTokens,
             tools = tools
@@ -722,24 +829,18 @@ class AgentRepository @Inject constructor(
     fun getNotionToolHandler(): NotionToolHandler = notionToolHandler
     fun getSlackToolHandler(): SlackToolHandler = slackToolHandler
     fun getGoogleDriveToolHandler(): GoogleDriveToolHandler = googleDriveToolHandler
-    fun getGoogleDriveOAuthManager(): GoogleDriveOAuthManager = googleDriveOAuthManager
     fun getGoogleWorkspaceToolHandler(): GoogleWorkspaceToolHandler = googleWorkspaceToolHandler
     fun getGoogleWorkspaceOAuthManager(): GoogleWorkspaceOAuthManager = googleWorkspaceOAuthManager
     fun getReminderToolHandler(): ReminderToolHandler = reminderToolHandler
     fun getMemoryToolHandler(): MemoryToolHandler = memoryToolHandler
+    fun getCortexMemoryToolHandler(): CortexMemoryToolHandler = cortexMemoryToolHandler
 
-    /** Returns compact string of important memories (importance >= 7) for prompt injection. */
-    suspend fun getImportantMemoriesCompact(): String? {
-        return try {
-            val memories = memoryToolHandler.getImportantMemories()
-            if (memories.isEmpty()) null
-            else "Known: ${memories.joinToString(", ") { it.content }}"
-        } catch (_: Exception) { null }
-    }
     fun getToolSearchHandler(): ToolSearchHandler = toolSearchHandler
-    fun getSubtaskToolHandler(): SubtaskToolHandler = subtaskToolHandler
+    fun getUnifiedWebToolHandler(): UnifiedWebToolHandler = unifiedWebToolHandler
+    fun getSkillToolHandler(): SkillToolHandler = skillToolHandler
     fun getPresentationToolHandler(): PresentationToolHandler = presentationToolHandler
-    suspend fun getValidGoogleDriveToken(): String = googleDriveOAuthManager.getValidAccessToken() ?: ""
+    suspend fun getValidGoogleDriveToken(): String =
+        googleWorkspaceOAuthManager.getValidAccessToken().getOrNull().orEmpty()
 
     fun isPubMedEnabled(): Boolean = securePreferences.isPubMedEnabled()
 
@@ -749,7 +850,6 @@ class AgentRepository @Inject constructor(
     fun getAcademicSearchToolHandler(): AcademicSearchToolHandler = academicSearchToolHandler
     fun getWeatherToolHandler(): WeatherToolHandler = weatherToolHandler
     fun getImageGenerationToolHandler(): ImageGenerationToolHandler = imageGenerationToolHandler
-    fun getOpenWeatherApiKey(): String = securePreferences.getOpenWeatherApiKey() ?: ""
     fun getOpenAIApiKey(): String = securePreferences.getOpenAIApiKey() ?: ""
     fun getGoogleImagenApiKey(): String = securePreferences.getGoogleImagenApiKey() ?: ""
     fun isWeatherEnabled(): Boolean = securePreferences.isWeatherEnabled()
@@ -765,30 +865,79 @@ class AgentRepository @Inject constructor(
      */
     private var cachedAllTools: List<Map<String, Any>>? = null
     private var cachedAllToolsKey: String? = null
-    private val activatedToolNames = mutableSetOf<String>()
+    private val activatedToolNamesByScope = ConcurrentHashMap<String, MutableSet<String>>()
 
     /** Add tool names discovered via search_tools to the active set */
-    fun activateTools(names: Set<String>) {
-        activatedToolNames.addAll(names)
-        Log.d("AgentRepository", "Activated ${names.size} tools: $names (total active: ${activatedToolNames.size})")
+    fun activateTools(agent: Agent, workspaceFolderPath: String?, names: Set<String>) {
+        val active = activatedToolNamesByScope.computeIfAbsent(
+            toolActivationScope(agent, workspaceFolderPath)
+        ) { ConcurrentHashMap.newKeySet() }
+        active.addAll(names)
+        Log.d("AgentRepository", "Activated ${names.size} tools for agent ${agent.id}")
     }
 
     /** Reset activated tools (call at the start of each new user message) */
-    fun resetActivatedTools() {
-        if (activatedToolNames.isNotEmpty()) {
-            Log.d("AgentRepository", "Reset ${activatedToolNames.size} activated tools")
-            activatedToolNames.clear()
-        }
+    fun resetActivatedTools(agent: Agent, workspaceFolderPath: String?) {
+        activatedToolNamesByScope.remove(toolActivationScope(agent, workspaceFolderPath))
     }
+
+    private fun toolActivationScope(agent: Agent, workspaceFolderPath: String?): String =
+        "${agent.id}|${workspaceFolderPath.orEmpty()}"
 
     /** Get the full list of all available tool names for search filtering */
     fun getAllAvailableToolNames(agent: Agent, enableTerminal: Boolean, workspaceFolderPath: String?): Set<String> {
         val allTools = buildAllToolDefinitions(agent, enableTerminal, workspaceFolderPath)
-        return allTools.mapNotNull { tool ->
-            @Suppress("UNCHECKED_CAST")
-            val funcMap = tool["function"] as? Map<String, Any>
-            funcMap?.get("name") as? String
-        }.toSet()
+        return extractToolNames(allTools).toSet()
+    }
+
+    /** Exact system-prompt and tool-schema overhead used by the context meter. */
+    fun estimateRequestOverheadTokens(
+        agent: Agent,
+        messages: List<Message>,
+        enableTerminal: Boolean,
+        workspaceFolderPath: String?
+    ): Int {
+        val tools = buildToolDefinitions(agent, enableTerminal, workspaceFolderPath)
+        val systemPrompt = buildRuntimeSystemPrompt(
+            agent = agent,
+            messages = messages,
+            exposedTools = tools,
+            enableTerminal = enableTerminal,
+            workspaceFolderPath = workspaceFolderPath
+        )
+        return TokenCounter.estimateTokens(systemPrompt) +
+            TokenCounter.estimateTokens(Gson().toJson(tools))
+    }
+
+    private fun buildRuntimeSystemPrompt(
+        agent: Agent,
+        messages: List<Message>,
+        exposedTools: List<Map<String, Any>>,
+        enableTerminal: Boolean,
+        workspaceFolderPath: String?,
+        allowedToolNames: Set<String>? = null,
+        memorySessionKey: String? = null
+    ): String = runtimeContextProvider.enrich(
+        basePrompt = agent.systemPrompt,
+        agentName = agent.name,
+        agentRole = agent.role,
+        exposedToolNames = extractToolNames(exposedTools),
+        allAvailableToolNames = getAllAvailableToolNames(agent, enableTerminal, workspaceFolderPath)
+            .let { names -> allowedToolNames?.let(names::intersect) ?: names },
+        memorySessionKey = memorySessionKey ?: deriveMemorySessionKey(agent, messages)
+    )
+
+    /** Stable for every continuation/tool round in one conversation, without storing content. */
+    private fun deriveMemorySessionKey(agent: Agent, messages: List<Message>): String? {
+        if (!agent.isOrchestrator) return null
+        val firstMessage = messages.firstOrNull() ?: return null
+        return "${agent.id}:${firstMessage.timestamp}:${firstMessage.role.name}"
+    }
+
+    private fun extractToolNames(tools: List<Map<String, Any>>): List<String> = tools.mapNotNull { tool ->
+        @Suppress("UNCHECKED_CAST")
+        val function = tool["function"] as? Map<String, Any>
+        function?.get("name") as? String
     }
 
     /**
@@ -834,9 +983,28 @@ class AgentRepository @Inject constructor(
     private fun buildToolDefinitions(
         agent: Agent,
         enableTerminal: Boolean,
-        workspaceFolderPath: String?
+        workspaceFolderPath: String?,
+        allowedToolNames: Set<String>? = null
     ): List<Map<String, Any>> {
-        val allTools = buildAllToolDefinitions(agent, enableTerminal, workspaceFolderPath)
+        val definitions = buildList {
+            addAll(buildAllToolDefinitions(agent, enableTerminal, workspaceFolderPath))
+            // A child explicitly created with role=orchestrator may spawn bounded children even
+            // when its specialized Agent record is not Cortex itself.
+            if (allowedToolNames?.contains(DelegationToolHandler.TOOL_NAME) == true &&
+                none { extractToolNames(listOf(it)).firstOrNull() == DelegationToolHandler.TOOL_NAME }
+            ) {
+                addAll(DelegationToolHandler.getToolDefinitionsJson())
+            }
+        }
+        val allTools = definitions.let { availableDefinitions ->
+            if (allowedToolNames == null) availableDefinitions
+            else availableDefinitions.filter { definition ->
+                extractToolNames(listOf(definition)).firstOrNull() in allowedToolNames
+            }
+        }
+
+        // Restricted execution profiles are intentionally small and have no search_tools indirection.
+        if (allowedToolNames != null) return allTools
 
         // If below threshold, send all tools (no deferred mode)
         if (allTools.size <= ToolSearchHandler.DEFERRED_THRESHOLD) {
@@ -845,7 +1013,8 @@ class AgentRepository @Inject constructor(
         }
 
         // Deferred mode: core tools + activated tools + search_tools
-        val includedNames = ToolSearchHandler.CORE_TOOL_NAMES + activatedToolNames
+        val includedNames = ToolSearchHandler.CORE_TOOL_NAMES +
+            activatedToolNamesByScope[toolActivationScope(agent, workspaceFolderPath)].orEmpty()
 
         val filteredTools = allTools.filter { tool ->
             @Suppress("UNCHECKED_CAST")
@@ -871,26 +1040,33 @@ class AgentRepository @Inject constructor(
         val enabledSet = if (agent.enabledTools.isBlank()) null
                          else agent.enabledTools.split(",").map { it.trim() }.toSet()
 
-        val cacheKey = "${agent.name}|${agent.enabledTools}|$enableTerminal|${workspaceFolderPath}" +
+        val cacheKey = "${agent.id}|${agent.name}|${agent.role}|${agent.enabledTools}|$enableTerminal|${workspaceFolderPath}" +
             "|${securePreferences.hasBraveApiKey()}|${securePreferences.hasGoogleMapsApiKey()}" +
             "|${securePreferences.hasSerpApiKey()}|${securePreferences.hasObsidianVaultPath()}" +
-            "|${securePreferences.hasGitHubToken()}|${securePreferences.hasNotionToken()}" +
-            "|${securePreferences.hasGoogleDriveConfig()}" +
-            "|${securePreferences.isFinanceEnabled()}"
+            "|${securePreferences.hasCanvaAccessToken()}|${securePreferences.isPubMedEnabled()}" +
+            "|${securePreferences.hasGitHubToken()}|${securePreferences.hasNotionToken()}|${securePreferences.hasSlackToken()}" +
+            "|${securePreferences.hasGoogleWorkspaceConfig()}" +
+            "|${securePreferences.isFinanceEnabled()}|${securePreferences.isWeatherEnabled()}" +
+            "|${securePreferences.isImageGenerationEnabled()}|web=${unifiedWebToolHandler.isSearchConfigured()}"
 
         cachedAllTools?.let { if (cachedAllToolsKey == cacheKey) return it }
 
-        val baseTools = if (enableTerminal) {
-            ToolHandler.getAllToolDefinitionsJson(
-                workspacePath = workspaceFolderPath,
-                includeTerminal = true
-            ) + DuckDuckGoSearchToolHandler.getToolDefinitionsJson()
-        } else {
-            FileToolHandler.getToolDefinitionsJson(workspaceFolderPath) +
+        val baseTools = buildList {
+            if (enableTerminal) addAll(ToolHandler.getToolDefinitionsJson(workspaceFolderPath))
+            addAll(
+                FileToolHandler.getToolDefinitionsJson(workspaceFolderPath) +
             AgentSelectionToolHandler.getToolDefinitionsJson() +
             CalendarToolHandler.getToolDefinitionsJson() +
-            SystemAppToolHandler.getToolDefinitionsJson() +
-            DuckDuckGoSearchToolHandler.getToolDefinitionsJson()
+            SystemAppToolHandler.getToolDefinitionsJson()
+            )
+            UnifiedWebToolHandler.getToolDefinitionsJson().forEach { definition ->
+                val name = extractToolNames(listOf(definition)).firstOrNull() ?: return@forEach
+                val allowed = enabledSet == null || "web" in enabledSet || name in enabledSet ||
+                    (name == UnifiedWebToolHandler.TOOL_SEARCH && "serpapi" in enabledSet)
+                val configured = name != UnifiedWebToolHandler.TOOL_SEARCH ||
+                    unifiedWebToolHandler.isSearchConfigured()
+                if (allowed && configured) add(definition)
+            }
         }
 
         val mcpTools = buildList {
@@ -923,29 +1099,43 @@ class AgentRepository @Inject constructor(
                 if (securePreferences.hasSlackToken()) addAll(SlackToolHandler.getToolDefinitionsJson())
             }
             if (enabledSet == null || "gdrive" in enabledSet) {
-                if (securePreferences.hasGoogleDriveConfig()) addAll(GoogleDriveToolHandler.getToolDefinitionsJson())
+                if (securePreferences.hasGoogleWorkspaceConfig()) addAll(GoogleDriveToolHandler.getToolDefinitionsJson())
             }
             // Google Workspace tools always available when authenticated
-            if (securePreferences.hasGoogleWorkspaceConfig() || securePreferences.hasGoogleDriveConfig()) {
+            if (securePreferences.hasGoogleWorkspaceConfig()) {
                 addAll(GoogleWorkspaceToolHandler.getToolDefinitionsJson())
             }
             // Finance (local, toggle-gated)
             if (enabledSet == null || "finance" in enabledSet) {
                 if (securePreferences.isFinanceEnabled()) addAll(FinanceToolHandler.getToolDefinitionsJson())
             }
+            if (enabledSet == null || "academic" in enabledSet) {
+                addAll(AcademicSearchToolHandler.getToolDefinitionsJson())
+            }
+            if ((enabledSet == null || "weather" in enabledSet) && securePreferences.isWeatherEnabled()) {
+                addAll(WeatherToolHandler.getToolDefinitionsJson())
+            }
+            if ((enabledSet == null || "image_generation" in enabledSet) && securePreferences.isImageGenerationEnabled()) {
+                addAll(ImageGenerationToolHandler.getToolDefinitionsJson())
+            }
             // Always available tools (no config needed)
             addAll(AgentCreatorToolHandler.getToolDefinitionsJson())
             addAll(LocationToolHandler.getToolDefinitionsJson())
             addAll(ReminderToolHandler.getToolDefinitionsJson())
-            addAll(MemoryToolHandler.getToolDefinitionsJson())
+            // Room is retained as a searchable historical archive. Durable writes go only to the
+            // bounded Markdown memory and only the stable orchestrator role can see that tool.
+            addAll(MemoryToolHandler.getReadToolDefinitionsJson())
+            if (agent.isOrchestrator) {
+                addAll(CortexMemoryToolHandler.getToolDefinitionsJson())
+            }
             addAll(CodeExecutionHandler.getToolDefinitionsJson())
             addAll(PresentationToolHandler.getToolDefinitionsJson())
-            addAll(SubtaskToolHandler.getToolDefinitionsJson())
             addAll(AppControlToolHandler.getToolDefinitionsJson())
             addAll(TodoToolHandler.getToolDefinitionsJson())
             addAll(ScheduledTaskToolHandler.getToolDefinitionsJson())
-            // Delegation tool — only for orchestrator agents (Cortex)
-            if (agent.role == "Agent Orchestrator" || agent.name == "Cortex") {
+            addAll(SkillToolHandler.getToolDefinitionsJson())
+            // Delegation tool — only for the stable orchestrator role (its name is customizable).
+            if (agent.isOrchestrator) {
                 addAll(DelegationToolHandler.getToolDefinitionsJson())
             }
         }
@@ -970,7 +1160,7 @@ class AgentRepository @Inject constructor(
             if (securePreferences.hasGitHubToken()) add("github" to "GitHub")
             if (securePreferences.hasNotionToken()) add("notion" to "Notion")
             if (securePreferences.hasSlackToken()) add("slack" to "Slack")
-            if (securePreferences.hasGoogleDriveConfig()) add("gdrive" to "Google Drive")
+            if (securePreferences.hasGoogleWorkspaceConfig()) add("gdrive" to "Google Workspace")
             add("reminders" to "Recordatorios")
             add("presentations" to "Presentaciones PPTX")
         }
@@ -983,38 +1173,11 @@ class AgentRepository @Inject constructor(
      */
     fun buildCapabilitiesSummary(enableTerminal: Boolean): String = buildString {
         appendLine("## ENVIRONMENT")
-        appendLine("You run on an Android device. You have direct control over hardware, apps, files, and external services through your tools.")
-        appendLine("When you need a tool not in your current list, call search_tools to discover it.")
-        appendLine()
-        appendLine("## CAPABILITIES")
-        // Core — always available
-        if (enableTerminal) append("Shell: execute_command | ")
-        appendLine("Files: read/write/list | Search: duckduckgo_search | Code: run_code, preview_web")
-        appendLine("Device: device_control (apps, camera, volume, brightness, flashlight, Spotify, settings)")
-        appendLine("Calendar: read/add events | Reminders: set/list/cancel | Location: GPS")
-        appendLine("Memory: search/save/update/delete/list/link | Agents: select, create, subtask")
-        appendLine("Planning: todo_write/todo_read (show progress to user for complex tasks)")
-        appendLine("Scheduling: schedule_task (cron jobs — execute agent prompts at specific times)")
-        appendLine("App: app_control (change model, toggle services, configure agents, display settings)")
-        appendLine("Academic: wikipedia, arxiv | Weather: current, forecast, air quality")
-        appendLine("Images: generate (DALL-E, Google Imagen) | Presentations: PPTX builder")
-        // Dynamic — only show if configured
-        val extras = buildList {
-            if (securePreferences.hasBraveApiKey()) add("Brave Search")
-            if (securePreferences.hasSerpApiKey()) add("SerpAPI (Google, Flights, Hotels, YouTube)")
-            if (securePreferences.hasGoogleMapsApiKey()) add("Google Maps (places, directions, distance)")
-            if (securePreferences.hasGitHubToken()) add("GitHub (repos, issues, PRs, actions, releases)")
-            if (securePreferences.hasNotionToken()) add("Notion (pages, databases)")
-            if (securePreferences.hasSlackToken()) add("Slack (channels, messages, threads)")
-            if (securePreferences.hasGoogleDriveConfig() || securePreferences.hasGoogleWorkspaceConfig()) add("Google Workspace (Gmail, Drive, Calendar, Sheets, Docs, Slides)")
-            if (securePreferences.hasObsidianVaultPath()) add("Obsidian (notes, search)")
-            if (securePreferences.hasCanvaAccessToken()) add("Canva (designs, templates, export)")
-            if (securePreferences.isFinanceEnabled()) add("Finance (transactions, balances)")
-            if (securePreferences.isPubMedEnabled()) add("PubMed (medical research)")
-        }
-        if (extras.isNotEmpty()) {
-            appendLine("Services: ${extras.joinToString(" | ")}")
-        }
+        appendLine("You run inside a native Android app.")
+        appendLine("The app adds an authoritative RUNTIME_CONTEXT to every model request with the current date/time, user identity, device and exact available tools.")
+        appendLine("Never claim a capability that is absent from that runtime list.")
+        if (enableTerminal) appendLine("This agent is permitted to request terminal execution; commands still pass through the permission manager.")
+        append("Use search_tools when RUNTIME_CONTEXT says an available tool is deferred.")
     }
 
     fun isCommandBlocked(command: String): Boolean {
@@ -1028,7 +1191,7 @@ class AgentRepository @Inject constructor(
     }
 
     suspend fun getOrchestratorAgent(): Agent? {
-        return agentDao.getAgentByRole("Agent Orchestrator")?.toDomain()
+        return agentDao.getAgentByRole(AgentRoles.ORCHESTRATOR)?.toDomain()
     }
 
     suspend fun getAllAgentsOnce(): List<Agent> {
@@ -1108,8 +1271,121 @@ class AgentRepository @Inject constructor(
         return getActiveMoonshotEndpoint().baseUrl
     }
 
+    // ── Z.AI multi-plan support ────────────────────────────────────────────
+    fun saveZAIApiKey(planType: com.aiagents.app.domain.model.ZAIPlanType, apiKey: String) {
+        securePreferences.saveZAIApiKey(planType, apiKey)
+    }
+
+    fun getZAIApiKey(planType: com.aiagents.app.domain.model.ZAIPlanType): String? {
+        return securePreferences.getZAIApiKey(planType)
+    }
+
+    fun hasZAIApiKey(planType: com.aiagents.app.domain.model.ZAIPlanType): Boolean {
+        return securePreferences.hasZAIApiKey(planType)
+    }
+
+    fun isAnyZAIPlanConfigured(): Boolean {
+        return com.aiagents.app.domain.model.ZAIPlanType.entries.any { hasZAIApiKey(it) }
+    }
+
+    fun getActiveZAIPlan(): com.aiagents.app.domain.model.ZAIPlanType {
+        return securePreferences.getActiveZAIPlan()
+    }
+
+    fun setActiveZAIPlan(planType: com.aiagents.app.domain.model.ZAIPlanType) {
+        securePreferences.setActiveZAIPlan(planType)
+    }
+
+    fun getActiveZAIApiKey(): String? {
+        return getZAIApiKey(getActiveZAIPlan())
+    }
+
+    /**
+     * Returns the best available Z.AI (apiKey, baseUrl) pair.
+     * Tries the saved active plan first; if its key is missing or blank,
+     * falls back to any other plan that has a key configured.
+     * Returns null if no plan has a key.
+     */
+    fun getResolvedZAIPair(): Pair<String, String>? {
+        val active = getActiveZAIPlan()
+        val activeKey = getZAIApiKey(active)?.takeIf { it.isNotBlank() }
+        if (activeKey != null) return activeKey to active.baseUrl
+
+        // Fallback: try all other plans
+        for (plan in com.aiagents.app.domain.model.ZAIPlanType.entries) {
+            if (plan == active) continue
+            val key = getZAIApiKey(plan)?.takeIf { it.isNotBlank() } ?: continue
+            Log.w("AgentRepository", "Active Z.AI plan $active has no key, falling back to $plan")
+            securePreferences.setActiveZAIPlan(plan) // update active for next time
+            return key to plan.baseUrl
+        }
+        return null
+    }
+
+    fun getActiveZAIBaseUrl(): String {
+        return getActiveZAIPlan().baseUrl
+    }
+
+    // ── OpenCode multi-variant support ─────────────────────────────────────
+    fun saveOpenCodeApiKey(variantType: com.aiagents.app.domain.model.OpenCodeVariantType, apiKey: String) {
+        securePreferences.saveOpenCodeApiKey(variantType, apiKey)
+    }
+
+    fun getOpenCodeApiKey(variantType: com.aiagents.app.domain.model.OpenCodeVariantType): String? {
+        return securePreferences.getOpenCodeApiKey(variantType)
+    }
+
+    fun hasOpenCodeApiKey(variantType: com.aiagents.app.domain.model.OpenCodeVariantType): Boolean {
+        return securePreferences.hasOpenCodeApiKey(variantType)
+    }
+
+    fun isAnyOpenCodeVariantConfigured(): Boolean {
+        return com.aiagents.app.domain.model.OpenCodeVariantType.entries.any { hasOpenCodeApiKey(it) }
+    }
+
+    fun getActiveOpenCodeVariant(): com.aiagents.app.domain.model.OpenCodeVariantType {
+        return securePreferences.getActiveOpenCodeVariant()
+    }
+
+    fun setActiveOpenCodeVariant(variantType: com.aiagents.app.domain.model.OpenCodeVariantType) {
+        securePreferences.setActiveOpenCodeVariant(variantType)
+    }
+
+    fun getActiveOpenCodeApiKey(): String? {
+        return getOpenCodeApiKey(getActiveOpenCodeVariant())
+    }
+
+    /** Validates a key against the exact Zen/Go destination before persisting it. */
+    suspend fun validateOpenCodeApiKey(
+        variantType: com.aiagents.app.domain.model.OpenCodeVariantType,
+        apiKey: String
+    ): Result<List<String>> {
+        val normalizedKey = apiKey.trim()
+        if (normalizedKey.isEmpty()) return Result.failure(Exception("La API key está vacía"))
+        return aiClientFactory.createClient(
+            ProviderType.OPENCODE,
+            normalizedKey,
+            variantType.baseUrl
+        ).getAvailableModels().mapCatching { models ->
+            models.distinct().also {
+                check(it.isNotEmpty()) { "OpenCode no devolvió modelos para ${variantType.displayName}" }
+            }
+        }
+    }
+
+    fun getResolvedOpenCodePair(): Pair<String, String>? {
+        val active = getActiveOpenCodeVariant()
+        val activeKey = getOpenCodeApiKey(active)?.takeIf { it.isNotBlank() }
+        return activeKey?.let { it to active.baseUrl }
+    }
+
+    fun getActiveOpenCodeBaseUrl(): String {
+        return getActiveOpenCodeVariant().baseUrl
+    }
+
     // ── Auto-creación de agentes via Agent Architect ────────────────────────
     suspend fun autoCreateAgent(description: String): Result<String> {
+        runtimeContextProvider.refreshIdentityFromMemory()
         // 1. Get the Agent Architect's system prompt
         val architect = agentDao.getAgentByName("Agent Architect")
             ?: return Result.failure(Exception("Agent Architect no encontrado en la base de datos"))
@@ -1132,28 +1408,24 @@ class AgentRepository @Inject constructor(
         }
         val modelId = parts[1]
 
-        // 3. Build API key / base URL
-        val (apiKey, baseUrl) = when {
-            providerType == ProviderType.LOCAL || providerType == ProviderType.OLLAMA -> "" to null
-            providerType == ProviderType.MOONSHOT -> {
-                getResolvedMoonshotPair()
-                    ?: return Result.failure(Exception("API Key no configurada para Moonshot"))
-            }
-            else -> {
-                val key = securePreferences.getApiKey(providerType)
-                    ?: return Result.failure(Exception("API Key no configurada para $providerType"))
-                key to securePreferences.getBaseUrl(providerType)
-            }
-        }
+        // 3. Resolve the credential and its destination as one inseparable value.
+        val credentials = providerCredentialResolver.resolve(providerType)
+            ?: return Result.failure(Exception(missingCredentialsMessage(providerType)))
+        val (apiKey, baseUrl) = credentials.apiKey to credentials.baseUrl
 
         val client = aiClientFactory.createClient(providerType, apiKey, baseUrl)
 
         // 4. Call the AI with the Agent Architect's prompt and create_agent tool
         val tools = AgentCreatorToolHandler.getToolDefinitionsJson()
-        val enhancedPrompt = architect.systemPrompt + "\n\n" +
+        val enhancedPrompt = runtimeContextProvider.enrich(
+            basePrompt = architect.systemPrompt + "\n\n" +
             "## CRITICAL INSTRUCTION\n" +
             "You have access to the `create_agent` function tool. You MUST call it to create the agent. " +
-            "Do NOT just describe the agent — you MUST invoke the create_agent tool with all required parameters."
+            "Do NOT just describe the agent — you MUST invoke the create_agent tool with all required parameters.",
+            agentName = architect.name,
+            agentRole = architect.role,
+            exposedToolNames = listOf("create_agent")
+        )
         val messages = listOf(
             ChatMessage(role = "user", content = "Crea un agente basado en esta descripción del usuario: $description\n\nIMPORTANT: Use the create_agent tool to create it.")
         )
@@ -1186,4 +1458,11 @@ class AgentRepository @Inject constructor(
 
         return Result.success(results.joinToString("\n"))
     }
+
+    // ── Anthropic OAuth credentials ──────────────────────────────────────
+    fun saveAnthropicClientId(id: String) = securePreferences.saveAnthropicClientId(id)
+    fun getAnthropicClientId(): String? = securePreferences.getAnthropicClientId()
+    fun saveAnthropicClientSecret(secret: String) = securePreferences.saveAnthropicClientSecret(secret)
+    fun getAnthropicClientSecret(): String? = securePreferences.getAnthropicClientSecret()
+    fun hasAnthropicOAuthConfig(): Boolean = securePreferences.hasAnthropicOAuthConfig()
 }

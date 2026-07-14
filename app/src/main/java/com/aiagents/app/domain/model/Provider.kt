@@ -4,6 +4,7 @@ enum class ProviderType {
     OPENROUTER,
     GOOGLE_AI,
     OPENAI,
+    NVIDIA,
     OLLAMA,
     MINIMAX,
     MOONSHOT,

@@ -3,13 +3,15 @@ package com.aiagents.app.domain.model
 /**
  * Modelos locales para inferencia on-device usando MediaPipe.
  *
- * NOTA IMPORTANTE: MediaPipe usa un formato especial (.task o .bin).
+ * NOTA IMPORTANTE: los runtimes locales usan bundles .task, .bin o .litertlm.
  * Los modelos deben estar pre-convertidos para funcionar con MediaPipe.
  *
- * Repositorios verificados (Feb 2026):
+ * Repositorios verificados (Abril 2026):
  * - google/gemma-2b-it-tflite     → archivos .bin para CPU/GPU
  * - litert-community/Gemma3-1B-IT → archivos .task (formato MediaPipe)
  * - litert-community/gemma-3-270m-it → archivos .task (modelo más pequeño)
+ * - litert-community/gemma-4-E2B-it-litert-lm → archivos .litertlm (Gemma 4)
+ * - litert-community/gemma-4-E4B-it-litert-lm → archivos .litertlm (Gemma 4)
  */
 data class LocalModel(
     val id: String,
@@ -97,6 +99,32 @@ object RecommendedModels {
             requiresLicense = true,
             requiresHFToken = true
         ),
+        // Gemma 4 E2B IT — modelo multimodal de nueva generación (2.58 GB)
+        // Repo: litert-community/gemma-4-E2B-it-litert-lm
+        LocalModel(
+            id = "gemma-4-e2b-it-litertlm",
+            name = "Gemma 4 E2B Instruct (2.58 GB) 🆕 ✅ Tool Calling",
+            huggingFaceUrl = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm",
+            fileName = "gemma-4-E2B-it.litertlm",
+            sizeBytes = 2_580_000_000L,
+            description = "Gemma 4 multimodal (texto + imagen). Máximo razonamiento on-device, 32K contexto. Requiere token HF + licencia.",
+            contextLength = 32768,
+            requiresLicense = true,
+            requiresHFToken = true
+        ),
+        // Gemma 4 E4B IT — modelo multimodal más potente (3.65 GB)
+        // Repo: litert-community/gemma-4-E4B-it-litert-lm
+        LocalModel(
+            id = "gemma-4-e4b-it-litertlm",
+            name = "Gemma 4 E4B Instruct (3.65 GB) 🆕 ✅ Tool Calling",
+            huggingFaceUrl = "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm",
+            fileName = "gemma-4-E4B-it.litertlm",
+            sizeBytes = 3_650_000_000L,
+            description = "Gemma 4 multimodal 4B, máxima calidad on-device. 32K contexto, tool calling avanzado. Requiere token HF + licencia.",
+            contextLength = 32768,
+            requiresLicense = true,
+            requiresHFToken = true
+        ),
         // Gemma 3n E2B IT — modelo multimodal (3.14 GB)
         // Repo: google/gemma-3n-E2B-it-litert-preview
         LocalModel(
@@ -157,7 +185,7 @@ object RecommendedModels {
             huggingFaceUrl = "",
             fileName = "custom_model.task",
             sizeBytes = 0L,
-            description = "Importa un archivo .task o .bin descargado manualmente desde HuggingFace.",
+            description = "Importa un bundle .task, .bin o .litertlm descargado manualmente.",
             contextLength = 4096,
             requiresLicense = false,
             requiresHFToken = false
@@ -178,14 +206,14 @@ object ModelDownloadHelp {
     const val TITLE = "¿Cómo descargar modelos?"
 
     const val INSTRUCTIONS = """
-    ━━━ PASO 1: Token de HuggingFace ━━━
+    ━━━ PASO 1: Token de Hugging Face ━━━
     1. Ve a: huggingface.co/settings/tokens
     2. Crea un token de tipo "Read"
     3. Cópialo y pégalo en el ícono de llave (🔑) de esta pantalla
 
     ━━━ PASO 2: Aceptar licencia de Gemma ━━━
     1. Ve a: huggingface.co/google/gemma-3-1b-it
-    2. Inicia sesión en HuggingFace
+    2. Inicia sesión en Hugging Face
     3. Acepta los términos de la licencia
     (Aplica a toda la familia Gemma)
 
@@ -200,7 +228,7 @@ object ModelDownloadHelp {
     ━━━ ALTERNATIVA sin token ━━━
     1. Descarga "Google AI Edge Gallery" del Play Store
     2. Descarga un modelo desde esa app
-    3. Transfiere el archivo .task a tu teléfono
+    3. Transfiere el archivo .task, .bin o .litertlm a tu teléfono
     4. Usa el botón "Importar" en esta pantalla
 
     NOTA: Necesitas WiFi y espacio libre (300MB-1.4GB).

@@ -14,8 +14,8 @@ android {
         applicationId = "com.aiagents.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -52,6 +52,7 @@ android {
             pickFirsts += "**/*.so"
         }
     }
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
 }
 
 ksp {
@@ -73,8 +74,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
     
-    implementation("com.google.dagger:hilt-android:2.52")
-    ksp("com.google.dagger:hilt-compiler:2.52")
+    implementation("com.google.dagger:hilt-android:2.57.2")
+    ksp("com.google.dagger:hilt-compiler:2.57.2")
 
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("androidx.hilt:hilt-work:1.2.0")
@@ -88,19 +89,25 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-gson:2.11.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+    implementation("org.jsoup:jsoup:1.18.3")
     
     implementation("io.coil-kt:coil-compose:2.7.0")
     
-    implementation("androidx.room:room-runtime:2.6.1")
-    implementation("androidx.room:room-ktx:2.6.1")
-    ksp("androidx.room:room-compiler:2.6.1")
+    implementation("androidx.room:room-runtime:2.7.2")
+    implementation("androidx.room:room-ktx:2.7.2")
+    ksp("androidx.room:room-compiler:2.7.2")
     
     // Location services (FusedLocationProvider)
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    // Google Identity Services authorization for Workspace APIs
+    implementation("com.google.android.gms:play-services-auth:21.6.0")
 
     // Local LLM inference via MediaPipe (Google)
     implementation("com.google.mediapipe:tasks-genai:0.10.27")
     
+    // LiteRT-LM for Gemma 4 and newer .litertlm models
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.9.0")
+
     // Speech-to-Text engines
     // sherpa-onnx: Whisper ONNX models with NNAPI support (Snapdragon NPU + Google Tensor)
     // Note: Using JitPack repository. Group ID is 'com.github.k2-fsa' not 'com.k2fsa.sherpa'
@@ -112,6 +119,11 @@ dependencies {
 
     // Embedded HTTP server for serving multi-file web projects in WebView
     implementation("org.nanohttpd:nanohttpd:2.3.1")
+
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.room:room-testing:2.7.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

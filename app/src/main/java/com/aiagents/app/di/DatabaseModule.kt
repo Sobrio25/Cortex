@@ -11,12 +11,16 @@ import com.aiagents.app.data.local.CommandPermissionDao
 import com.aiagents.app.data.local.MessageDao
 import com.aiagents.app.data.local.ConversationDao
 import com.aiagents.app.data.local.CustomLocalModelDao
+import com.aiagents.app.data.local.DownloadProgressDao
 import com.aiagents.app.data.local.FinanceDao
 import com.aiagents.app.data.local.ScheduledTaskDao
 import com.aiagents.app.data.local.TodoDao
 import com.aiagents.app.data.local.MCPDao
 import com.aiagents.app.data.local.MemoryDao
 import com.aiagents.app.data.local.STTSettingsDao
+import com.aiagents.app.data.local.SkillDao
+import com.aiagents.app.data.local.SkillReviewDao
+import com.aiagents.app.data.local.SubagentExecutionDao
 import com.aiagents.app.data.local.WorkspaceDao
 import dagger.Module
 import dagger.Provides
@@ -76,7 +80,10 @@ object DatabaseModule {
                 AppDatabase.MIGRATION_34_35,
                 AppDatabase.MIGRATION_35_36,
                 AppDatabase.MIGRATION_36_37,
-                AppDatabase.MIGRATION_37_38
+                AppDatabase.MIGRATION_37_38,
+                AppDatabase.MIGRATION_38_39,
+                AppDatabase.MIGRATION_39_40,
+                AppDatabase.MIGRATION_40_41
             )
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onCreate(db: SupportSQLiteDatabase) {
@@ -86,10 +93,15 @@ object DatabaseModule {
                 override fun onOpen(db: SupportSQLiteDatabase) {
                     super.onOpen(db)
                     ensureFtsTriggers(db)
+                    AppDatabase.ensureBuiltInSkills(db)
                 }
             })
             .build()
     }
+
+    @Provides
+    fun provideSubagentExecutionDao(database: AppDatabase): SubagentExecutionDao =
+        database.subagentExecutionDao()
 
     private fun ensureFtsTriggers(db: SupportSQLiteDatabase) {
         db.execSQL("""
@@ -123,7 +135,7 @@ object DatabaseModule {
 
         // Cortex prompt
         val cortexPrompt = buildString {
-            appendLine("You are Cortex, the central AI agent orchestration system. You coordinate specialized agents to execute complex tasks.")
+            appendLine("Coordinate specialized agents to execute complex tasks, and answer directly when delegation is unnecessary.")
             appendLine()
             appendLine("## LANGUAGE RULE")
             appendLine(langRule)
@@ -569,4 +581,13 @@ object DatabaseModule {
 
     @Provides
     fun provideScheduledTaskDao(database: AppDatabase): ScheduledTaskDao = database.scheduledTaskDao()
+
+    @Provides
+    fun provideDownloadProgressDao(database: AppDatabase): DownloadProgressDao = database.downloadProgressDao()
+
+    @Provides
+    fun provideSkillDao(database: AppDatabase): SkillDao = database.skillDao()
+
+    @Provides
+    fun provideSkillReviewDao(database: AppDatabase): SkillReviewDao = database.skillReviewDao()
 }

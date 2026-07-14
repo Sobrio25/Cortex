@@ -1,17 +1,32 @@
 package com.aiagents.app.data.repository
 
 import android.util.Log
+import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.remote.HFFileInfo
 import com.aiagents.app.data.remote.HFModelInfo
 import com.aiagents.app.data.remote.HuggingFaceApiService
-import com.aiagents.app.domain.model.RecommendedModels
+import kotlinx.coroutines.CancellationException
+import retrofit2.Response
+import java.io.IOException
+import java.net.URI
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import javax.inject.Inject
 import javax.inject.Singleton
+
+enum class HFLocalModelFormat(val displayName: String) {
+    LITERT_LM("LiteRT-LM"),
+    MEDIAPIPE_TASK("MediaPipe Task"),
+    MEDIAPIPE_BIN("MediaPipe Bin")
+}
 
 data class HFBrowsableFile(
     val fileName: String,
     val sizeBytes: Long,
-    val downloadUrl: String
+    val downloadUrl: String,
+    val format: HFLocalModelFormat,
+    val sha256: String? = null,
+    val deviceHint: String? = null
 )
 
 data class HFBrowsableModel(
@@ -19,141 +34,358 @@ data class HFBrowsableModel(
     val repoName: String,
     val author: String,
     val files: List<HFBrowsableFile>,
-    val downloads: Int,
+    val downloads: Long,
+    val likes: Int,
     val gated: Boolean,
-    val tags: List<String>
+    val isPrivate: Boolean,
+    val tags: List<String>,
+    val libraryName: String?,
+    val revisionSha: String?,
+    val lastModified: String?
+) {
+    val isLocallyCompatible: Boolean get() = files.isNotEmpty()
+}
+
+data class HFSearchPage(
+    val models: List<HFBrowsableModel>,
+    val nextPageUrl: String?
 )
 
 @Singleton
 class HuggingFaceRepository @Inject constructor(
-    private val apiService: HuggingFaceApiService
+    private val apiService: HuggingFaceApiService,
+    private val securePreferences: SecurePreferences
 ) {
-    private val TAG = "HuggingFaceRepository"
+    companion object {
+        private const val TAG = "HuggingFaceRepository"
+        private const val PAGE_SIZE = 20
+        private const val MAX_TREE_PAGES = 10
+        private const val FILE_CACHE_TTL_MS = 10 * 60 * 1000L
 
-    // In-memory cache: author -> (timestamp, results)
-    private val cache = mutableMapOf<String, Pair<Long, List<HFBrowsableModel>>>()
-    private val CACHE_TTL_MS = 5 * 60 * 1000L // 5 minutes
+        private val NEXT_LINK_REGEX = Regex(
+            pattern = """<([^>]+)>\s*;\s*rel\s*=\s*[\"']?next[\"']?""",
+            option = RegexOption.IGNORE_CASE
+        )
 
-    // Repo IDs already in RecommendedModels (to exclude from browse results)
-    private val recommendedRepoIds: Set<String> by lazy {
-        RecommendedModels.MODELS.mapNotNull { model ->
-            extractRepoId(model.huggingFaceUrl)
-        }.toSet()
-    }
+        private val REPO_SEGMENT_REGEX = Regex("^[A-Za-z0-9._-]+$")
 
-    suspend fun searchCompatibleModels(author: String): Result<List<HFBrowsableModel>> {
-        // Check cache
-        cache[author]?.let { (timestamp, results) ->
-            if (System.currentTimeMillis() - timestamp < CACHE_TTL_MS) {
-                return Result.success(results)
-            }
-        }
+        private val LLM_MARKERS = listOf(
+            "text-generation",
+            "text_generation",
+            "causal-lm",
+            "causal_lm",
+            "litert-lm",
+            "litertlm",
+            "llm-inference",
+            "llm_inference",
+            "gemma",
+            "llama",
+            "qwen",
+            "mistral",
+            "phi-",
+            "phi_",
+            "smollm",
+            "deepseek",
+            "tinyllama"
+        )
 
-        return try {
-            val models = apiService.searchModels(author = author)
-            val browsableModels = models.mapNotNull { model ->
-                try {
-                    val files = apiService.getModelFiles(model.id)
-                    val compatibleFiles = files.filter { file ->
-                        file.type == "file" &&
-                            (file.filename.endsWith(".task") || file.filename.endsWith(".bin") || file.filename.endsWith(".litertlm"))
-                    }
-                    if (compatibleFiles.isEmpty()) return@mapNotNull null
+        private val ANDROID_RUNTIME_MARKERS = listOf(
+            "mediapipe",
+            "tflite",
+            "lite-rt",
+            "litert",
+            "llm-inference",
+            "llm_inference"
+        )
 
-                    // Exclude models already in RecommendedModels
-                    if (model.id in recommendedRepoIds) return@mapNotNull null
+        private val UNSUPPORTED_BIN_NAMES = listOf(
+            "pytorch_model",
+            "training_args",
+            "optimizer",
+            "model-0000",
+            "consolidated."
+        )
 
-                    val parts = model.id.split("/", limit = 2)
-                    HFBrowsableModel(
-                        repoId = model.id,
-                        repoName = parts.getOrElse(1) { model.id },
-                        author = parts.getOrElse(0) { author },
-                        files = compatibleFiles.map { file ->
-                            HFBrowsableFile(
-                                fileName = file.filename,
-                                sizeBytes = file.size,
-                                downloadUrl = "https://huggingface.co/${model.id}/resolve/main/${file.filename}"
-                            )
-                        },
-                        downloads = model.downloads,
-                        gated = model.isGated,
-                        tags = model.tags
-                    )
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to get files for ${model.id}: ${e.message}")
-                    null
+        internal fun parseNextPageUrl(linkHeader: String?): String? {
+            val candidate = linkHeader
+                ?.let { NEXT_LINK_REGEX.find(it)?.groupValues?.getOrNull(1) }
+                ?: return null
+
+            return runCatching { URI(candidate) }
+                .getOrNull()
+                ?.takeIf { uri ->
+                    uri.scheme.equals("https", ignoreCase = true) &&
+                        uri.host.equals("huggingface.co", ignoreCase = true) &&
+                        uri.path.startsWith("/api/models")
                 }
-            }.sortedByDescending { it.downloads }
+                ?.toString()
+        }
 
-            // Update cache
-            cache[author] = System.currentTimeMillis() to browsableModels
-            Result.success(browsableModels)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error searching models for author=$author", e)
-            Result.failure(e)
+        internal fun parseRepoIdFromUrl(value: String): String? {
+            val input = value.trim()
+            if (input.isBlank()) return null
+
+            val path = when {
+                input.startsWith("https://", ignoreCase = true) ||
+                    input.startsWith("http://", ignoreCase = true) -> {
+                    val uri = runCatching { URI(input) }.getOrNull() ?: return null
+                    if (!uri.host.equals("huggingface.co", ignoreCase = true) &&
+                        !uri.host.equals("www.huggingface.co", ignoreCase = true)
+                    ) {
+                        return null
+                    }
+                    uri.path.orEmpty()
+                }
+
+                input.startsWith("huggingface.co/", ignoreCase = true) ->
+                    input.substringAfter("/", "")
+
+                else -> input.substringBefore('?').substringBefore('#')
+            }
+
+            val parts = path.trim('/').split('/').filter { it.isNotBlank() }
+            if (parts.size < 2) return null
+            if (!parts[0].matches(REPO_SEGMENT_REGEX) || !parts[1].matches(REPO_SEGMENT_REGEX)) {
+                return null
+            }
+            return "${parts[0]}/${parts[1]}"
+        }
+
+        internal fun detectLocalFormat(
+            repoId: String,
+            fileName: String,
+            tags: List<String>,
+            libraryName: String?
+        ): HFLocalModelFormat? {
+            val lowerFileName = fileName.lowercase()
+            val searchableMetadata = buildString {
+                append(repoId.lowercase())
+                append(' ')
+                append(fileName.lowercase())
+                append(' ')
+                append(libraryName.orEmpty().lowercase())
+                append(' ')
+                append(tags.joinToString(" ").lowercase())
+            }
+            val hasLlmSignal = LLM_MARKERS.any(searchableMetadata::contains)
+
+            return when {
+                lowerFileName.endsWith(".litertlm") -> HFLocalModelFormat.LITERT_LM
+
+                lowerFileName.endsWith(".task") &&
+                    !lowerFileName.endsWith("-web.task") &&
+                    !lowerFileName.endsWith("_web.task") &&
+                    hasLlmSignal -> HFLocalModelFormat.MEDIAPIPE_TASK
+
+                lowerFileName.endsWith(".bin") &&
+                    hasLlmSignal &&
+                    ANDROID_RUNTIME_MARKERS.any(searchableMetadata::contains) &&
+                    UNSUPPORTED_BIN_NAMES.none(lowerFileName::contains) ->
+                    HFLocalModelFormat.MEDIAPIPE_BIN
+
+                else -> null
+            }
+        }
+
+        private fun buildDownloadUrl(repoId: String, revision: String, fileName: String): String {
+            fun encodePathSegment(segment: String): String = URLEncoder
+                .encode(segment, StandardCharsets.UTF_8.name())
+                .replace("+", "%20")
+
+            val encodedRepo = repoId.split('/').joinToString("/") { encodePathSegment(it) }
+            val encodedFile = fileName.split('/').joinToString("/") { encodePathSegment(it) }
+            return "https://huggingface.co/$encodedRepo/resolve/${encodePathSegment(revision)}/$encodedFile"
+        }
+
+        private fun inferDeviceHint(fileName: String): String? {
+            val value = fileName.lowercase()
+            return when {
+                Regex("(?:sm|snapdragon)[-_]?(?:8|7|6)\\d{2,3}").containsMatchIn(value) ->
+                    "Optimizado para un Snapdragon específico"
+
+                Regex("(?:mt|dimensity)[-_]?\\d{4}").containsMatchIn(value) ->
+                    "Optimizado para un MediaTek específico"
+
+                value.contains("tensor") || value.contains("pixel") ->
+                    "Optimizado para Google Tensor/Pixel"
+
+                value.contains("web") -> "Variante web; no recomendada para Android nativo"
+                else -> null
+            }
         }
     }
 
-    suspend fun resolveRepoUrl(url: String): Result<HFBrowsableModel> {
+    private val fileCache = mutableMapOf<String, Pair<Long, List<HFBrowsableFile>>>()
+
+    suspend fun searchModels(query: String, nextPageUrl: String? = null): Result<HFSearchPage> {
+        val normalizedQuery = query.trim()
+        if (normalizedQuery.isBlank()) {
+            return Result.failure(IllegalArgumentException("Escribe un nombre de modelo para buscar"))
+        }
+
         return try {
-            val repoId = parseRepoIdFromUrl(url)
-                ?: return Result.failure(IllegalArgumentException("URL no válida de HuggingFace. Formato esperado: huggingface.co/org/model"))
-
-            val models = apiService.searchModels(author = repoId.split("/").first())
-            val modelInfo = models.find { it.id == repoId }
-
-            val files = apiService.getModelFiles(repoId)
-            val compatibleFiles = files.filter { file ->
-                file.type == "file" &&
-                    (file.filename.endsWith(".task") || file.filename.endsWith(".bin") || file.filename.endsWith(".litertlm"))
+            val response = if (nextPageUrl == null) {
+                apiService.searchModels(
+                    search = normalizedQuery,
+                    limit = PAGE_SIZE,
+                    authorization = authorizationHeader()
+                )
+            } else {
+                val trustedPageUrl = parseNextPageUrl("<$nextPageUrl>; rel=\"next\"")
+                    ?: return Result.failure(IllegalArgumentException("Página de Hugging Face no válida"))
+                apiService.getModelsPage(trustedPageUrl, authorizationHeader())
             }
 
-            if (compatibleFiles.isEmpty()) {
-                return Result.failure(IllegalArgumentException("No se encontraron archivos .task o .bin en este repositorio. MediaPipe solo soporta estos formatos."))
-            }
-
-            val parts = repoId.split("/", limit = 2)
+            val modelInfos = response.requireBody("buscar modelos")
             Result.success(
-                HFBrowsableModel(
-                    repoId = repoId,
-                    repoName = parts.getOrElse(1) { repoId },
-                    author = parts.getOrElse(0) { "" },
-                    files = compatibleFiles.map { file ->
-                        HFBrowsableFile(
-                            fileName = file.filename,
-                            sizeBytes = file.size,
-                            downloadUrl = "https://huggingface.co/$repoId/resolve/main/${file.filename}"
-                        )
-                    },
-                    downloads = modelInfo?.downloads ?: 0,
-                    gated = modelInfo?.isGated ?: false,
-                    tags = modelInfo?.tags ?: emptyList()
+                HFSearchPage(
+                    models = modelInfos.map(::toBrowsableModel),
+                    nextPageUrl = parseNextPageUrl(response.headers()["Link"])
                 )
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Error resolving URL: $url", e)
+            Log.e(TAG, "Error searching Hugging Face models for query=$normalizedQuery", e)
             Result.failure(e)
         }
     }
 
-    private fun parseRepoIdFromUrl(url: String): String? {
-        // Support formats:
-        // huggingface.co/org/repo
-        // huggingface.co/org/repo/tree/main
-        // huggingface.co/org/repo/resolve/main/file.task
-        // https://huggingface.co/org/repo
-        val cleaned = url
-            .removePrefix("https://")
-            .removePrefix("http://")
-            .removePrefix("huggingface.co/")
+    suspend fun resolveRepoUrl(value: String): Result<HFBrowsableModel> {
+        val repoId = parseRepoIdFromUrl(value)
+            ?: return Result.failure(
+                IllegalArgumentException(
+                    "URL o repositorio no válido. Usa el formato organización/modelo"
+                )
+            )
 
-        val parts = cleaned.split("/")
-        if (parts.size < 2) return null
-        return "${parts[0]}/${parts[1]}"
+        return try {
+            val response = apiService.getModelInfo(repoId, authorizationHeader())
+            val model = toBrowsableModel(response.requireBody("consultar el repositorio"))
+            val detailedFiles = loadCompatibleFiles(model).getOrElse { model.files }
+            Result.success(model.copy(files = detailedFiles))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Error resolving Hugging Face repository $repoId", e)
+            Result.failure(e)
+        }
     }
 
-    private fun extractRepoId(url: String): String? {
-        if (url.isBlank()) return null
-        return parseRepoIdFromUrl(url)
+    suspend fun loadCompatibleFiles(model: HFBrowsableModel): Result<List<HFBrowsableFile>> {
+        fileCache[model.repoId]?.let { (timestamp, files) ->
+            if (System.currentTimeMillis() - timestamp < FILE_CACHE_TTL_MS) {
+                return Result.success(files)
+            }
+        }
+
+        return try {
+            val revision = model.revisionSha ?: "main"
+            val collected = mutableListOf<HFFileInfo>()
+            var response = apiService.getModelFiles(
+                repoId = model.repoId,
+                revision = revision,
+                authorization = authorizationHeader()
+            )
+            var pageCount = 0
+
+            while (true) {
+                collected += response.requireBody("consultar los archivos del modelo")
+                pageCount += 1
+                val nextPageUrl = parseNextPageUrl(response.headers()["Link"])
+                if (nextPageUrl == null || pageCount >= MAX_TREE_PAGES) break
+                response = apiService.getModelFilesPage(nextPageUrl, authorizationHeader())
+            }
+
+            val files = collected
+                .asSequence()
+                .filter { it.type == "file" }
+                .mapNotNull { file ->
+                    val format = detectLocalFormat(
+                        repoId = model.repoId,
+                        fileName = file.fileName,
+                        tags = model.tags,
+                        libraryName = model.libraryName
+                    ) ?: return@mapNotNull null
+
+                    HFBrowsableFile(
+                        fileName = file.fileName,
+                        sizeBytes = file.resolvedSize,
+                        downloadUrl = buildDownloadUrl(model.repoId, revision, file.fileName),
+                        format = format,
+                        sha256 = file.lfs?.oid,
+                        deviceHint = inferDeviceHint(file.fileName)
+                    )
+                }
+                .distinctBy { it.fileName }
+                .sortedBy { it.fileName }
+                .toList()
+
+            fileCache[model.repoId] = System.currentTimeMillis() to files
+            Result.success(files)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading files for ${model.repoId}", e)
+            Result.failure(e)
+        }
+    }
+
+    private fun toBrowsableModel(model: HFModelInfo): HFBrowsableModel {
+        val parts = model.id.split('/', limit = 2)
+        val author = model.author ?: parts.firstOrNull().orEmpty()
+        val revision = model.sha?.takeIf { it.isNotBlank() } ?: "main"
+        val files = model.siblings.mapNotNull { sibling ->
+            val format = detectLocalFormat(
+                repoId = model.id,
+                fileName = sibling.fileName,
+                tags = model.tags,
+                libraryName = model.libraryName
+            ) ?: return@mapNotNull null
+
+            HFBrowsableFile(
+                fileName = sibling.fileName,
+                sizeBytes = 0,
+                downloadUrl = buildDownloadUrl(model.id, revision, sibling.fileName),
+                format = format,
+                deviceHint = inferDeviceHint(sibling.fileName)
+            )
+        }
+
+        return HFBrowsableModel(
+            repoId = model.id,
+            repoName = parts.getOrElse(1) { model.id },
+            author = author,
+            files = files,
+            downloads = model.downloads,
+            likes = model.likes,
+            gated = model.isGated,
+            isPrivate = model.isPrivate,
+            tags = model.tags,
+            libraryName = model.libraryName,
+            revisionSha = model.sha,
+            lastModified = model.lastModified
+        )
+    }
+
+    private fun authorizationHeader(): String? = securePreferences
+        .getHuggingFaceToken()
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?.let { "Bearer $it" }
+
+    private fun <T> Response<T>.requireBody(action: String): T {
+        if (!isSuccessful) {
+            val message = when (code()) {
+                401 -> "El token de Hugging Face es inválido o expiró"
+                403 -> "No tienes acceso. Acepta la licencia del modelo y revisa tu token"
+                404 -> "El modelo ya no existe o el repositorio no es accesible"
+                429 -> "Hugging Face limitó temporalmente las búsquedas. Intenta más tarde"
+                in 500..599 -> "Hugging Face no está disponible temporalmente"
+                else -> "Hugging Face respondió HTTP ${code()} al $action"
+            }
+            throw IOException(message)
+        }
+        return body() ?: throw IOException("Hugging Face devolvió una respuesta vacía al $action")
     }
 }

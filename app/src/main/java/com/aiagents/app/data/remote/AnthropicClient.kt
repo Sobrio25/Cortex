@@ -17,7 +17,8 @@ import retrofit2.http.POST
 
 class AnthropicClient(
     private val okHttpClient: OkHttpClient,
-    private val apiKey: String
+    private val apiKey: String,
+    private val oauthToken: String? = null
 ) : AIClient {
 
     private val api: AnthropicApi = Retrofit.Builder()
@@ -29,6 +30,11 @@ class AnthropicClient(
 
     private val gson = Gson()
     private val mapType = object : TypeToken<Map<String, Any>>() {}.type
+
+    /** Returns the correct auth headers depending on OAuth vs API key */
+    private val useOAuth: Boolean get() = !oauthToken.isNullOrBlank()
+    private val effectiveApiKey: String? get() = if (useOAuth) null else apiKey
+    private val effectiveAuth: String? get() = if (useOAuth) "Bearer $oauthToken" else null
 
     /**
      * Converts tools from OpenAI format ({type:"function", function:{name, description, parameters}})
@@ -89,7 +95,8 @@ class AnthropicClient(
 
             Log.d("AnthropicClient", "Sending request to API...")
             val response = api.messages(
-                apiKey = apiKey,
+                apiKey = effectiveApiKey,
+                authorization = effectiveAuth,
                 anthropicVersion = "2023-06-01",
                 request = request
             )
@@ -113,7 +120,7 @@ class AnthropicClient(
             val finishReason = response.stopReason
             val reasoning = response.content?.firstOrNull { it.type == "thinking" }?.thinking
 
-            Log.d("AnthropicClient", "Response: content=${content?.take(100)}, tools=${toolCalls?.size ?: 0}")
+            Log.d("AnthropicClient", "Response: hasContent=${!content.isNullOrBlank()}, tools=${toolCalls?.size ?: 0}")
 
             Result.success(ChatResponseWithTools(content, toolCalls, finishReason, reasoning))
         } catch (e: Exception) {
@@ -278,7 +285,8 @@ class AnthropicClient(
 
         return streamAnthropic(
             okHttpClient = okHttpClient,
-            apiKey = apiKey,
+            apiKey = effectiveApiKey,
+            authorization = effectiveAuth,
             requestBody = requestBody
         )
     }
@@ -286,33 +294,30 @@ class AnthropicClient(
     override suspend fun getAvailableModels(): Result<List<String>> {
         return try {
             val response = api.getModels(
-                apiKey = apiKey,
+                apiKey = effectiveApiKey,
+                authorization = effectiveAuth,
                 anthropicVersion = "2023-06-01"
             )
             Result.success(response.data.map { it.id })
         } catch (e: Exception) {
-            Log.e("AnthropicClient", "Error getting models, using defaults", e)
-            Result.success(listOf(
-                "claude-opus-4-6",
-                "claude-sonnet-4-6",
-                "claude-haiku-4-5",
-                "claude-opus-4-5",
-                "claude-sonnet-4-5"
-            ))
+            Log.e("AnthropicClient", "Error getting models", e)
+            Result.failure(e)
         }
     }
 
     interface AnthropicApi {
         @POST("messages")
         suspend fun messages(
-            @Header("x-api-key") apiKey: String,
+            @Header("x-api-key") apiKey: String?,
+            @Header("Authorization") authorization: String?,
             @Header("anthropic-version") anthropicVersion: String,
             @Body request: AnthropicRequest
         ): AnthropicResponse
 
         @GET("models")
         suspend fun getModels(
-            @Header("x-api-key") apiKey: String,
+            @Header("x-api-key") apiKey: String?,
+            @Header("Authorization") authorization: String?,
             @Header("anthropic-version") anthropicVersion: String
         ): AnthropicModelsResponse
     }

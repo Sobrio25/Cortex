@@ -1,9 +1,7 @@
 package com.aiagents.app.presentation.mcp
 
-import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.aiagents.app.data.auth.GoogleDriveOAuthManager
 import com.aiagents.app.data.local.MCPDao
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.model.BraveSearchConfig
@@ -15,13 +13,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
-
-enum class OAuthStatus {
-    IDLE,
-    IN_PROGRESS,
-    SUCCESS,
-    ERROR
-}
 
 data class MCPUiState(
     val braveApiKey: String = "",
@@ -47,13 +38,6 @@ data class MCPUiState(
     val slackToken: String = "",
     val slackIsConfigured: Boolean = false,
     val showSlackConfigDialog: Boolean = false,
-    val googleDriveIsConfigured: Boolean = false,
-    val googleDriveOAuthStatus: OAuthStatus = OAuthStatus.IDLE,
-    val googleDriveOAuthError: String? = null,
-    val showGoogleDriveConfigDialog: Boolean = false,
-    val weatherApiKey: String = "",
-    val weatherIsConfigured: Boolean = false,
-    val showWeatherConfigDialog: Boolean = false,
     val googleImagenApiKey: String = "",
     val googleImagenIsConfigured: Boolean = false,
     val showGoogleImagenConfigDialog: Boolean = false,
@@ -70,8 +54,7 @@ data class MCPUiState(
 @HiltViewModel
 class MCPViewModel @Inject constructor(
     private val securePreferences: SecurePreferences,
-    private val mcpDao: MCPDao,
-    private val googleDriveOAuthManager: GoogleDriveOAuthManager
+    private val mcpDao: MCPDao
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MCPUiState())
@@ -88,8 +71,6 @@ class MCPViewModel @Inject constructor(
         loadGitHubConfig()
         loadNotionConfig()
         loadSlackConfig()
-        loadGoogleDriveConfig()
-        loadWeatherConfig()
         loadGoogleImagenConfig()
         loadDalleConfig()
         initializeMCPServers()
@@ -385,15 +366,7 @@ class MCPViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(showDalleConfigDialog = false)
     }
 
-    // Weather Dialog
-    fun showWeatherConfigDialog() {
-        _uiState.value = _uiState.value.copy(showWeatherConfigDialog = true)
-    }
-
-    fun hideWeatherConfigDialog() {
-        _uiState.value = _uiState.value.copy(showWeatherConfigDialog = false)
-    }
-
+    // Brave Search
     fun saveBraveApiKey(apiKey: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
@@ -626,98 +599,6 @@ class MCPViewModel @Inject constructor(
                 mcpDao.setServerEnabled("slack", true)
                 _uiState.value = _uiState.value.copy(
                     slackToken = token, slackIsConfigured = true, showSlackConfigDialog = false
-                )
-            }
-        }
-    }
-
-    // Google Drive
-    private fun loadGoogleDriveConfig() {
-        _uiState.value = _uiState.value.copy(
-            googleDriveIsConfigured = securePreferences.hasGoogleDriveConfig()
-        )
-    }
-
-    fun showGoogleDriveConfigDialog() {
-        _uiState.value = _uiState.value.copy(showGoogleDriveConfigDialog = true)
-    }
-
-    fun hideGoogleDriveConfigDialog() {
-        _uiState.value = _uiState.value.copy(
-            showGoogleDriveConfigDialog = false,
-            googleDriveOAuthStatus = OAuthStatus.IDLE,
-            googleDriveOAuthError = null
-        )
-    }
-
-    fun startGoogleDriveOAuth(context: Context) {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                googleDriveOAuthStatus = OAuthStatus.IN_PROGRESS,
-                googleDriveOAuthError = null
-            )
-            val result = googleDriveOAuthManager.performFullAuthFlow(context)
-            if (result.isSuccess) {
-                mcpDao.updateServerConfig("google_drive", """{"isConfigured":true,"oauth":true}""")
-                mcpDao.setServerEnabled("google_drive", true)
-                _uiState.value = _uiState.value.copy(
-                    googleDriveIsConfigured = true,
-                    googleDriveOAuthStatus = OAuthStatus.SUCCESS,
-                    showGoogleDriveConfigDialog = false
-                )
-            } else {
-                _uiState.value = _uiState.value.copy(
-                    googleDriveOAuthStatus = OAuthStatus.ERROR,
-                    googleDriveOAuthError = result.exceptionOrNull()?.message ?: "Error desconocido"
-                )
-            }
-        }
-    }
-
-    fun saveGoogleDriveClientId(clientId: String) {
-        securePreferences.saveGoogleDriveClientId(clientId)
-    }
-
-    fun saveGoogleDriveClientSecret(secret: String) {
-        securePreferences.saveGoogleDriveClientSecret(secret)
-    }
-
-    fun disconnectGoogleDrive() {
-        viewModelScope.launch {
-            securePreferences.clearGoogleDrive()
-            mcpDao.setServerEnabled("google_drive", false)
-            _uiState.value = _uiState.value.copy(
-                googleDriveIsConfigured = false,
-                googleDriveOAuthStatus = OAuthStatus.IDLE,
-                googleDriveOAuthError = null,
-                showGoogleDriveConfigDialog = false
-            )
-        }
-    }
-
-    private fun loadWeatherConfig() {
-        val apiKey = securePreferences.getOpenWeatherApiKey() ?: ""
-        _uiState.value = _uiState.value.copy(
-            weatherApiKey = apiKey,
-            weatherIsConfigured = apiKey.isNotBlank()
-        )
-    }
-
-    fun saveWeatherApiKey(apiKey: String) {
-        viewModelScope.launch {
-            if (apiKey.isBlank()) {
-                securePreferences.removeOpenWeatherApiKey()
-                _uiState.value = _uiState.value.copy(
-                    weatherApiKey = "",
-                    weatherIsConfigured = false,
-                    showWeatherConfigDialog = false
-                )
-            } else {
-                securePreferences.saveOpenWeatherApiKey(apiKey)
-                _uiState.value = _uiState.value.copy(
-                    weatherApiKey = apiKey,
-                    weatherIsConfigured = true,
-                    showWeatherConfigDialog = false
                 )
             }
         }

@@ -94,7 +94,7 @@ class MiniMaxClient(
             val finalReasoning = reasoningFromField?.ifBlank { null } 
                 ?: reasoningFromTags?.ifBlank { null }
             
-            Log.d("MiniMaxClient", "Response received: content=${cleanContent?.take(100)}, tools=${toolCalls?.size ?: 0}, reasoning=${finalReasoning?.take(100) ?: "null"}")
+            Log.d("MiniMaxClient", "Response received: hasContent=${!cleanContent.isNullOrBlank()}, tools=${toolCalls?.size ?: 0}, hasReasoning=${!finalReasoning.isNullOrBlank()}")
             
             Result.success(ChatResponseWithTools(cleanContent, toolCalls, finishReason, finalReasoning))
         } catch (e: Exception) {
@@ -139,14 +139,8 @@ class MiniMaxClient(
             val response = api.getModels("Bearer $apiKey")
             Result.success(response.data.map { it.id })
         } catch (e: Exception) {
-            Log.e("MiniMaxClient", "Error getting models, using defaults", e)
-            Result.success(listOf(
-                "MiniMax-M2.5",
-                "MiniMax-M2.5-highspeed",
-                "MiniMax-M2.1",
-                "MiniMax-M2.1-highspeed",
-                "MiniMax-M2"
-            ))
+            Log.e("MiniMaxClient", "Error getting models", e)
+            Result.failure(e)
         }
     }
 

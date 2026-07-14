@@ -18,8 +18,15 @@ class OpenAIClient(
     private val baseUrl: String? = null
 ) : AIClient {
 
+    private val authorizationHeader: String?
+        get() = apiKey.trim().takeIf { it.isNotEmpty() }?.let { "Bearer $it" }
+
+    private val effectiveBaseUrl = (baseUrl ?: "https://api.openai.com/v1/").let {
+        if (it.endsWith('/')) it else "$it/"
+    }
+
     private val api: OpenAiApi = Retrofit.Builder()
-        .baseUrl(baseUrl ?: "https://api.openai.com/v1/")
+        .baseUrl(effectiveBaseUrl)
         .client(okHttpClient)
         .addConverterFactory(GsonConverterFactory.create())
         .build()
@@ -60,7 +67,7 @@ class OpenAIClient(
             )
             
             Log.d("OpenAIClient", "Sending request to API...")
-            val response = api.chat("Bearer $apiKey", request)
+            val response = api.chat(authorizationHeader, request)
             
             if (response.error != null) {
                 Log.e("OpenAIClient", "API Error: ${response.error.message}")
@@ -110,7 +117,11 @@ class OpenAIClient(
             val finalReasoning = reasoningFromField?.ifBlank { null }
                 ?: reasoningFromTags?.ifBlank { null }
 
-            Log.d("OpenAIClient", "Response received: content=${cleanContent?.take(100)}, tools=${toolCalls?.size ?: 0}, reasoning=${finalReasoning?.take(100)}")
+            Log.d(
+                "OpenAIClient",
+                "Response received: hasContent=${!cleanContent.isNullOrBlank()}, " +
+                    "tools=${toolCalls?.size ?: 0}, hasReasoning=${!finalReasoning.isNullOrBlank()}"
+            )
 
             Result.success(ChatResponseWithTools(cleanContent, toolCalls, finishReason, finalReasoning))
         } catch (e: Exception) {
@@ -130,10 +141,6 @@ class OpenAIClient(
         val allMessages = mutableListOf(ChatMessage("system", systemPrompt))
         allMessages.addAll(messages)
 
-        val effectiveBaseUrl = (baseUrl ?: "https://api.openai.com/v1/").let {
-            if (it.endsWith("/")) it else "$it/"
-        }
-
         val requestBody = mutableMapOf<String, Any?>(
             "model" to model,
             "messages" to allMessages.map { it.toStreamingMap() },
@@ -146,45 +153,45 @@ class OpenAIClient(
         return streamOpenAICompatible(
             okHttpClient = okHttpClient,
             url = "${effectiveBaseUrl}chat/completions",
-            headers = mapOf(
-                "Authorization" to "Bearer $apiKey",
-                "Content-Type" to "application/json"
-            ),
+            headers = buildMap {
+                put("Content-Type", "application/json")
+                authorizationHeader?.let { put("Authorization", it) }
+            },
             requestBody = requestBody
         ).withRealtimeThinkTagParsing()
     }
 
     override suspend fun getAvailableModels(): Result<List<String>> {
+        return getAvailableModelInfos().map { models -> models.map { it.id } }
+    }
+
+    override suspend fun getAvailableModelInfos(): Result<List<RemoteModelInfo>> {
         return try {
-            val response = api.getModels("Bearer $apiKey")
-            Result.success(response.data.map { it.id })
+            val response = api.getModels(authorizationHeader)
+            Result.success(
+                response.data.map { model ->
+                    RemoteModelInfo(
+                        id = model.id,
+                        contextWindow = model.contextLength?.takeIf { it > 0 }
+                    )
+                }
+            )
         } catch (e: Exception) {
-            Log.e("OpenAIClient", "Error getting models, using defaults", e)
-            Result.success(listOf(
-                "gpt-4o",
-                "gpt-4o-mini",
-                "gpt-4-turbo",
-                "gpt-4",
-                "gpt-3.5-turbo",
-                "o1",
-                "o1-mini",
-                "o1-preview"
-            ))
+            Log.e("OpenAIClient", "Error getting models", e)
+            Result.failure(e)
         }
     }
 
     interface OpenAiApi {
         @POST("chat/completions")
         suspend fun chat(
-            @Header("Authorization") authorization: String,
+            @Header("Authorization") authorization: String?,
             @Body request: ChatRequest
         ): ChatResponse
 
         @GET("models")
         suspend fun getModels(
-            @Header("Authorization") authorization: String
+            @Header("Authorization") authorization: String?
         ): ModelsResponse
     }
 }
-
-

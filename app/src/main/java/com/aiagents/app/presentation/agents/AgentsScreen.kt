@@ -19,6 +19,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.aiagents.app.domain.model.Agent
+import com.aiagents.app.domain.model.isOrchestrator
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,8 +40,8 @@ fun AgentsScreen(
     var showCortexCustomization by remember { mutableStateOf(false) }
 
     // Separar Cortex de los demás agentes
-    val cortex = agents.find { it.name == "Cortex" }
-    val otherAgents = agents.filter { it.name != "Cortex" }
+    val cortex = agents.find { it.isOrchestrator }
+    val otherAgents = agents.filterNot { it.isOrchestrator }
 
     Scaffold(
         topBar = {
@@ -420,7 +421,7 @@ fun AgentsScreen(
 
             AlertDialog(
                 onDismissRequest = { agentToEdit = null },
-                title = { Text(if (agent.name == "Cortex") "Editar Cortex (Orquestador)" else "Editar Agente") },
+                title = { Text(if (agent.isOrchestrator) "Editar orquestador" else "Editar Agente") },
                 text = {
                     Column(
                         modifier = Modifier
@@ -433,7 +434,7 @@ fun AgentsScreen(
                             label = { Text("Nombre") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            enabled = agent.name != "Cortex" // No permitir cambiar el nombre de Cortex
+                            enabled = !agent.isOrchestrator
                         )
                         Spacer(Modifier.height(12.dp))
                         OutlinedTextField(

@@ -20,6 +20,8 @@ import com.aiagents.app.domain.model.Message
 import com.aiagents.app.domain.model.MessageRole
 import com.aiagents.app.domain.model.ToolCall
 import com.aiagents.app.domain.model.ToolResult
+import com.aiagents.app.domain.model.ProviderType
+import com.aiagents.app.data.terminal.ToolExecutionProfiles
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 
@@ -104,13 +106,28 @@ class ScheduledTaskWorker @AssistedInject constructor(
 
         val messages = mutableListOf(Message(role = MessageRole.USER, content = prompt))
         var finalContent = ""
+        val workspace = repository.getWorkspaceById(workspaceId)
+        val selectedModelKey = workspace?.selectedModel?.takeIf { it.contains('|') }
+            ?: securePreferences.getSelectedModels().firstOrNull()
+            ?: throw IllegalStateException("La tarea no tiene un modelo configurado")
+        val provider = runCatching {
+            ProviderType.valueOf(selectedModelKey.substringBefore('|'))
+        }.getOrElse {
+            throw IllegalStateException("Proveedor inválido en la tarea programada")
+        }
+        val model = selectedModelKey.substringAfter('|').trim()
+            .takeIf(String::isNotEmpty)
+            ?: throw IllegalStateException("Modelo inválido en la tarea programada")
 
         repeat(MAX_TOOL_ITERATIONS) { iteration ->
             val response = repository.chatWithTools(
                 agent = agent,
                 messages = messages,
+                overrideModel = model,
+                overrideProvider = provider,
                 enableTerminal = agent.enableTerminal,
-                workspaceFolderPath = fileRepository.getWorkspaceFolderPath(workspaceId)
+                workspaceFolderPath = fileRepository.getWorkspaceFolderPath(workspaceId),
+                allowedToolNames = ToolExecutionProfiles.BACKGROUND
             ).getOrThrow()
 
             finalContent = response.content ?: ""
@@ -166,9 +183,19 @@ class ScheduledTaskWorker @AssistedInject constructor(
                 "serpapi_search" -> {
                     repository.getSerpAPIToolHandler().executeTool(id, args, repository.getSerpApiKey()).content
                 }
+                in com.aiagents.app.data.terminal.UnifiedWebToolHandler.ALL_TOOL_NAMES -> {
+                    repository.getUnifiedWebToolHandler().executeTool(id, name, args).content
+                }
+                in com.aiagents.app.data.terminal.SkillToolHandler.ALL_TOOL_NAMES -> {
+                    repository.getSkillToolHandler().executeTool(id, name, args).content
+                }
                 // Memory
                 in com.aiagents.app.data.terminal.MemoryToolHandler.ALL_TOOL_NAMES -> {
-                    repository.getMemoryToolHandler().executeTool(id, name, args).content
+                    if (name !in com.aiagents.app.data.terminal.MemoryToolHandler.READ_TOOL_NAMES) {
+                        "Error: semantic-memory writes are disabled in background tasks."
+                    } else {
+                        repository.getMemoryToolHandler().executeTool(id, name, args).content
+                    }
                 }
                 // Terminal
                 "execute_command" -> {

@@ -9,6 +9,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.scheduling.TaskSchedulerManager
+import com.aiagents.app.data.runtime.RuntimeContextProvider
 import com.aiagents.app.data.terminal.MemoryExtractor
 import com.aiagents.app.data.terminal.MemoryMaintenanceWorker
 import dagger.hilt.android.HiltAndroidApp
@@ -33,6 +34,9 @@ class AIAgentsApp : Application(), Configuration.Provider {
     @Inject
     lateinit var taskSchedulerManager: TaskSchedulerManager
 
+    @Inject
+    lateinit var runtimeContextProvider: RuntimeContextProvider
+
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
             .setWorkerFactory(workerFactory)
@@ -42,7 +46,15 @@ class AIAgentsApp : Application(), Configuration.Provider {
         super.onCreate()
         scheduleMemoryMaintenance()
         rescheduleTaskAlarms()
+        refreshRuntimeIdentity()
         triggerStartupMemoryExtraction()
+    }
+
+    private fun refreshRuntimeIdentity() {
+        GlobalScope.launch {
+            runCatching { runtimeContextProvider.refreshIdentityFromMemory() }
+                .onFailure { Log.w("AIAgentsApp", "Could not backfill runtime identity", it) }
+        }
     }
 
     private fun rescheduleTaskAlarms() {

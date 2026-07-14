@@ -22,7 +22,7 @@ import javax.inject.Singleton
 
 @Singleton
 class LocalModelRepository @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val securePreferences: SecurePreferences,
     private val customLocalModelDao: CustomLocalModelDao
 ) {
@@ -60,6 +60,9 @@ class LocalModelRepository @Inject constructor(
             customLocalModelDao.getAllSync()
         }.map { entity ->
             val localFile = File(modelsDir, entity.fileName)
+            val isComplete = localFile.exists() &&
+                localFile.length() > 0 &&
+                (entity.sizeBytes <= 0 || localFile.length() == entity.sizeBytes)
             LocalModel(
                 id = entity.id,
                 name = entity.name,
@@ -68,8 +71,8 @@ class LocalModelRepository @Inject constructor(
                 sizeBytes = entity.sizeBytes,
                 description = entity.description,
                 contextLength = entity.contextLength,
-                isDownloaded = localFile.exists() && localFile.length() > 0,
-                localPath = if (localFile.exists() && localFile.length() > 0) localFile.absolutePath else null,
+                isDownloaded = isComplete,
+                localPath = if (isComplete) localFile.absolutePath else null,
                 requiresLicense = entity.requiresLicense,
                 requiresHFToken = entity.requiresHFToken
             )
@@ -123,7 +126,7 @@ class LocalModelRepository @Inject constructor(
             // Construir request con headers necesarios
             val requestBuilder = Request.Builder()
                 .url(model.huggingFaceUrl)
-                .header("User-Agent", "AIAgents-App/1.0")
+                .header("User-Agent", "Cortex-Android/0.2.0")
                 .header("Accept", "*/*")
                 .header("Accept-Encoding", "identity")
 
@@ -211,7 +214,10 @@ class LocalModelRepository @Inject constructor(
 
     fun deleteModel(model: LocalModel): Boolean {
         val file = File(modelsDir, model.fileName)
-        return file.delete()
+        val partialFile = File(modelsDir, "${model.fileName}.part")
+        val deletedModel = !file.exists() || file.delete()
+        val deletedPartial = !partialFile.exists() || partialFile.delete()
+        return deletedModel && deletedPartial
     }
 
     fun getModelPath(fileName: String): String {

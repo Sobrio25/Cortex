@@ -3,12 +3,18 @@ package com.aiagents.app.data.local
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.aiagents.app.data.auth.OpenAIEndpointPolicy
 import com.aiagents.app.domain.model.MoonshotEndpointType
+import com.aiagents.app.domain.model.OpenCodeVariantType
+import com.aiagents.app.domain.model.OpenAIAuthMode
 import com.aiagents.app.domain.model.ProviderType
+import com.aiagents.app.domain.model.ZAIPlanType
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import java.security.MessageDigest
+import java.security.SecureRandom
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -30,9 +36,9 @@ class SecurePreferences @Inject constructor(
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
         } catch (e: Exception) {
-            // Fallback a SharedPreferences normales si EncryptedSharedPreferences falla
-            android.util.Log.w("SecurePreferences", "Error inicializando EncryptedSharedPreferences, usando fallback", e)
-            context.getSharedPreferences("fallback_prefs", Context.MODE_PRIVATE)
+            // Never downgrade API keys/tokens to plaintext storage.
+            android.util.Log.e("SecurePreferences", "Encrypted storage is unavailable", e)
+            throw IllegalStateException("No se pudo abrir el almacenamiento seguro", e)
         }
     }
 
@@ -62,6 +68,63 @@ class SecurePreferences @Inject constructor(
 
     fun hasApiKey(provider: ProviderType): Boolean {
         return getApiKey(provider) != null
+    }
+
+    fun getOpenAIAuthMode(): OpenAIAuthMode = OpenAIAuthMode.fromStoredValue(
+        encryptedPrefs.getString("OPENAI_AUTH_MODE", null)
+    )
+
+    /** Saves the selected mode and all of its destination-bound credentials in one transaction. */
+    fun saveOpenAIConfig(
+        mode: OpenAIAuthMode,
+        credential: String,
+        backendBaseUrl: String
+    ) {
+        val editor = encryptedPrefs.edit().putString("OPENAI_AUTH_MODE", mode.name)
+        when (mode) {
+            OpenAIAuthMode.API_KEY -> {
+                editor.putString("${ProviderType.OPENAI.name}_API_KEY", credential.trim())
+            }
+            OpenAIAuthMode.OAUTH_BACKEND -> {
+                val normalizedUrl = requireNotNull(
+                    OpenAIEndpointPolicy.normalizeBackendBaseUrl(backendBaseUrl)
+                ) { "La URL del backend de OpenAI no es válida" }
+                editor.putString("OPENAI_BACKEND_BASE_URL", normalizedUrl)
+                if (credential.isBlank()) editor.remove("OPENAI_BACKEND_TOKEN")
+                else editor.putString("OPENAI_BACKEND_TOKEN", credential.trim())
+            }
+        }
+        // Remove the old shared URL so it can never be paired with a direct API key.
+        editor.remove("${ProviderType.OPENAI.name}_BASE_URL").apply()
+    }
+
+    fun getOpenAIBackendBaseUrl(): String? {
+        val current = encryptedPrefs.getString("OPENAI_BACKEND_BASE_URL", null)
+        if (!current.isNullOrBlank()) return current
+        // One-way compatibility for installations that saved the proxy URL in the old shared key.
+        if (getOpenAIAuthMode() != OpenAIAuthMode.OAUTH_BACKEND) return null
+        return encryptedPrefs.getString("${ProviderType.OPENAI.name}_BASE_URL", null)
+    }
+
+    fun getOpenAIBackendToken(): String? = encryptedPrefs.getString("OPENAI_BACKEND_TOKEN", null)
+        ?.trim()?.takeIf { it.isNotEmpty() }
+
+    /** Stable, salted identifier for cache isolation; never persists a raw credential or URL. */
+    @Synchronized
+    fun credentialScope(
+        provider: ProviderType,
+        credential: String,
+        destination: String
+    ): String {
+        val saltKey = "PROVIDER_SCOPE_SALT"
+        val salt = encryptedPrefs.getString(saltKey, null) ?: ByteArray(32).also {
+            SecureRandom().nextBytes(it)
+        }.joinToString("") { "%02x".format(it.toInt() and 0xff) }.also {
+            encryptedPrefs.edit().putString(saltKey, it).commit()
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest("$salt\u0000${provider.name}\u0000$destination\u0000${credential.trim()}".toByteArray())
+        return digest.take(12).joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
     fun setActiveProvider(provider: ProviderType) {
@@ -105,6 +168,12 @@ class SecurePreferences @Inject constructor(
         saveSelectedModels(current)
     }
 
+    fun clearSelectedModels(providerType: ProviderType) {
+        saveSelectedModels(
+            getSelectedModels().filterNot { it.startsWith("${providerType.name}|") }.toSet()
+        )
+    }
+
     fun isModelSelected(providerType: ProviderType, modelId: String): Boolean {
         return getSelectedModels().contains("${providerType.name}|$modelId")
     }
@@ -128,6 +197,28 @@ class SecurePreferences @Inject constructor(
     fun clearAll() {
         encryptedPrefs.edit().clear().apply()
     }
+
+    // User identity entered during onboarding. Kept here as well as in semantic memory so the
+    // synchronous streaming path can always build truthful runtime context.
+    fun saveUserIdentity(name: String, preferredName: String) {
+        encryptedPrefs.edit()
+            .putString("USER_NAME", name.trim())
+            .putString("USER_PREFERRED_NAME", preferredName.trim())
+            .apply()
+    }
+
+    fun getUserName(): String? = encryptedPrefs.getString("USER_NAME", null)
+        ?.trim()?.takeIf { it.isNotEmpty() }
+
+    fun getPreferredUserName(): String? = encryptedPrefs.getString("USER_PREFERRED_NAME", null)
+        ?.trim()?.takeIf { it.isNotEmpty() }
+
+    fun saveCortexName(name: String) {
+        encryptedPrefs.edit().putString("CORTEX_NAME", name.trim()).apply()
+    }
+
+    fun getCortexName(): String? = encryptedPrefs.getString("CORTEX_NAME", null)
+        ?.trim()?.takeIf { it.isNotEmpty() }
 
     // Preferencia para mostrar/ocultar razonamiento de modelos
     fun setShowReasoning(enabled: Boolean) {
@@ -251,39 +342,36 @@ class SecurePreferences @Inject constructor(
     fun hasSlackToken(): Boolean = !getSlackToken().isNullOrBlank()
     fun removeSlackToken() { encryptedPrefs.edit().remove("SLACK_TOKEN").apply() }
 
-    // Google Drive OAuth
-    fun saveGoogleDriveClientId(id: String) { encryptedPrefs.edit().putString("GDRIVE_CLIENT_ID", id).apply() }
-    fun getGoogleDriveClientId(): String? = encryptedPrefs.getString("GDRIVE_CLIENT_ID", null)
-    fun saveGoogleDriveClientSecret(secret: String) { encryptedPrefs.edit().putString("GDRIVE_CLIENT_SECRET", secret).apply() }
-    fun getGoogleDriveClientSecret(): String? = encryptedPrefs.getString("GDRIVE_CLIENT_SECRET", null)
-    fun saveGoogleDriveAccessToken(token: String) { encryptedPrefs.edit().putString("GDRIVE_ACCESS_TOKEN", token).apply() }
-    fun getGoogleDriveAccessToken(): String? = encryptedPrefs.getString("GDRIVE_ACCESS_TOKEN", null)
-    fun saveGoogleDriveRefreshToken(token: String) { encryptedPrefs.edit().putString("GDRIVE_REFRESH_TOKEN", token).apply() }
-    fun getGoogleDriveRefreshToken(): String? = encryptedPrefs.getString("GDRIVE_REFRESH_TOKEN", null)
-    fun hasGoogleDriveConfig(): Boolean = !getGoogleDriveAccessToken().isNullOrBlank()
-    fun clearGoogleDrive() {
-        encryptedPrefs.edit()
-            .remove("GDRIVE_CLIENT_ID").remove("GDRIVE_CLIENT_SECRET")
-            .remove("GDRIVE_ACCESS_TOKEN").remove("GDRIVE_REFRESH_TOKEN")
-            .apply()
-    }
-
-    // Google Workspace (unified)
+    // Google Workspace authorization through Google Identity Services
     fun saveGoogleWorkspaceAccessToken(token: String) = encryptedPrefs.edit().putString("gws_access_token", token).apply()
     fun getGoogleWorkspaceAccessToken(): String? = encryptedPrefs.getString("gws_access_token", null)
-    fun saveGoogleWorkspaceRefreshToken(token: String) = encryptedPrefs.edit().putString("gws_refresh_token", token).apply()
-    fun getGoogleWorkspaceRefreshToken(): String? = encryptedPrefs.getString("gws_refresh_token", null)
     fun saveGoogleWorkspaceScopes(scopes: String) = encryptedPrefs.edit().putString("gws_scopes", scopes).apply()
     fun getGoogleWorkspaceScopes(): String? = encryptedPrefs.getString("gws_scopes", null)
     fun saveGoogleWorkspaceTokenExpiry(expiry: Long) = encryptedPrefs.edit().putLong("gws_token_expiry", expiry).apply()
     fun getGoogleWorkspaceTokenExpiry(): Long = encryptedPrefs.getLong("gws_token_expiry", 0L)
-    fun hasGoogleWorkspaceConfig(): Boolean = getGoogleWorkspaceAccessToken() != null
+    fun saveGoogleWorkspaceAccountEmail(email: String) = encryptedPrefs.edit().putString("gws_account_email", email).apply()
+    fun getGoogleWorkspaceAccountEmail(): String? = encryptedPrefs.getString("gws_account_email", null)
+    fun hasGoogleWorkspaceConfig(): Boolean = !getGoogleWorkspaceAccessToken().isNullOrBlank()
+    fun clearLegacyGoogleOAuthCredentials() {
+        encryptedPrefs.edit()
+            .remove("GDRIVE_CLIENT_ID")
+            .remove("GDRIVE_CLIENT_SECRET")
+            .remove("GDRIVE_ACCESS_TOKEN")
+            .remove("GDRIVE_REFRESH_TOKEN")
+            .apply()
+    }
     fun clearGoogleWorkspace() {
         encryptedPrefs.edit()
             .remove("gws_access_token")
             .remove("gws_refresh_token")
             .remove("gws_scopes")
             .remove("gws_token_expiry")
+            .remove("gws_account_email")
+            // Purge credentials left by the removed localhost/client-secret flow.
+            .remove("GDRIVE_CLIENT_ID")
+            .remove("GDRIVE_CLIENT_SECRET")
+            .remove("GDRIVE_ACCESS_TOKEN")
+            .remove("GDRIVE_REFRESH_TOKEN")
             .apply()
     }
 
@@ -343,6 +431,145 @@ class SecurePreferences @Inject constructor(
         encryptedPrefs.edit().putString("MOONSHOT_ACTIVE_ENDPOINT", endpointType.name).apply()
     }
 
+    // Z.AI multi-plan API keys
+    fun saveZAIApiKey(planType: ZAIPlanType, apiKey: String) {
+        encryptedPrefs.edit().putString("ZAI_${planType.preferenceKey}_API_KEY", apiKey.trim()).apply()
+    }
+
+    fun getZAIApiKey(planType: ZAIPlanType): String? {
+        return encryptedPrefs.getString("ZAI_${planType.preferenceKey}_API_KEY", null)
+    }
+
+    fun removeZAIApiKey(planType: ZAIPlanType) {
+        encryptedPrefs.edit().remove("ZAI_${planType.preferenceKey}_API_KEY").apply()
+    }
+
+    fun hasZAIApiKey(planType: ZAIPlanType): Boolean {
+        return getZAIApiKey(planType) != null
+    }
+
+    fun getActiveZAIPlan(): ZAIPlanType {
+        val saved = encryptedPrefs.getString("ZAI_ACTIVE_PLAN", null)
+        return try {
+            saved?.let { ZAIPlanType.valueOf(it) } ?: ZAIPlanType.STANDARD
+        } catch (e: IllegalArgumentException) {
+            ZAIPlanType.STANDARD
+        }
+    }
+
+    fun setActiveZAIPlan(planType: ZAIPlanType) {
+        encryptedPrefs.edit().putString("ZAI_ACTIVE_PLAN", planType.name).apply()
+    }
+
+    // OpenCode multi-variant API keys
+    fun saveOpenCodeApiKey(variantType: OpenCodeVariantType, apiKey: String) {
+        encryptedPrefs.edit()
+            .putString("OPENCODE_${variantType.preferenceKey}_API_KEY", apiKey.trim())
+            .remove("OPENCODE_API_KEY")
+            .apply()
+        // Auto-activar esta variante al guardar la key
+        setActiveOpenCodeVariant(variantType)
+    }
+
+    fun getOpenCodeApiKey(variantType: OpenCodeVariantType): String? {
+        migrateLegacyOpenCodeApiKeyIfNeeded()
+        return encryptedPrefs.getString("OPENCODE_${variantType.preferenceKey}_API_KEY", null)
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+    }
+
+    fun removeOpenCodeApiKey(variantType: OpenCodeVariantType) {
+        encryptedPrefs.edit().remove("OPENCODE_${variantType.preferenceKey}_API_KEY").apply()
+    }
+
+    fun hasOpenCodeApiKey(variantType: OpenCodeVariantType): Boolean {
+        return getOpenCodeApiKey(variantType) != null
+    }
+
+    fun getActiveOpenCodeVariant(): OpenCodeVariantType {
+        migrateLegacyOpenCodeApiKeyIfNeeded()
+        val saved = encryptedPrefs.getString("OPENCODE_ACTIVE_VARIANT", null)
+        val savedVariant = try {
+            saved?.let { OpenCodeVariantType.valueOf(it) }
+        } catch (e: IllegalArgumentException) {
+            null
+        }
+
+        // Si hay una variante guardada y tiene key, usarla
+        if (savedVariant != null && hasOpenCodeApiKey(savedVariant)) {
+            return savedVariant
+        }
+
+        // Si no hay variante guardada o no tiene key, auto-detectar cuál variante tiene key
+        // Priorizar ZEN si ambas existen, sino usar la que tenga key
+        val hasZenKey = hasOpenCodeApiKey(OpenCodeVariantType.ZEN)
+        val hasGoKey = hasOpenCodeApiKey(OpenCodeVariantType.GO)
+
+        return when {
+            hasZenKey -> OpenCodeVariantType.ZEN
+            hasGoKey -> OpenCodeVariantType.GO
+            else -> OpenCodeVariantType.ZEN // Por defecto si no hay ninguna
+        }
+    }
+
+    fun setActiveOpenCodeVariant(variantType: OpenCodeVariantType) {
+        encryptedPrefs.edit().putString("OPENCODE_ACTIVE_VARIANT", variantType.name).apply()
+    }
+
+    /**
+     * Old builds stored one OpenCode key and exposed it as both Zen and Go. Move it once to the
+     * selected destination so a credential is never silently sent to the other service.
+     */
+    @Synchronized
+    private fun migrateLegacyOpenCodeApiKeyIfNeeded() {
+        val legacyKey = encryptedPrefs.getString("OPENCODE_API_KEY", null)
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?: return
+        val hasZen = !encryptedPrefs
+            .getString("OPENCODE_${OpenCodeVariantType.ZEN.preferenceKey}_API_KEY", null)
+            .isNullOrBlank()
+        val hasGo = !encryptedPrefs
+            .getString("OPENCODE_${OpenCodeVariantType.GO.preferenceKey}_API_KEY", null)
+            .isNullOrBlank()
+        val savedVariant = runCatching {
+            OpenCodeVariantType.valueOf(
+                encryptedPrefs.getString("OPENCODE_ACTIVE_VARIANT", null).orEmpty()
+            )
+        }.getOrDefault(OpenCodeVariantType.ZEN)
+
+        val migrationTarget = when {
+            !hasZen && !hasGo -> savedVariant
+            !hasZen && hasGo -> OpenCodeVariantType.ZEN
+            hasZen && !hasGo && savedVariant == OpenCodeVariantType.GO -> OpenCodeVariantType.GO
+            else -> null
+        }
+        val editor = encryptedPrefs.edit().remove("OPENCODE_API_KEY")
+        migrationTarget?.let { target ->
+            editor.putString("OPENCODE_${target.preferenceKey}_API_KEY", legacyKey)
+        }
+        editor.apply()
+    }
+
+    // Anthropic OAuth
+    fun saveAnthropicClientId(id: String) = encryptedPrefs.edit().putString("ANTHROPIC_CLIENT_ID", id).apply()
+    fun getAnthropicClientId(): String? = encryptedPrefs.getString("ANTHROPIC_CLIENT_ID", null)
+    fun saveAnthropicClientSecret(secret: String) = encryptedPrefs.edit().putString("ANTHROPIC_CLIENT_SECRET", secret).apply()
+    fun getAnthropicClientSecret(): String? = encryptedPrefs.getString("ANTHROPIC_CLIENT_SECRET", null)
+    fun saveAnthropicAccessToken(token: String) = encryptedPrefs.edit().putString("ANTHROPIC_ACCESS_TOKEN", token).apply()
+    fun getAnthropicAccessToken(): String? = encryptedPrefs.getString("ANTHROPIC_ACCESS_TOKEN", null)
+    fun saveAnthropicRefreshToken(token: String) = encryptedPrefs.edit().putString("ANTHROPIC_REFRESH_TOKEN", token).apply()
+    fun getAnthropicRefreshToken(): String? = encryptedPrefs.getString("ANTHROPIC_REFRESH_TOKEN", null)
+    fun saveAnthropicTokenExpiry(expiry: Long) = encryptedPrefs.edit().putLong("ANTHROPIC_TOKEN_EXPIRY", expiry).apply()
+    fun getAnthropicTokenExpiry(): Long = encryptedPrefs.getLong("ANTHROPIC_TOKEN_EXPIRY", 0L)
+    fun hasAnthropicOAuthConfig(): Boolean = !getAnthropicAccessToken().isNullOrBlank()
+    fun clearAnthropic() {
+        encryptedPrefs.edit()
+            .remove("ANTHROPIC_CLIENT_ID").remove("ANTHROPIC_CLIENT_SECRET")
+            .remove("ANTHROPIC_ACCESS_TOKEN").remove("ANTHROPIC_REFRESH_TOKEN")
+            .remove("ANTHROPIC_TOKEN_EXPIRY").apply()
+    }
+
     // Onboarding
     fun isOnboardingCompleted(): Boolean = encryptedPrefs.getBoolean("ONBOARDING_COMPLETED", false)
 
@@ -354,23 +581,6 @@ class SecurePreferences @Inject constructor(
 
     fun setAppLanguage(language: String) {
         encryptedPrefs.edit().putString("APP_LANGUAGE", language).apply()
-    }
-
-    // OpenWeather API
-    fun saveOpenWeatherApiKey(apiKey: String) {
-        encryptedPrefs.edit().putString("OPENWEATHER_API_KEY", apiKey.trim()).apply()
-    }
-
-    fun getOpenWeatherApiKey(): String? {
-        return encryptedPrefs.getString("OPENWEATHER_API_KEY", null)
-    }
-
-    fun removeOpenWeatherApiKey() {
-        encryptedPrefs.edit().remove("OPENWEATHER_API_KEY").apply()
-    }
-
-    fun hasOpenWeatherApiKey(): Boolean {
-        return !getOpenWeatherApiKey().isNullOrBlank()
     }
 
     // OpenAI API (para DALL-E)
@@ -396,7 +606,7 @@ class SecurePreferences @Inject constructor(
     }
 
     fun isWeatherEnabled(): Boolean {
-        return encryptedPrefs.getBoolean("WEATHER_ENABLED", false)
+        return encryptedPrefs.getBoolean("WEATHER_ENABLED", true)
     }
 
     // Image Generation toggle
@@ -457,4 +667,5 @@ class SecurePreferences @Inject constructor(
     fun clearDraft(workspaceId: Long) {
         encryptedPrefs.edit().remove("DRAFT_$workspaceId").apply()
     }
+
 }

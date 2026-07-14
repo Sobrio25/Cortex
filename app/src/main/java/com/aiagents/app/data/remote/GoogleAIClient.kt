@@ -74,7 +74,7 @@ class GoogleAIClient(
                             val lastContent = contents.lastOrNull()
                             // Merge with previous user content if possible
                             if (lastContent?.role == "user" && lastContent.parts.all { it.text != null }) {
-                                contents.removeLast()
+                                contents.removeAt(contents.lastIndex)
                                 val mergedParts = lastContent.parts + GooglePart(text = "[$toolName result]: ${msg.content}")
                                 contents.add(GoogleContent(role = "user", parts = mergedParts))
                             } else {
@@ -263,7 +263,7 @@ class GoogleAIClient(
             // Use the reasoning that's not null/empty
             val finalReasoning = reasoningFromTags?.ifBlank { null }
             
-            Log.d("GoogleAIClient", "Response received: content=${cleanContent?.take(100)}, tools=${toolCalls?.size ?: 0}, reasoning=${finalReasoning?.take(100) ?: "null"}")
+            Log.d("GoogleAIClient", "Response received: hasContent=${!cleanContent.isNullOrBlank()}, tools=${toolCalls?.size ?: 0}, hasReasoning=${!finalReasoning.isNullOrBlank()}")
             
             Result.success(ChatResponseWithTools(cleanContent, toolCalls, finishReason, finalReasoning))
         } catch (e: retrofit2.HttpException) {
@@ -449,6 +449,10 @@ class GoogleAIClient(
     }.flowOn(Dispatchers.IO)
 
     override suspend fun getAvailableModels(): Result<List<String>> {
+        return getAvailableModelInfos().map { models -> models.map { it.id } }
+    }
+
+    override suspend fun getAvailableModelInfos(): Result<List<RemoteModelInfo>> {
         return try {
             val response = if (useOAuth) {
                 api.getModelsOAuth("Bearer $oauthToken")
@@ -456,34 +460,30 @@ class GoogleAIClient(
                 api.getModels(apiKey)
             }
             val models = response.models
-                .map { it.name.removePrefix("models/") }
-                .filter { it.startsWith("gemini") }
-                .sortedByDescending { it }
+                .map { model ->
+                    RemoteModelInfo(
+                        id = model.name.removePrefix("models/"),
+                        contextWindow = model.inputTokenLimit?.takeIf { it > 0 }
+                    )
+                }
+                .filter { it.id.startsWith("gemini") }
+                .sortedByDescending { it.id }
             if (models.isNotEmpty()) {
-                Log.d("GoogleAIClient", "Fetched ${models.size} models from API: ${models.take(5)}")
+                Log.d("GoogleAIClient", "Fetched ${models.size} models from API: ${models.take(5).map { it.id }}")
                 Result.success(models)
             } else {
-                Log.w("GoogleAIClient", "API returned no Gemini models, using defaults")
-                Result.success(defaultModels())
+                Log.w("GoogleAIClient", "API returned no Gemini models")
+                Result.failure(IllegalStateException("Google AI no devolvió modelos Gemini"))
             }
         } catch (e: retrofit2.HttpException) {
             val errorBody = e.response()?.errorBody()?.string()
             Log.e("GoogleAIClient", "HTTP ${e.code()} fetching models: $errorBody")
-            Result.success(defaultModels())
+            Result.failure(e)
         } catch (e: Exception) {
-            Log.e("GoogleAIClient", "Error getting models, using defaults", e)
-            Result.success(defaultModels())
+            Log.e("GoogleAIClient", "Error getting models", e)
+            Result.failure(e)
         }
     }
-
-    private fun defaultModels() = listOf(
-        "gemini-3.1-pro-preview",
-        "gemini-3-flash-preview",
-        "gemini-3.1-flash-lite-preview",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite"
-    )
 
     interface GoogleAiApi {
         @POST("models/{model}:generateContent")
@@ -571,5 +571,6 @@ data class GoogleModelsResponse(
 )
 
 data class GoogleModel(
-    val name: String
+    val name: String,
+    val inputTokenLimit: Int? = null
 )

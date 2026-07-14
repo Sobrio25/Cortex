@@ -15,6 +15,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -25,7 +26,11 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.aiagents.app.R
 import com.aiagents.app.domain.model.MoonshotEndpointType
+import com.aiagents.app.domain.model.NvidiaProviderConfig
+import com.aiagents.app.domain.model.OpenCodeVariantType
+import com.aiagents.app.domain.model.OpenAIAuthMode
 import com.aiagents.app.domain.model.ProviderType
+import com.aiagents.app.domain.model.ZAIPlanType
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -93,6 +98,7 @@ fun ProvidersScreen(
                             ProviderType.OPENROUTER -> R.drawable.ic_openrouter
                             ProviderType.GOOGLE_AI -> R.drawable.ic_google_ai
                             ProviderType.OPENAI -> R.drawable.ic_openai
+                            ProviderType.NVIDIA -> R.drawable.ic_nvidia
                             ProviderType.OLLAMA -> R.drawable.ic_ollama
                             ProviderType.MINIMAX -> R.drawable.ic_minimax
                             ProviderType.MOONSHOT -> R.drawable.ic_moonshot
@@ -268,14 +274,36 @@ fun ProviderConfigDialog(
     var baseUrl by remember { mutableStateOf(state.baseUrl) }
     var showApiKey by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf(state.isConfigured) }
+    var showModelSearch by remember(type) { mutableStateOf(false) }
+    var modelQuery by remember(type) { mutableStateOf("") }
+    val filteredModels = remember(state.availableModels, modelQuery) {
+        filterProviderModels(state.availableModels, modelQuery)
+    }
 
     // Estado específico para Moonshot
     var selectedMoonshotEndpoint by remember { mutableStateOf(state.moonshotEndpoint) }
     var moonshotEndpointExpanded by remember { mutableStateOf(false) }
 
-    val needsBaseUrl = type == ProviderType.OLLAMA || type == ProviderType.MOONSHOT
+    // Estado específico para Z.AI
+    var selectedZAIPlan by remember { mutableStateOf(state.zaiPlan) }
+    var zaiPlanExpanded by remember { mutableStateOf(false) }
+
+    // Estado específico para OpenCode
+    var selectedOpenCodeVariant by remember { mutableStateOf(state.openCodeVariant) }
+    var openCodeVariantExpanded by remember { mutableStateOf(false) }
+
+    var selectedOpenAIAuthMode by remember(type) { mutableStateOf(state.openAIAuthMode) }
+
+    val isOpenAI = type == ProviderType.OPENAI
+    val isOpenAIOAuth = isOpenAI && selectedOpenAIAuthMode == OpenAIAuthMode.OAUTH_BACKEND
+    val needsBaseUrl = type == ProviderType.OLLAMA || type == ProviderType.MOONSHOT || isOpenAIOAuth
     val needsApiKey = type != ProviderType.OLLAMA
     val isMoonshot = type == ProviderType.MOONSHOT
+    val isZAI = type == ProviderType.ZAI
+    val isOpenCode = type == ProviderType.OPENCODE
+    val isAnthropic = type == ProviderType.ANTHROPIC
+    val isNvidia = type == ProviderType.NVIDIA
+    val oauthContext = LocalContext.current
 
     // Cargar modelos si el proveedor ya estaba configurado al abrir
     LaunchedEffect(type) {
@@ -283,10 +311,20 @@ fun ProviderConfigDialog(
     }
 
     // Actualizar apiKey cuando cambia el estado o el endpoint de Moonshot
-    LaunchedEffect(state.apiKey, state.moonshotEndpoint) {
+    LaunchedEffect(
+        state.apiKey,
+        state.baseUrl,
+        state.moonshotEndpoint,
+        state.zaiPlan,
+        state.openCodeVariant,
+        state.openAIAuthMode
+    ) {
         apiKey = state.apiKey
         baseUrl = state.baseUrl
         selectedMoonshotEndpoint = state.moonshotEndpoint
+        selectedZAIPlan = state.zaiPlan
+        selectedOpenCodeVariant = state.openCodeVariant
+        selectedOpenAIAuthMode = state.openAIAuthMode
     }
 
     AlertDialog(
@@ -338,6 +376,131 @@ fun ProviderConfigDialog(
                     }
                 }
 
+                // ── Selector de plan para Z.AI ────────────────────────────
+                if (isZAI) {
+                    item {
+                        ExposedDropdownMenuBox(
+                            expanded = zaiPlanExpanded,
+                            onExpandedChange = { zaiPlanExpanded = it }
+                        ) {
+                            OutlinedTextField(
+                                value = selectedZAIPlan.displayName,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Plan") },
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = zaiPlanExpanded)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor()
+                            )
+                            ExposedDropdownMenu(
+                                expanded = zaiPlanExpanded,
+                                onDismissRequest = { zaiPlanExpanded = false }
+                            ) {
+                                ZAIPlanType.entries.forEach { plan ->
+                                    DropdownMenuItem(
+                                        text = { Text(plan.displayName) },
+                                        onClick = {
+                                            selectedZAIPlan = plan
+                                            zaiPlanExpanded = false
+                                            viewModel.setZAIPlan(plan)
+                                            saved = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── Selector de variante para OpenCode ─────────────────────
+                if (isOpenCode) {
+                    item {
+                        ExposedDropdownMenuBox(
+                            expanded = openCodeVariantExpanded,
+                            onExpandedChange = { openCodeVariantExpanded = it }
+                        ) {
+                            OutlinedTextField(
+                                value = selectedOpenCodeVariant.displayName,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Variante") },
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = openCodeVariantExpanded)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor()
+                            )
+                            ExposedDropdownMenu(
+                                expanded = openCodeVariantExpanded,
+                                onDismissRequest = { openCodeVariantExpanded = false }
+                            ) {
+                                OpenCodeVariantType.entries.forEach { variant ->
+                                    DropdownMenuItem(
+                                        text = { Text(variant.displayName) },
+                                        onClick = {
+                                            selectedOpenCodeVariant = variant
+                                            openCodeVariantExpanded = false
+                                            viewModel.setOpenCodeVariant(variant)
+                                            saved = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (isOpenAI) {
+                    item {
+                        Text("Método de autenticación", style = MaterialTheme.typography.labelLarge)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = selectedOpenAIAuthMode == OpenAIAuthMode.API_KEY,
+                                onClick = {
+                                    selectedOpenAIAuthMode = OpenAIAuthMode.API_KEY
+                                    viewModel.setOpenAIAuthMode(OpenAIAuthMode.API_KEY)
+                                    saved = false
+                                },
+                                label = { Text("API key") },
+                                modifier = Modifier.weight(1f)
+                            )
+                            FilterChip(
+                                selected = selectedOpenAIAuthMode == OpenAIAuthMode.OAUTH_BACKEND,
+                                onClick = {
+                                    selectedOpenAIAuthMode = OpenAIAuthMode.OAUTH_BACKEND
+                                    viewModel.setOpenAIAuthMode(OpenAIAuthMode.OAUTH_BACKEND)
+                                    saved = false
+                                },
+                                label = { Text("OAuth") },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer
+                            )
+                        ) {
+                            Text(
+                                if (isOpenAIOAuth) {
+                                    "OAuth mediante backend de Cortex. El backend conserva la API key de OpenAI, realiza el inicio de sesión y la renovación; el teléfono solo guarda el token de sesión."
+                                } else {
+                                    "Conexión directa a la API oficial. OpenAI autentica esta API con una API key; el inicio de sesión de ChatGPT no sirve como credencial de inferencia."
+                                },
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                    }
+                }
+
                 // ── Sección de credenciales ──────────────────────────────
                 if (needsApiKey) {
                     item {
@@ -348,11 +511,21 @@ fun ProviderConfigDialog(
                                 saved = false
                                 if (isMoonshot) {
                                     viewModel.updateMoonshotApiKey(selectedMoonshotEndpoint, it)
+                                } else if (isZAI) {
+                                    viewModel.updateZAIApiKey(selectedZAIPlan, it)
+                                } else if (isOpenCode) {
+                                    viewModel.updateOpenCodeApiKey(selectedOpenCodeVariant, it)
                                 }
                             },
                             label = {
                                 if (isMoonshot) {
                                     Text("API Key - ${selectedMoonshotEndpoint.displayName}")
+                                } else if (isZAI) {
+                                    Text("API Key - ${selectedZAIPlan.displayName}")
+                                } else if (isOpenCode) {
+                                    Text("API Key - ${selectedOpenCodeVariant.displayName}")
+                                } else if (isOpenAIOAuth) {
+                                    Text("Token de sesión OAuth (opcional)")
                                 } else {
                                     Text("API Key")
                                 }
@@ -375,20 +548,97 @@ fun ProviderConfigDialog(
                     }
                 }
 
+                if (isOpenAI && !isOpenAIOAuth) {
+                    item {
+                        OutlinedButton(
+                            onClick = {
+                                val intent = android.content.Intent(
+                                    android.content.Intent.ACTION_VIEW,
+                                    android.net.Uri.parse("https://platform.openai.com/api-keys")
+                                )
+                                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                oauthContext.startActivity(intent)
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.OpenInBrowser, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Obtener API key de OpenAI")
+                        }
+                    }
+                }
+
+                if (isNvidia) {
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer
+                            )
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text(
+                                    "API gratuita de NVIDIA Build",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "Usa la key de NVIDIA Endpoints que empieza con nvapi-. No uses una key de NGC destinada a descargar contenedores.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        OutlinedButton(
+                            onClick = {
+                                val intent = android.content.Intent(
+                                    android.content.Intent.ACTION_VIEW,
+                                    android.net.Uri.parse(NvidiaProviderConfig.API_KEYS_URL)
+                                )
+                                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                oauthContext.startActivity(intent)
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.OpenInBrowser, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Obtener API key gratuita")
+                        }
+                    }
+                }
+
                 if (needsBaseUrl && !isMoonshot) {
                     item {
                         OutlinedTextField(
                             value = baseUrl,
-                            onValueChange = { baseUrl = it },
-                            label = { Text("URL Base") },
+                            onValueChange = {
+                                baseUrl = it
+                                saved = false
+                            },
+                            label = { Text(if (isOpenAIOAuth) "URL HTTPS del backend OAuth" else "URL Base") },
                             modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text(viewModel.getDefaultBaseUrl(type)) },
+                            placeholder = {
+                                Text(
+                                    if (isOpenAIOAuth) "https://tu-backend.example/v1/"
+                                    else viewModel.getDefaultBaseUrl(type)
+                                )
+                            },
                             singleLine = true
                         )
                         Text(
-                            "Dejar vacío para usar la URL por defecto",
+                            if (isOpenAIOAuth) {
+                                "Debe ser una URL HTTPS compatible con OpenAI: /models, /chat/completions y, para web_search, /responses."
+                            } else {
+                                "Dejar vacío para usar la URL por defecto"
+                            },
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline
+                            color = if (isOpenAIOAuth && baseUrl.isNotBlank() && !viewModel.isValidOpenAIOAuthBackendUrl(baseUrl)) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.outline
+                            }
                         )
                     }
                 }
@@ -421,6 +671,34 @@ fun ProviderConfigDialog(
                     }
                 }
 
+                if (isZAI) {
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text(
+                                    "Plan seleccionado:",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    selectedZAIPlan.baseUrl,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    "Cada plan requiere su propia API key.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
                 if (type == ProviderType.OPENCODE) {
                     item {
                         Card(
@@ -436,9 +714,19 @@ fun ProviderConfigDialog(
                                 )
                                 Text(
                                     "Pay-as-you-go con \$20 de saldo inicial.\n" +
-                                    "Incluye modelos gratuitos (Big Pickle, GPT 5 Nano).\n" +
-                                    "Modelos: opencode/claude-sonnet-4, opencode/gpt-5.3-codex, etc.\n" +
-                                    "Plan GO: usa prefijo opencode/ en el nombre del modelo.",
+                                    "La lista de modelos se consulta directamente a OpenCode.\n" +
+                                    "La app usa el ID directo del modelo, sin el prefijo opencode/.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "OpenCode Go:",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    "La lista depende de tu suscripción y se actualiza desde OpenCode.\n" +
+                                    "La app usa el ID directo, sin el prefijo opencode-go/.",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
@@ -471,6 +759,33 @@ fun ProviderConfigDialog(
                                 )
                             }
                         }
+                    }
+                }
+
+                // Anthropic: open console to get API key
+                if (isAnthropic) {
+                    item {
+                        OutlinedButton(
+                            onClick = {
+                                val intent = android.content.Intent(
+                                    android.content.Intent.ACTION_VIEW,
+                                    android.net.Uri.parse("https://console.anthropic.com/settings/keys")
+                                )
+                                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                oauthContext.startActivity(intent)
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.OpenInBrowser, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Obtener API Key en Anthropic")
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Se abre la consola de Anthropic. Crea una API key, cópiala y pégala en el campo de arriba.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
 
@@ -528,21 +843,22 @@ fun ProviderConfigDialog(
                             onClick = {
                                 if (isMoonshot) {
                                     viewModel.saveMoonshotConfig(selectedMoonshotEndpoint) { saved = true }
+                                } else if (isZAI) {
+                                    viewModel.saveZAIConfig(selectedZAIPlan) { saved = true }
+                                } else if (isOpenCode) {
+                                    viewModel.saveOpenCodeConfig(selectedOpenCodeVariant) { saved = true }
                                 } else {
                                     viewModel.updateApiKey(type, apiKey)
-                                    // Para OpenAI, usar siempre la URL por defecto
-                                    val baseUrlToSave = if (type == ProviderType.OPENAI) {
-                                        viewModel.getDefaultBaseUrl(type)
-                                    } else {
-                                        baseUrl
-                                    }
-                                    viewModel.updateBaseUrl(type, baseUrlToSave)
+                                    viewModel.updateBaseUrl(type, baseUrl)
                                     viewModel.saveProviderConfig(type) { saved = true }
                                 }
                             },
                             enabled = when {
                                 type == ProviderType.GOOGLE_AI -> true // puede usar OAuth sin API key
                                 isMoonshot -> apiKey.isNotBlank() || state.moonshotApiKeys.values.any { it.isNotBlank() }
+                                isZAI -> apiKey.isNotBlank() || state.zaiApiKeys.values.any { it.isNotBlank() }
+                                isOpenCode -> apiKey.isNotBlank() || state.openCodeApiKeys.values.any { it.isNotBlank() }
+                                isOpenAIOAuth -> viewModel.isValidOpenAIOAuthBackendUrl(baseUrl)
                                 needsApiKey -> apiKey.isNotBlank()
                                 else -> true
                             },
@@ -570,15 +886,44 @@ fun ProviderConfigDialog(
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.primary
                             )
-                            val currentState = providerStates[type]
-                            if (currentState?.isLoading == true) {
-                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                            } else {
-                                IconButton(
-                                    onClick = { viewModel.reloadModels(type) },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(Icons.Default.Refresh, contentDescription = "Recargar modelos", modifier = Modifier.size(18.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (state.availableModels.size >= MODEL_SEARCH_THRESHOLD || modelQuery.isNotEmpty()) {
+                                    IconButton(
+                                        onClick = {
+                                            showModelSearch = !showModelSearch
+                                            if (!showModelSearch) modelQuery = ""
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            if (showModelSearch) Icons.Default.Close else Icons.Default.Search,
+                                            contentDescription = if (showModelSearch) {
+                                                "Cerrar búsqueda"
+                                            } else {
+                                                "Buscar modelos"
+                                            },
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                                if (state.isLoading) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier
+                                            .padding(horizontal = 7.dp)
+                                            .size(18.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    IconButton(
+                                        onClick = { viewModel.reloadModels(type) },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Refresh,
+                                            contentDescription = "Actualizar catálogo",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -587,20 +932,103 @@ fun ProviderConfigDialog(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        state.catalogSource?.let { source ->
+                            Text(
+                                buildString {
+                                    append(source.displayName)
+                                    append(" · ")
+                                    append(state.availableModels.size)
+                                    append(if (state.availableModels.size == 1) " modelo" else " modelos")
+                                    if (state.isLoading) append(" · actualizando…")
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    state.catalogError?.let { error ->
+                        item {
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(10.dp),
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    Icon(
+                                        Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        if (state.availableModels.isNotEmpty()) {
+                                            "$error. Se conserva la última lista disponible."
+                                        } else {
+                                            error
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (showModelSearch && state.availableModels.isNotEmpty()) {
+                        item {
+                            OutlinedTextField(
+                                value = modelQuery,
+                                onValueChange = { modelQuery = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Buscar modelo") },
+                                placeholder = { Text("Nombre o familia") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Search, contentDescription = null)
+                                },
+                                trailingIcon = {
+                                    if (modelQuery.isNotEmpty()) {
+                                        IconButton(onClick = { modelQuery = "" }) {
+                                            Icon(Icons.Default.Clear, contentDescription = "Limpiar búsqueda")
+                                        }
+                                    }
+                                },
+                                singleLine = true
+                            )
+                        }
                     }
 
                     val models = state.availableModels
-                    if (models.isEmpty() && state.isLoading == false) {
+                    if (models.isEmpty() && !state.isLoading) {
                         item {
                             Text(
-                                "No hay modelos cargados. Toca ↺ para cargar.",
+                                if (state.catalogError == null) {
+                                    "El proveedor no anunció modelos. Toca ↺ para volver a consultar."
+                                } else {
+                                    "No hay un catálogo guardado para este proveedor."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+                        }
+                    } else if (modelQuery.isNotBlank() && filteredModels.isEmpty()) {
+                        item {
+                            Text(
+                                "No hay modelos que coincidan con “${modelQuery.trim()}”.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.outline,
                                 modifier = Modifier.padding(vertical = 4.dp)
                             )
                         }
                     } else {
-                        items(models) { modelId ->
+                        items(filteredModels, key = { it }) { modelId ->
                             val isSelected = selectedModels.contains("${type.name}|$modelId")
                             Row(
                                 modifier = Modifier

@@ -1,16 +1,75 @@
 package com.aiagents.app.presentation.local_models
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SuggestionChip
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.aiagents.app.data.repository.HFBrowsableFile
@@ -23,142 +82,164 @@ fun HuggingFaceBrowseSheet(
     onModelAdded: () -> Unit,
     viewModel: HuggingFaceBrowseViewModel = hiltViewModel()
 ) {
+    val searchQuery by viewModel.searchQuery.collectAsState()
     val browseResults by viewModel.browseResults.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val isLoadingMore by viewModel.isLoadingMore.collectAsState()
+    val hasMore by viewModel.hasMore.collectAsState()
+    val hasSearched by viewModel.hasSearched.collectAsState()
+    val loadingFileRepos by viewModel.loadingFileRepos.collectAsState()
+    val fileErrors by viewModel.fileErrors.collectAsState()
+    val addedFileKeys by viewModel.addedFileKeys.collectAsState()
     val error by viewModel.error.collectAsState()
-    val selectedAuthor by viewModel.selectedAuthor.collectAsState()
-    val customUrl by viewModel.customUrl.collectAsState()
     val addedMessage by viewModel.addedMessage.collectAsState()
 
-    var isPasteUrlMode by remember { mutableStateOf(false) }
-
+    var compatibleOnly by rememberSaveable { mutableStateOf(false) }
+    val visibleResults = remember(browseResults, compatibleOnly) {
+        if (compatibleOnly) browseResults.filter { it.isLocallyCompatible } else browseResults
+    }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    // Notify parent when model is added
     LaunchedEffect(addedMessage) {
-        if (addedMessage != null) {
-            onModelAdded()
-        }
+        if (addedMessage != null) onModelAdded()
     }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        modifier = Modifier.fillMaxHeight(0.85f)
+        modifier = Modifier.fillMaxHeight(0.95f)
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
                 .padding(horizontal = 16.dp)
         ) {
-            // Title
-            Text(
-                text = "Buscar en HuggingFace",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
-
-            // Filter chips
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                FilterChip(
-                    selected = !isPasteUrlMode && selectedAuthor == "litert-community",
-                    onClick = {
-                        isPasteUrlMode = false
-                        viewModel.selectAuthor("litert-community")
-                    },
-                    label = { Text("litert-community") },
-                    leadingIcon = if (!isPasteUrlMode && selectedAuthor == "litert-community") {
-                        { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                    } else null
-                )
-                FilterChip(
-                    selected = !isPasteUrlMode && selectedAuthor == "google",
-                    onClick = {
-                        isPasteUrlMode = false
-                        viewModel.selectAuthor("google")
-                    },
-                    label = { Text("google") },
-                    leadingIcon = if (!isPasteUrlMode && selectedAuthor == "google") {
-                        { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                    } else null
-                )
-                FilterChip(
-                    selected = isPasteUrlMode,
-                    onClick = {
-                        isPasteUrlMode = true
-                        viewModel.clearError()
-                    },
-                    label = { Text("Pegar URL") },
-                    leadingIcon = if (isPasteUrlMode) {
-                        { Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                    } else null
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Modelos de Hugging Face",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Busca cualquier repositorio del Hub",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, contentDescription = "Cerrar")
+                }
             }
 
             Spacer(Modifier.height(12.dp))
 
-            // URL input (only visible in paste mode)
-            if (isPasteUrlMode) {
-                OutlinedTextField(
-                    value = customUrl,
-                    onValueChange = { viewModel.setCustomUrl(it) },
-                    label = { Text("URL de HuggingFace") },
-                    placeholder = { Text("huggingface.co/org/model") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    trailingIcon = {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = viewModel::setSearchQuery,
+                label = { Text("Buscar modelos") },
+                placeholder = { Text("Gemma, Qwen, organización/modelo o URL") },
+                leadingIcon = {
+                    Icon(Icons.Default.Search, contentDescription = null)
+                },
+                trailingIcon = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (searchQuery.isNotBlank()) {
+                            IconButton(onClick = viewModel::clearSearch) {
+                                Icon(Icons.Default.Clear, contentDescription = "Borrar búsqueda")
+                            }
+                        }
                         IconButton(
-                            onClick = { viewModel.resolveUrl(customUrl) },
-                            enabled = customUrl.isNotBlank() && !isLoading
+                            onClick = viewModel::submitSearch,
+                            enabled = searchQuery.isNotBlank() && !isLoading
                         ) {
                             Icon(Icons.Default.Search, contentDescription = "Buscar")
                         }
                     }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { viewModel.submitSearch() })
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SuggestionChip(
+                    onClick = { viewModel.selectSuggestion("litertlm") },
+                    label = { Text("LiteRT-LM") }
                 )
-                Spacer(Modifier.height(12.dp))
+                SuggestionChip(
+                    onClick = { viewModel.selectSuggestion("mediapipe llm") },
+                    label = { Text("MediaPipe") }
+                )
+                SuggestionChip(
+                    onClick = { viewModel.selectSuggestion("Gemma") },
+                    label = { Text("Gemma") }
+                )
+                SuggestionChip(
+                    onClick = { viewModel.selectSuggestion("Qwen") },
+                    label = { Text("Qwen") }
+                )
             }
 
-            // Loading indicator
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilterChip(
+                    selected = compatibleOnly,
+                    onClick = { compatibleOnly = !compatibleOnly },
+                    label = { Text("Solo compatibles") },
+                    leadingIcon = if (compatibleOnly) {
+                        {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    } else null
+                )
+                Spacer(Modifier.weight(1f))
+                if (hasSearched && !isLoading) {
+                    Text(
+                        text = if (compatibleOnly) {
+                            "${visibleResults.size} de ${browseResults.size}"
+                        } else {
+                            "${browseResults.size} resultados"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
             if (isLoading) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(8.dp))
             }
 
-            // Error message
-            error?.let { errorMsg ->
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.Warning,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = errorMsg,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    }
-                }
+            error?.let { errorMessage ->
+                ErrorCard(
+                    message = errorMessage,
+                    onRetry = viewModel::submitSearch,
+                    onDismiss = viewModel::clearError
+                )
                 Spacer(Modifier.height(8.dp))
             }
 
-            // Added message
-            addedMessage?.let { msg ->
+            addedMessage?.let { message ->
                 Card(
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.primaryContainer
@@ -177,12 +258,12 @@ fun HuggingFaceBrowseSheet(
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = msg,
+                            text = message,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.weight(1f)
                         )
-                        TextButton(onClick = { viewModel.clearAddedMessage() }) {
+                        TextButton(onClick = viewModel::clearAddedMessage) {
                             Text("OK")
                         }
                     }
@@ -190,21 +271,177 @@ fun HuggingFaceBrowseSheet(
                 Spacer(Modifier.height(8.dp))
             }
 
-            // Results
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(bottom = 32.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(browseResults) { model ->
-                    BrowsableModelCard(
-                        model = model,
-                        onAddFile = { file ->
-                            viewModel.addModelToLibrary(model, file)
-                        },
-                        formatBytes = ::formatBrowseBytes
-                    )
+            Box(modifier = Modifier.weight(1f)) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 32.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    when {
+                        !hasSearched && searchQuery.isBlank() -> {
+                            item {
+                                BrowseHintCard()
+                            }
+                        }
+
+                        !isLoading && visibleResults.isEmpty() -> {
+                            item {
+                                EmptyResultsCard(
+                                    compatibleOnly = compatibleOnly,
+                                    hasUnfilteredResults = browseResults.isNotEmpty()
+                                )
+                            }
+                        }
+                    }
+
+                    items(visibleResults, key = { it.repoId }) { model ->
+                        BrowsableModelCard(
+                            model = model,
+                            isLoadingFiles = model.repoId in loadingFileRepos,
+                            fileError = fileErrors[model.repoId],
+                            addedFileKeys = addedFileKeys,
+                            fileKey = { file -> viewModel.fileKey(model, file) },
+                            onLoadFiles = { viewModel.loadModelFiles(model) },
+                            onAddFile = { file -> viewModel.addModelToLibrary(model, file) }
+                        )
+                    }
+
+                    if (hasMore) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isLoadingMore) {
+                                    CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                                } else {
+                                    OutlinedButton(onClick = viewModel::loadNextPage) {
+                                        Text("Cargar más resultados")
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BrowseHintCard() {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                Icons.Default.Public,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(36.dp)
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "Busca en todo el Hub",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Mostraremos cualquier modelo, pero solo podrás agregar bundles detectados para LiteRT-LM o MediaPipe. La compatibilidad final también depende del dispositivo y del runtime.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyResultsCard(
+    compatibleOnly: Boolean,
+    hasUnfilteredResults: Boolean
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                Icons.Default.Search,
+                contentDescription = null,
+                modifier = Modifier.size(32.dp),
+                tint = MaterialTheme.colorScheme.outline
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = if (compatibleOnly && hasUnfilteredResults) {
+                    "No hay bundles locales compatibles en estos resultados"
+                } else {
+                    "No encontramos modelos"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = if (compatibleOnly && hasUnfilteredResults) {
+                    "Desactiva “Solo compatibles” para ver todos los repositorios."
+                } else {
+                    "Prueba con otro nombre o pega la URL completa del repositorio."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun ErrorCard(
+    message: String,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.Warning,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onRetry) {
+                Icon(Icons.Default.Refresh, contentDescription = "Reintentar")
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Default.Close, contentDescription = "Ocultar error")
             }
         }
     }
@@ -213,28 +450,42 @@ fun HuggingFaceBrowseSheet(
 @Composable
 private fun BrowsableModelCard(
     model: HFBrowsableModel,
-    onAddFile: (HFBrowsableFile) -> Unit,
-    formatBytes: (Long) -> String
+    isLoadingFiles: Boolean,
+    fileError: String?,
+    addedFileKeys: Set<String>,
+    fileKey: (HFBrowsableFile) -> String,
+    onLoadFiles: () -> Unit,
+    onAddFile: (HFBrowsableFile) -> Unit
 ) {
+    var expanded by rememberSaveable(model.repoId) { mutableStateOf(false) }
+    val uriHandler = LocalUriHandler.current
+
     Card(
+        onClick = {
+            expanded = !expanded
+            if (expanded && model.isLocallyCompatible) onLoadFiles()
+        },
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp)
+                .padding(14.dp)
         ) {
-            // Model header
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.Top
             ) {
                 Icon(
                     imageVector = Icons.Default.Memory,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(28.dp)
+                    tint = if (model.isLocallyCompatible) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.outline
+                    },
+                    modifier = Modifier.size(30.dp)
                 )
                 Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
@@ -249,110 +500,252 @@ private fun BrowsableModelCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                if (model.downloads > 0) {
-                    AssistChip(
-                        onClick = {},
-                        label = {
-                            Text(
-                                text = formatDownloads(model.downloads),
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.Download,
-                                contentDescription = null,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                    )
-                }
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Contraer" else "Ver detalles"
+                )
             }
 
-            if (model.gated) {
-                Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 AssistChip(
                     onClick = {},
-                    label = { Text("Requiere token HF", style = MaterialTheme.typography.labelSmall) },
+                    label = {
+                        Text(
+                            if (model.isLocallyCompatible) "Formato local detectado" else "No compatible localmente",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    },
                     leadingIcon = {
                         Icon(
-                            Icons.Default.Lock,
+                            if (model.isLocallyCompatible) Icons.Default.CheckCircle else Icons.Default.Warning,
                             contentDescription = null,
                             modifier = Modifier.size(14.dp)
                         )
                     }
                 )
+                if (model.gated || model.isPrivate) {
+                    AssistChip(
+                        onClick = {},
+                        label = {
+                            Text(
+                                if (model.isPrivate) "Privado" else "Requiere acceso",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(14.dp))
+                        }
+                    )
+                }
+                if (!model.libraryName.isNullOrBlank()) {
+                    AssistChip(
+                        onClick = {},
+                        label = { Text(model.libraryName, style = MaterialTheme.typography.labelSmall) }
+                    )
+                }
             }
 
-            // Compatible files
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = "Archivos compatibles:",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (model.downloads > 0) {
+                    StatLabel(
+                        icon = Icons.Default.Download,
+                        text = formatDownloads(model.downloads)
+                    )
+                }
+                if (model.likes > 0) {
+                    StatLabel(
+                        icon = Icons.Default.Favorite,
+                        text = formatDownloads(model.likes.toLong())
+                    )
+                }
+                if (model.files.isNotEmpty()) {
+                    Text(
+                        text = "${model.files.size} archivo${if (model.files.size == 1) "" else "s"}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
 
-            model.files.forEach { file ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            if (expanded) {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+
+                if (isLoadingFiles) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text(
+                        text = "Consultando tamaños y revisión…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+
+                fileError?.let { message ->
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                }
+
+                if (model.files.isEmpty()) {
+                    Text(
+                        text = "Este repositorio no publica un bundle LLM que esta app pueda cargar. Los pesos Transformers, GGUF, Safetensors y tareas de visión no son modelos locales válidos para este runtime.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Text(
+                        text = "Bundles detectados",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    model.files.forEach { file ->
+                        CompatibleFileRow(
+                            file = file,
+                            isAdded = fileKey(file) in addedFileKeys,
+                            enabled = !isLoadingFiles,
+                            onAdd = { onAddFile(file) }
+                        )
+                    }
+                    Text(
+                        text = "“Formato detectado” no garantiza que el modelo quepa en RAM ni que una variante específica de hardware funcione en este dispositivo.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
+
+                TextButton(
+                    onClick = { uriHandler.openUri("https://huggingface.co/${model.repoId}") },
+                    modifier = Modifier.align(Alignment.End)
                 ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.InsertDriveFile,
+                        Icons.AutoMirrored.Filled.OpenInNew,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(16.dp)
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = file.fileName,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Medium
-                        )
-                        if (file.sizeBytes > 0) {
-                            Text(
-                                text = formatBytes(file.sizeBytes),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    FilledTonalButton(
-                        onClick = { onAddFile(file) },
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "Agregar",
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text("Agregar", style = MaterialTheme.typography.labelMedium)
-                    }
+                    Spacer(Modifier.width(6.dp))
+                    Text("Ver repositorio")
                 }
             }
         }
     }
 }
 
+@Composable
+private fun CompatibleFileRow(
+    file: HFBrowsableFile,
+    isAdded: Boolean,
+    enabled: Boolean,
+    onAdd: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.InsertDriveFile,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = file.fileName,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = buildString {
+                        append(file.format.displayName)
+                        append(" · ")
+                        append(if (file.sizeBytes > 0) formatBrowseBytes(file.sizeBytes) else "tamaño desconocido")
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            FilledTonalButton(
+                onClick = onAdd,
+                enabled = enabled && !isAdded,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+                Icon(
+                    imageVector = if (isAdded) Icons.Default.Check else Icons.Default.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    if (isAdded) "Agregado" else "Agregar",
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+        }
+
+        file.deviceHint?.let { hint ->
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.padding(start = 26.dp, top = 2.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatLabel(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            icon,
+            contentDescription = null,
+            modifier = Modifier.size(14.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.width(3.dp))
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
 private fun formatBrowseBytes(bytes: Long): String {
-    val gb = bytes.toFloat() / (1024 * 1024 * 1024)
-    val mb = bytes.toFloat() / (1024 * 1024)
+    val gb = bytes.toDouble() / (1024.0 * 1024.0 * 1024.0)
+    val mb = bytes.toDouble() / (1024.0 * 1024.0)
     return when {
-        gb >= 1 -> "%.1f GB".format(gb)
+        gb >= 1 -> "%.2f GB".format(gb)
         mb >= 1 -> "%.0f MB".format(mb)
         else -> "$bytes B"
     }
 }
 
-private fun formatDownloads(downloads: Int): String {
-    return when {
-        downloads >= 1_000_000 -> "%.1fM".format(downloads / 1_000_000f)
-        downloads >= 1_000 -> "%.1fK".format(downloads / 1_000f)
-        else -> "$downloads"
-    }
+private fun formatDownloads(downloads: Long): String = when {
+    downloads >= 1_000_000 -> "%.1f M".format(downloads / 1_000_000f)
+    downloads >= 1_000 -> "%.1f mil".format(downloads / 1_000f)
+    else -> downloads.toString()
 }

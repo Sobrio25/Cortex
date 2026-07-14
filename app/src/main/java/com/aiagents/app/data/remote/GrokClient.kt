@@ -161,25 +161,26 @@ class GrokClient(
         )
     }
 
-    override suspend fun getAvailableModels(): Result<List<String>> = Result.success(
-        listOf(
-            "grok-4",
-            "grok-4.1",
-            "grok-4.1-fast",
-            "grok-3",
-            "grok-3-mini",
-            "grok-2-1212",
-            "grok-2-vision-1212"
-        )
-    )
-    // Modelos Grok/xAI disponibles a febrero 2026:
-    // - grok-4: Flagship model, reasoning, 256K contexto
-    // - grok-4.1: Advanced reasoning, 65% less hallucinations, 256K contexto
-    // - grok-4.1-fast: Fast version of 4.1, 256K contexto
-    // - grok-3: Real-time research, transparent reasoning, 131K contexto
-    // - grok-3-mini: Lightweight, cost-efficient, 32K contexto
-    // - grok-2-1212: Balanced reasoning, 131K contexto
-    // - grok-2-vision-1212: Vision capabilities, 131K contexto
+    override suspend fun getAvailableModels(): Result<List<String>> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("${baseUrl.trimEnd('/')}/v1/models")
+                .addHeader("Authorization", "Bearer $apiKey")
+                .get()
+                .build()
+            okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(IOException("API error: ${response.code}"))
+                }
+                val body = response.body?.string()
+                    ?: return@withContext Result.failure(IOException("Empty response"))
+                Result.success(gson.fromJson(body, ModelsResponse::class.java).data.map { it.id })
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting models", e)
+            Result.failure(e)
+        }
+    }
 
     private fun buildJsonRequest(
         model: String,

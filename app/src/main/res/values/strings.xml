@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">AI Agents</string>
+    <string name="app_name">Cortex</string>
     <string name="agents">Agents</string>
     <string name="providers">Providers</string>
     <string name="settings">Settings</string>
@@ -34,7 +34,7 @@
     <string name="error_connection">Connection error</string>
 
     <!-- Onboarding -->
-    <string name="onboarding_welcome_title">Welcome to AI Agents</string>
+    <string name="onboarding_welcome_title">Welcome to Cortex</string>
     <string name="onboarding_cortex_intro">Hi! I\'m Cortex, your AI coordinator. I\'ll help you set everything up.</string>
     <string name="onboarding_select_language">Select your language</string>
     <string name="onboarding_your_name">What\'s your name?</string>
@@ -56,7 +56,7 @@
     <string name="onboarding_mcp_desc">Extend your agents with powerful tools like web search, file management, GitHub, Notion, and more through MCP servers.</string>
     <string name="onboarding_configure_mcp">Configure MCP</string>
 
-    <string name="onboarding_agents_title">AI Agents</string>
+    <string name="onboarding_agents_title">Cortex Agents</string>
     <string name="onboarding_agents_desc">Create specialized AI agents with unique personalities, roles, and capabilities. Each agent can use different models and tools.</string>
     <string name="onboarding_create_agents">Create Agents</string>
 
@@ -88,14 +88,23 @@
     <string name="onboarding_ready_desc">You can always configure these settings later from the settings menu. Enjoy!</string>
 
     <!-- Settings -->
-    <string name="settings_agents_title">Agents</string>
-    <string name="settings_agents_subtitle">Manage agents and personality</string>
-    <string name="settings_providers_title">Providers</string>
-    <string name="settings_providers_subtitle">API keys and models</string>
-    <string name="settings_local_models_title">Local Models</string>
-    <string name="settings_local_models_subtitle">On-device models with MediaPipe</string>
-    <string name="settings_mcp_title">Skills &amp; MCP</string>
-    <string name="settings_mcp_subtitle">Tool servers</string>
-    <string name="settings_memory_title">Memory</string>
-    <string name="settings_memory_subtitle">Cortex persistent memory</string>
+    <string name="settings_title">Settings</string>
+    <string name="settings_back">Back</string>
+    <string name="settings_section_ai">Models &amp; AI</string>
+    <string name="settings_section_personalization">Personalization</string>
+    <string name="settings_section_integrations">Tools &amp; integrations</string>
+    <string name="settings_agents_title">Agents &amp; orchestration</string>
+    <string name="settings_agents_subtitle">Personality, roles, and delegation</string>
+    <string name="settings_providers_title">AI providers</string>
+    <string name="settings_providers_subtitle">Accounts, API keys, and cloud models</string>
+    <string name="settings_local_models_title">Local models</string>
+    <string name="settings_local_models_subtitle">Find, download, and run models on this device</string>
+    <string name="settings_mcp_title">Tools &amp; services</string>
+    <string name="settings_mcp_subtitle">MCP, web search, external services, and API keys</string>
+    <string name="settings_memory_title">Identity &amp; memory</string>
+    <string name="settings_memory_subtitle">SOUL.md, USER.md, MEMORY.md, and historical archive</string>
+    <string name="settings_skills_title">Skills</string>
+    <string name="settings_skills_subtitle">Library, creation, and automatic suggestions</string>
+    <string name="settings_google_workspace_title">Google Workspace</string>
+    <string name="settings_google_workspace_subtitle">Drive, Docs, Gmail, and Calendar with user permission</string>
 </resources>

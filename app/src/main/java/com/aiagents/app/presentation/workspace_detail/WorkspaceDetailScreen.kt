@@ -82,6 +82,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.aiagents.app.data.model.PermissionLevel
+import com.aiagents.app.data.model.SubagentExecutionEntity
+import com.aiagents.app.data.repository.ContextCompactionPolicy
 import com.aiagents.app.data.terminal.CommandRiskLevel
 import com.aiagents.app.data.terminal.PermissionRequest
 import com.aiagents.app.domain.model.Agent
@@ -149,6 +151,7 @@ fun WorkspaceDetailScreen(
     val contextInfo by viewModel.contextInfo.collectAsState()
     val workingAgents by viewModel.workingAgents.collectAsState()
     val agentStatuses by viewModel.agentStatuses.collectAsState()
+    val subagentExecutions by viewModel.subagentExecutions.collectAsState()
     val context = LocalContext.current
 
     // Sync conversationId from navigation into ViewModel
@@ -477,7 +480,7 @@ fun WorkspaceDetailScreen(
             when (uiState.activeTab) {
                 WorkspaceTab.Chat -> {
                     ChatContent(
-                        messages = messages,
+                        messages = ContextCompactionPolicy.visibleHistory(messages),
                         inputText = uiState.inputText,
                         isLoading = uiState.isLoading,
                         attachedFiles = uiState.attachedFiles,
@@ -495,10 +498,14 @@ fun WorkspaceDetailScreen(
                         isSTTProcessing = isSTTProcessing,
                         workingAgents = workingAgents,
                         agentStatuses = agentStatuses,
+                        subagentExecutions = subagentExecutions.filter {
+                            it.status in setOf("QUEUED", "RUNNING", "WAITING_PERMISSION")
+                        },
                         todos = uiState.todos,
                         onInputChange = { viewModel.updateInputText(it) },
                         onSend = { viewModel.sendMessage() },
                         onStop = { viewModel.stopAgent() },
+                        onCancelSubagent = viewModel::cancelSubagent,
                         onAttachFiles = {
                             val supportedTypes = viewModel.getSupportedFileTypes()
                             if (supportedTypes.isNotEmpty()) {
@@ -849,10 +856,12 @@ fun ChatContent(
     isSTTProcessing: Boolean = false,
     workingAgents: List<String> = emptyList(),
     agentStatuses: Map<String, String> = emptyMap(),
+    subagentExecutions: List<SubagentExecutionEntity> = emptyList(),
     todos: List<com.aiagents.app.data.model.TodoEntity> = emptyList(),
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit = {},
+    onCancelSubagent: (String) -> Unit = {},
     onAttachFiles: () -> Unit,
     onRemoveAttachedFile: (Int) -> Unit,
     onStartListening: () -> Unit = {},
@@ -998,7 +1007,12 @@ fun ChatContent(
                                     .fillMaxWidth()
                                     .padding(start = 16.dp, end = 16.dp)
                             ) {
-                                if (executingCommand != null) {
+                                if (subagentExecutions.isNotEmpty()) {
+                                    SubagentExecutionIndicator(
+                                        executions = subagentExecutions,
+                                        onCancel = onCancelSubagent
+                                    )
+                                } else if (executingCommand != null) {
                                     TerminalBlock(
                                         command = executingCommand,
                                         isExecuting = true
@@ -1201,6 +1215,81 @@ fun AgentActivityIndicator(
 }
 
 @Composable
+private fun SubagentExecutionIndicator(
+    executions: List<SubagentExecutionEntity>,
+    onCancel: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        shape = ShapeTokens.MessageAssistant,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        ),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = "Subagentes",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            executions.sortedBy { it.createdAt }.forEach { execution ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = ((execution.depth - 1).coerceAtLeast(0) * 10).dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (execution.status == "RUNNING") {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Schedule,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "${execution.agentName} · ${execution.taskId.take(4)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = execution.goal,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    IconButton(
+                        onClick = { onCancel(execution.taskId) },
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Cancelar ${execution.agentName}",
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 @OptIn(ExperimentalFoundationApi::class)
 fun MessageBubble(
     message: Message,
@@ -1228,6 +1317,10 @@ fun MessageBubble(
     // Estado para controlar si se muestran los comandos y salidas
     var showCommandsExpanded by remember { mutableStateOf(false) }
     val hasCommands = message.toolCalls.isNotEmpty() || message.toolResults.isNotEmpty()
+    val hasWeatherWidget = message.toolResults.any { toolResult ->
+        toolResult.name in com.aiagents.app.data.terminal.WeatherToolHandler.ALL_TOOL_NAMES &&
+            com.aiagents.app.ui.components.extractWeatherDataJson(toolResult.content) != null
+    }
 
     // Estado para controlar si se muestra el contenido de tool messages
     var showToolContentExpanded by remember { mutableStateOf(false) }
@@ -1280,24 +1373,11 @@ fun MessageBubble(
                 if (toolResult.name in com.aiagents.app.data.terminal.WeatherToolHandler.ALL_TOOL_NAMES) {
                     val weatherJson = com.aiagents.app.ui.components.extractWeatherDataJson(toolResult.content)
                     if (weatherJson != null) {
-                        val currentData = com.aiagents.app.ui.components.parseCurrentWeatherJson(weatherJson)
-                        val forecastData = com.aiagents.app.ui.components.parseForecastWeatherJson(weatherJson)
-                        when {
-                            currentData != null -> {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                com.aiagents.app.ui.components.CurrentWeatherCard(
-                                    data = currentData,
-                                    modifier = Modifier.fillMaxWidth(0.90f)
-                                )
-                            }
-                            forecastData != null -> {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                com.aiagents.app.ui.components.ForecastWeatherCard(
-                                    data = forecastData,
-                                    modifier = Modifier.fillMaxWidth(0.90f)
-                                )
-                            }
-                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        com.aiagents.app.ui.components.WeatherResultCard(
+                            weatherJson = weatherJson,
+                            modifier = Modifier.fillMaxWidth(0.90f)
+                        )
                     }
                 }
             }
@@ -1353,7 +1433,8 @@ fun MessageBubble(
 
         // Ocultar mensajes TOOL completamente si showCommands está desactivado
         val shouldShowMessage = (message.content.isNotEmpty() || message.attachedFiles.isNotEmpty()) &&
-            (showCommands || !isTool)
+            (showCommands || !isTool) &&
+            !hasWeatherWidget
 
         if (shouldShowMessage) {
             Card(
@@ -2142,13 +2223,8 @@ fun MessageContent(
                     Spacer(modifier = Modifier.height(8.dp))
                 }
                 SegmentType.WEATHER -> {
-                    val currentData = com.aiagents.app.ui.components.parseCurrentWeatherJson(segment.content)
-                    val forecastData = com.aiagents.app.ui.components.parseForecastWeatherJson(segment.content)
                     Spacer(modifier = Modifier.height(8.dp))
-                    when {
-                        currentData != null -> com.aiagents.app.ui.components.CurrentWeatherCard(data = currentData)
-                        forecastData != null -> com.aiagents.app.ui.components.ForecastWeatherCard(data = forecastData)
-                    }
+                    com.aiagents.app.ui.components.WeatherResultCard(weatherJson = segment.content)
                     Spacer(modifier = Modifier.height(8.dp))
                 }
                 else -> {}
@@ -2827,6 +2903,7 @@ fun SettingsDialog(
                         }
                     }
                 }
+
                 
                 HorizontalDivider()
                 
@@ -3043,7 +3120,7 @@ private fun ContextCompactionDialog(
                 )
 
                 Text(
-                    text = "The conversation is approaching the model's context limit. Would you like to compact the context by summarizing previous messages?\n\nAll important details will be preserved so you can continue the conversation seamlessly.",
+                    text = "The conversation is approaching the model's context limit. Would you like to create a context checkpoint?\n\nYour complete chat will remain visible. Cortex will send the model a concise summary plus the latest messages, without deleting the transcript.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center

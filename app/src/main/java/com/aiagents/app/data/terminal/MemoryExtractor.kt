@@ -1,6 +1,7 @@
 package com.aiagents.app.data.terminal
 
 import android.util.Log
+import com.aiagents.app.data.auth.ProviderCredentialResolver
 import com.aiagents.app.data.local.ConversationDao
 import com.aiagents.app.data.local.MemoryDao
 import com.aiagents.app.data.local.MessageDao
@@ -9,7 +10,7 @@ import com.aiagents.app.data.model.MemoryEntity
 import com.aiagents.app.data.model.MessageEntity
 import com.aiagents.app.data.remote.AIClientFactory
 import com.aiagents.app.data.remote.ChatMessage
-import com.aiagents.app.data.local.SecurePreferences
+import com.aiagents.app.data.runtime.RuntimeContextProvider
 import com.aiagents.app.domain.model.ProviderType
 import com.google.gson.JsonParser
 import kotlinx.coroutines.*
@@ -33,7 +34,8 @@ class MemoryExtractor @Inject constructor(
     private val conversationDao: ConversationDao,
     private val messageDao: MessageDao,
     private val aiClientFactory: AIClientFactory,
-    private val securePreferences: SecurePreferences
+    private val providerCredentialResolver: ProviderCredentialResolver,
+    private val runtimeContextProvider: RuntimeContextProvider
 ) {
     private val extractionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     
@@ -283,11 +285,9 @@ Use same language as the conversation.
         modelId: String,
         provider: ProviderType
     ): List<MemoryExtraction> {
-        val apiKey = if (provider == ProviderType.LOCAL || provider == ProviderType.OLLAMA) ""
-                     else securePreferences.getApiKey(provider) ?: return emptyList()
-        
-        val baseUrl = securePreferences.getBaseUrl(provider)
-        val client = aiClientFactory.createClient(provider, apiKey, baseUrl)
+        runtimeContextProvider.refreshIdentityFromMemory()
+        val credentials = providerCredentialResolver.resolve(provider) ?: return emptyList()
+        val client = aiClientFactory.createClient(provider, credentials.apiKey, credentials.baseUrl)
         
         val conversationText = messages.joinToString("\n") { msg ->
             val role = when (msg.role) {
@@ -301,7 +301,11 @@ Use same language as the conversation.
         val result = client.chat(
             model = modelId,
             messages = listOf(ChatMessage(role = "user", content = conversationText)),
-            systemPrompt = EXTRACTION_SYSTEM_PROMPT,
+            systemPrompt = runtimeContextProvider.enrich(
+                EXTRACTION_SYSTEM_PROMPT,
+                "Memory extractor",
+                "Internal memory maintenance"
+            ),
             temperature = 0.1f,
             maxTokens = 1024
         )
@@ -413,12 +417,10 @@ Use same language as the conversation.
             }
             
             if (userAssistantMsgs.size < 10) return
+            runtimeContextProvider.refreshIdentityFromMemory()
             
-            val apiKey = if (provider == ProviderType.LOCAL || provider == ProviderType.OLLAMA) ""
-                         else securePreferences.getApiKey(provider) ?: return
-            
-            val baseUrl = securePreferences.getBaseUrl(provider)
-            val client = aiClientFactory.createClient(provider, apiKey, baseUrl)
+            val credentials = providerCredentialResolver.resolve(provider) ?: return
+            val client = aiClientFactory.createClient(provider, credentials.apiKey, credentials.baseUrl)
             
             val conversationText = userAssistantMsgs.joinToString("\n") { msg ->
                 val role = if (msg.role == "USER") "User" else "Assistant"
@@ -428,7 +430,11 @@ Use same language as the conversation.
             val result = client.chat(
                 model = modelId,
                 messages = listOf(ChatMessage(role = "user", content = conversationText)),
-                systemPrompt = SUMMARY_PROMPT,
+                systemPrompt = runtimeContextProvider.enrich(
+                    SUMMARY_PROMPT,
+                    "Conversation summarizer",
+                    "Internal memory maintenance"
+                ),
                 temperature = 0.1f,
                 maxTokens = 256
             )

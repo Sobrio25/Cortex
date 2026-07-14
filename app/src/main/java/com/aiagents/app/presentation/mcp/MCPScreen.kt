@@ -2,7 +2,6 @@ package com.aiagents.app.presentation.mcp
 
 import android.content.Context
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,7 +27,6 @@ import com.aiagents.app.R
 @Composable
 fun MCPScreen(
     onBack: (() -> Unit)? = null,
-    onNavigateToGoogleWorkspace: (() -> Unit)? = null,
     viewModel: MCPViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -178,10 +176,7 @@ fun MCPScreen(
 
             // Weather Card
             item {
-                WeatherCard(
-                    isConfigured = uiState.weatherIsConfigured,
-                    onConfigure = { viewModel.showWeatherConfigDialog() }
-                )
+                WeatherCard()
             }
 
             // Google Imagen (Nano Banana 2) Card
@@ -208,33 +203,6 @@ fun MCPScreen(
                     isConfigured = uiState.dalleIsConfigured,
                     onConfigure = { viewModel.showDalleConfigDialog() }
                 )
-            }
-
-            // Google Workspace
-            if (onNavigateToGoogleWorkspace != null) {
-                item {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
-                    ) {
-                        ListItem(
-                            headlineContent = { Text("Google Workspace", fontWeight = FontWeight.SemiBold) },
-                            supportingContent = { Text("Drive, Gmail, Calendar y más") },
-                            leadingContent = {
-                                Icon(
-                                    Icons.Default.CloudSync,
-                                    contentDescription = null,
-                                    tint = Color(0xFF4285F4)
-                                )
-                            },
-                            modifier = Modifier.clickable(onClick = onNavigateToGoogleWorkspace)
-                        )
-                    }
-                }
             }
 
         }
@@ -273,18 +241,6 @@ fun MCPScreen(
             instructions = "1. Ve a platform.openai.com/api-keys\n2. Crea una nueva API key\n3. Pegala aqui\n4. Se usa para DALL-E 3 (generacion, edicion y variaciones)",
             onDismiss = { viewModel.hideDalleConfigDialog() },
             onSave = { viewModel.saveDalleApiKey(it) }
-        )
-    }
-
-    // Weather config dialog
-    if (uiState.showWeatherConfigDialog) {
-        TokenConfigDialog(
-            title = "Configurar OpenWeather",
-            tokenLabel = "API Key",
-            currentToken = uiState.weatherApiKey,
-            instructions = "1. Ve a openweathermap.org y crea una cuenta\n2. Ve a API Keys en tu perfil\n3. Copia tu API key y pegala aqui\n4. El plan gratuito incluye clima actual, pronostico y calidad del aire",
-            onDismiss = { viewModel.hideWeatherConfigDialog() },
-            onSave = { viewModel.saveWeatherApiKey(it) }
         )
     }
 
@@ -1731,55 +1687,44 @@ private fun SlackCard(
 }
 
 @Composable
-private fun WeatherCard(
-    isConfigured: Boolean,
-    onConfigure: () -> Unit
-) {
+private fun WeatherCard() {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isConfigured) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+            containerColor = MaterialTheme.colorScheme.primaryContainer
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Surface(
                     shape = RoundedCornerShape(8.dp),
-                    color = if (isConfigured) Color(0xFFFF9800) else MaterialTheme.colorScheme.surfaceVariant,
+                    color = Color(0xFF0288D1),
                     modifier = Modifier.size(48.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(Icons.Default.Cloud, contentDescription = null, modifier = Modifier.size(28.dp),
-                            tint = if (isConfigured) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
+                            tint = Color.White)
                     }
                 }
                 Spacer(Modifier.width(16.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("OpenWeather", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(if (isConfigured) "Configurado" else "No configurado",
+                    Text("Open-Meteo", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("Incluido · sin API key",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = if (isConfigured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+                        color = MaterialTheme.colorScheme.primary)
                 }
-                Icon(if (isConfigured) Icons.Default.CheckCircle else Icons.Default.Settings,
+                Icon(Icons.Default.CheckCircle,
                     contentDescription = null,
-                    tint = if (isConfigured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+                    tint = MaterialTheme.colorScheme.primary)
             }
             Spacer(Modifier.height(12.dp))
-            Text("Clima actual, pronostico y calidad del aire para cualquier ubicacion.",
+            Text("Clima actual, pronóstico y calidad del aire para cualquier ubicación, usando la ubicación del dispositivo cuando no se indica una ciudad.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (isConfigured) {
-                Spacer(Modifier.height(8.dp))
-                Column {
-                    listOf("Clima actual", "Pronostico de 5 dias", "Calidad del aire").forEach {
-                        Text("- $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 2.dp))
-                    }
+            Spacer(Modifier.height(8.dp))
+            Column {
+                listOf("Clima actual", "Pronóstico de 5 días", "Calidad del aire Open-Meteo/CAMS", "Widgets visuales automáticos").forEach {
+                    Text("- $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 2.dp))
                 }
-            }
-            Spacer(Modifier.height(12.dp))
-            OutlinedButton(onClick = onConfigure, modifier = Modifier.fillMaxWidth()) {
-                Icon(if (isConfigured) Icons.Default.Edit else Icons.Default.Add, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text(if (isConfigured) "Editar API Key" else "Configurar")
             }
         }
     }
@@ -1895,4 +1840,3 @@ private fun TokenConfigDialog(
         }
     )
 }
-

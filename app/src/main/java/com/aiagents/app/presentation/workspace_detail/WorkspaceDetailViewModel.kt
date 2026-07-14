@@ -15,12 +15,19 @@ import com.aiagents.app.data.orchestration.DelegationResult
 import com.aiagents.app.data.orchestration.IsolatedAgentExecutor
 import com.aiagents.app.data.orchestration.IsolatedExecutionResult
 import com.aiagents.app.data.orchestration.SubAgentProgress
+import com.aiagents.app.data.orchestration.SubagentCapabilityPolicy
+import com.aiagents.app.data.orchestration.SubagentRequestParser
+import com.aiagents.app.data.orchestration.SubagentResultFormatter
+import com.aiagents.app.data.orchestration.SubagentRuntime
 import com.aiagents.app.data.orchestration.ParallelDelegationEntry
 import com.aiagents.app.data.remote.ChatMessage
 import com.aiagents.app.data.remote.ChatResponseWithTools
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.data.repository.ContextInfo
+import com.aiagents.app.data.repository.ContextCompactionPlanner
+import com.aiagents.app.data.repository.ContextCompactionPolicy
+import com.aiagents.app.data.repository.ContextWindowPolicy
 import com.aiagents.app.data.repository.FileRepository
 import com.aiagents.app.data.repository.TokenCounter
 import com.aiagents.app.data.terminal.BraveSearchToolHandler
@@ -42,27 +49,38 @@ import com.aiagents.app.data.terminal.ReminderToolHandler
 import com.aiagents.app.data.terminal.CodeExecutionHandler
 import com.aiagents.app.data.terminal.PresentationToolHandler
 import com.aiagents.app.data.terminal.MemoryToolHandler
+import com.aiagents.app.data.terminal.CortexMemoryToolHandler
 import com.aiagents.app.data.terminal.AppControlToolHandler
 import com.aiagents.app.data.terminal.ScheduledTaskToolHandler
 import com.aiagents.app.data.terminal.TodoToolHandler
 import com.aiagents.app.data.terminal.ToolSearchHandler
+import com.aiagents.app.data.terminal.UnifiedWebToolHandler
+import com.aiagents.app.data.terminal.SkillToolHandler
 import com.aiagents.app.data.terminal.AcademicSearchToolHandler
 import com.aiagents.app.data.terminal.WeatherToolHandler
 import com.aiagents.app.data.terminal.ImageGenerationToolHandler
 import com.aiagents.app.data.remote.StreamingChunk
+import com.aiagents.app.data.model.SubagentExecutionEntity
 import com.aiagents.app.data.terminal.MemoryExtractor
 import com.aiagents.app.data.terminal.TaskCompletionNotifier
-import com.aiagents.app.data.terminal.SubtaskToolHandler
 import com.aiagents.app.data.terminal.DelegationToolHandler
 import com.aiagents.app.data.terminal.PermissionRequest
 import com.aiagents.app.data.terminal.ToolExecutionRequest
 import com.aiagents.app.data.terminal.ToolExecutionResult
 import com.aiagents.app.domain.model.Agent
+import com.aiagents.app.domain.model.isOrchestrator
 import com.aiagents.app.domain.model.AgentFile
 import com.aiagents.app.domain.model.Conversation
 import com.aiagents.app.domain.model.Message
 import com.aiagents.app.domain.model.MessageRole
 import com.aiagents.app.domain.model.ProviderType
+import com.aiagents.app.domain.model.SubagentBudget
+import com.aiagents.app.domain.model.SubagentExecutionMode
+import com.aiagents.app.domain.model.SubagentFailurePolicy
+import com.aiagents.app.domain.model.SubagentRole
+import com.aiagents.app.domain.model.SubagentTaskEnvelope
+import com.aiagents.app.domain.model.SubagentToolPermission
+import com.aiagents.app.domain.model.SubagentWorkspacePolicy
 import com.aiagents.app.domain.model.ToolCall
 import com.aiagents.app.domain.model.ToolResult
 import com.aiagents.app.domain.model.Workspace
@@ -85,10 +103,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.supervisorScope
 import java.io.File
 import javax.inject.Inject
+
+private const val LEGACY_SUBTASK_TOOL_NAME = "execute_subtask"
 
 data class OptionSelectionRequest(
     val title: String,
@@ -174,6 +195,12 @@ data class ModelInfo(
     val fullKey: String = "${provider.name}|$modelId" // "PROVIDER|modelId"
 )
 
+private data class ResolvedSubagentTask(
+    val agent: Agent,
+    val envelope: SubagentTaskEnvelope,
+    val sourceToolCall: ToolCall? = null
+)
+
 enum class WorkspaceTab {
     Chat, Files
 }
@@ -189,6 +216,7 @@ class WorkspaceDetailViewModel @Inject constructor(
     private val memoryExtractor: MemoryExtractor,
     private val taskCompletionNotifier: TaskCompletionNotifier,
     private val isolatedAgentExecutor: IsolatedAgentExecutor,
+    private val subagentRuntime: SubagentRuntime,
     private val codeExecutionHandler: CodeExecutionHandler,
     private val todoDao: com.aiagents.app.data.local.TodoDao,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
@@ -208,12 +236,15 @@ class WorkspaceDetailViewModel @Inject constructor(
 
     private val _workspace = MutableStateFlow<Workspace?>(null)
     val workspace: StateFlow<Workspace?> = _workspace.asStateFlow()
+    private val _workspaceFolderPath = MutableStateFlow<String?>(null)
 
     private val _activeAgent = MutableStateFlow<Agent?>(null)
     val activeAgent: StateFlow<Agent?> = _activeAgent.asStateFlow()
 
     private val _selectedModel = MutableStateFlow<String>("")
     val selectedModel: StateFlow<String> = _selectedModel.asStateFlow()
+    private val _contextWindowOverride = MutableStateFlow<Int?>(null)
+    private var contextWindowRefreshModel: String? = null
 
     val agents: StateFlow<List<Agent>> = repository.getAllAgents()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
@@ -226,6 +257,15 @@ class WorkspaceDetailViewModel @Inject constructor(
             flowOf(emptyList())
         }
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    val subagentExecutions: StateFlow<List<SubagentExecutionEntity>> =
+        _conversationId.flatMapLatest { conversationId ->
+            if (conversationId != null && conversationId > 0) {
+                subagentRuntime.observeForConversation(conversationId)
+            } else {
+                flowOf(emptyList())
+            }
+        }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     private val _uiState = MutableStateFlow(WorkspaceDetailState())
     val uiState: StateFlow<WorkspaceDetailState> = _uiState.asStateFlow()
@@ -319,28 +359,44 @@ class WorkspaceDetailViewModel @Inject constructor(
     /** Current agent processing job — cancel to stop the agent */
     private var currentAgentJob: kotlinx.coroutines.Job? = null
 
-    /** Current delegation depth for recursive sub-agent control (0 = top-level) */
-    private var currentDelegationDepth: Int = 0
-
     /** Pending agent names for sequential delegation pipeline */
     private val _pendingSequentialAgents = MutableStateFlow<MutableList<String>>(mutableListOf())
     private val _sequentialUserMessage = MutableStateFlow<Message?>(null)
 
     val contextInfo: StateFlow<ContextInfo> = combine(
         messages,
-        selectedModel
-    ) { msgs, fullKey ->
+        selectedModel,
+        activeAgent,
+        _contextWindowOverride,
+        _workspaceFolderPath
+    ) { msgs, fullKey, agent, refreshedContextWindow, workspaceFolderPath ->
         val modelId = if ("|" in fullKey) fullKey.substringAfter("|") else fullKey
-        val currentTokens = TokenCounter.estimateMessagesTokens(msgs)
+        val maxTokens = refreshedContextWindow ?: repository.getContextWindowForModel(fullKey)
+        val modelHistory = ContextCompactionPolicy.modelHistory(msgs)
+        val currentTokens = TokenCounter.estimateModelInputTokens(modelHistory) +
+            (agent?.let {
+                repository.estimateRequestOverheadTokens(
+                    agent = it,
+                    messages = msgs,
+                    enableTerminal = it.enableTerminal,
+                    workspaceFolderPath = workspaceFolderPath
+                )
+            } ?: 0)
+        val budget = ContextWindowPolicy.budget(
+            contextWindow = maxTokens,
+            desiredResponseTokens = agent?.maxTokens ?: 4_096
+        )
         ContextInfo(
             currentTokens = currentTokens,
-            maxTokens = TokenCounter.getContextWindowForModel(modelId),
-            usagePercentage = TokenCounter.getContextUsagePercentage(currentTokens, modelId),
-            availableTokens = TokenCounter.getAvailableTokens(currentTokens, modelId),
+            maxTokens = maxTokens,
+            usagePercentage = (currentTokens.toFloat() / maxTokens) * 100f,
+            availableTokens = (maxTokens - currentTokens).coerceAtLeast(0),
             supportsVision = TokenCounter.supportsVision(modelId),
-            supportsDocuments = TokenCounter.supportsDocuments(modelId)
+            supportsDocuments = TokenCounter.supportsDocuments(modelId),
+            compactionWarningTokens = budget.warningTokens,
+            compactionCriticalTokens = budget.criticalTokens
         )
-    }.stateIn(viewModelScope, SharingStarted.Lazily, ContextInfo(0, 8192, 0f, 8192, false, false))
+    }.stateIn(viewModelScope, SharingStarted.Lazily, ContextInfo(0, 32_768, 0f, 32_768, false, false))
 
     init {
         loadWorkspace()
@@ -350,6 +406,9 @@ class WorkspaceDetailViewModel @Inject constructor(
         loadShowReasoningPreference()
         loadShowCommandsPreference()
         restoreDraft()
+        viewModelScope.launch {
+            contextInfo.collect { checkContextWindowUsage(it) }
+        }
     }
 
     private fun restoreDraft() {
@@ -464,6 +523,7 @@ class WorkspaceDetailViewModel @Inject constructor(
 
     private fun loadWorkspace() {
         viewModelScope.launch {
+            _workspaceFolderPath.value = fileRepository.getWorkspaceFolderPath(workspaceId)
             val ws = repository.getWorkspaceById(workspaceId)
             _workspace.value = ws
 
@@ -482,6 +542,7 @@ class WorkspaceDetailViewModel @Inject constructor(
 
             if (!ws?.selectedModel.isNullOrEmpty()) {
                 _selectedModel.value = ws?.selectedModel ?: ""
+                refreshContextWindowForSelectedModel(_selectedModel.value)
             } else {
                 // Auto-select first available model if none is set
                 val available = buildAvailableModelsList()
@@ -538,8 +599,24 @@ class WorkspaceDetailViewModel @Inject constructor(
 
     fun setSelectedModel(model: String) {
         _selectedModel.value = model
+        _contextWindowOverride.value = repository.getContextWindowForModel(model)
+        refreshContextWindowForSelectedModel(model)
         viewModelScope.launch {
             repository.setSelectedModel(workspaceId, model)
+        }
+    }
+
+
+    private fun refreshContextWindowForSelectedModel(model: String) {
+        if (model.isBlank()) return
+        contextWindowRefreshModel = model
+        _contextWindowOverride.value = repository.getContextWindowForModel(model)
+        viewModelScope.launch {
+            val refreshed = repository.refreshContextWindowForModel(model)
+            if (_selectedModel.value == model) {
+                _contextWindowOverride.value = refreshed
+                contextWindowRefreshModel = null
+            }
         }
     }
 
@@ -694,27 +771,30 @@ class WorkspaceDetailViewModel @Inject constructor(
 
     // ── Context Window Compaction ──────────────────────────────────────────
 
-    /** Threshold: show compaction dialog when context usage exceeds this percentage */
-    private val COMPACTION_THRESHOLD = 80f
-    /** After compaction was dismissed, don't ask again until this percentage */
-    private val COMPACTION_RE_ASK_THRESHOLD = 95f
-    private var compactionDismissedAt: Float = 0f
+    private var compactionDismissedAtTokens: Int = 0
 
     /**
      * Checks if context window is getting full and prompts the user.
      * Called after each API response.
      */
-    private fun checkContextWindowUsage() {
-        val info = contextInfo.value
-        val threshold = if (compactionDismissedAt > 0f) COMPACTION_RE_ASK_THRESHOLD else COMPACTION_THRESHOLD
-        if (info.usagePercentage >= threshold && !_uiState.value.showContextCompactionDialog && !_uiState.value.isCompacting) {
+    private fun checkContextWindowUsage(info: ContextInfo = contextInfo.value) {
+        val tokenGrowthBeforeReAsk = (info.maxTokens / 20).coerceAtLeast(512)
+        val canAskAgain = compactionDismissedAtTokens == 0 ||
+            info.isContextCritical ||
+            info.currentTokens >= compactionDismissedAtTokens + tokenGrowthBeforeReAsk
+        if (contextWindowRefreshModel == null &&
+            info.shouldPromptCompaction &&
+            canAskAgain &&
+            !_uiState.value.showContextCompactionDialog &&
+            !_uiState.value.isCompacting
+        ) {
             _uiState.value = _uiState.value.copy(showContextCompactionDialog = true)
         }
     }
 
     fun acceptContextCompaction() {
         _uiState.value = _uiState.value.copy(showContextCompactionDialog = false, isCompacting = true)
-        compactionDismissedAt = 0f
+        compactionDismissedAtTokens = 0
         viewModelScope.launch {
             try {
                 performContextCompaction()
@@ -729,43 +809,43 @@ class WorkspaceDetailViewModel @Inject constructor(
     }
 
     fun dismissContextCompaction() {
-        compactionDismissedAt = contextInfo.value.usagePercentage
+        compactionDismissedAtTokens = contextInfo.value.currentTokens
         _uiState.value = _uiState.value.copy(showContextCompactionDialog = false)
     }
 
     private suspend fun performContextCompaction() {
         val currentMessages = messages.value
-        if (currentMessages.size < 4) {
+        val fullKey = _selectedModel.value
+        val modelContextWindow = repository.getContextWindowForModel(fullKey)
+        val activeModelHistory = ContextCompactionPolicy.modelHistory(currentMessages)
+        val plan = ContextCompactionPlanner.plan(activeModelHistory, modelContextWindow)
+        if (plan.messagesToSummarize.isEmpty()) {
             _uiState.value = _uiState.value.copy(isCompacting = false)
             return
         }
 
-        val fullKey = _selectedModel.value
         val modelId = extractModelId(fullKey)
         val provider = extractProvider(fullKey)
 
-        // Build a summarization prompt with the conversation content
-        val conversationText = buildString {
-            currentMessages.forEach { msg ->
-                val role = msg.role.name.uppercase()
-                val content = msg.content.take(2000) // Cap per message to avoid overflowing the summarization call itself
-                if (content.isNotBlank()) {
-                    appendLine("[$role]: $content")
-                    appendLine()
-                }
-            }
-        }
+        val summaryInputTokenBudget = (modelContextWindow / 2).coerceIn(4_096, 64_000)
+        val conversationText = buildCompactionTranscript(
+            messagesToSummarize = plan.messagesToSummarize,
+            tokenBudget = summaryInputTokenBudget
+        )
 
-        // Use a compact summary prompt
-        val summarySystemPrompt = """You are a conversation summarizer. Create a CONCISE summary of the conversation below.
-RULES:
-- Keep all KEY FACTS: names, decisions, code snippets, file paths, URLs, numbers, preferences
-- Keep the USER'S ORIGINAL REQUEST and what was accomplished
-- Keep any PENDING TASKS or unfinished work
-- Keep tool results that contain important data
-- Remove small talk, repetitive exchanges, and verbose tool call details
-- Format as a structured summary with sections
-- Write in the same language as the conversation
+        val summarySystemPrompt = """You are performing a CONTEXT CHECKPOINT COMPACTION. Create a concise handoff for the same agent to continue the conversation.
+Include:
+- Original user intent and current objective
+- Work completed, outcomes, and important tool results
+- Decisions and why they were made
+- Active rules, constraints, user preferences, names, paths, URLs, and exact numbers
+- Pending work, blockers, and the next concrete steps
+Rules:
+- If the input contains a previous checkpoint, carry its still-relevant facts forward
+- Do not invent details or mark unfinished work as complete
+- Omit small talk, repetition, raw reasoning, and verbose tool output
+- The recent tail will remain verbatim after this checkpoint, so do not repeat it
+- Write in the conversation's language using short structured sections
 - Maximum 1500 words"""
 
         val summaryMessages = listOf(
@@ -780,32 +860,28 @@ RULES:
             messages = summaryMessages,
             systemPrompt = summarySystemPrompt,
             temperature = 0.2f,
-            maxTokens = 4096,
+            maxTokens = (modelContextWindow / 16).coerceIn(512, 4_096),
             provider = provider
         )
 
         result.onSuccess { summary ->
             val summaryText = summary.ifBlank { "Conversation summary unavailable." }
 
-            // Delete old messages for this conversation
             val convId = _conversationId.value
-            if (convId != null) {
-                repository.clearConversation(convId)
-            }
-
-            // Insert the summary as a system message so the agent has context
+            val summaryTimestamp = plan.messagesToKeep.firstOrNull()?.timestamp
+                ?.let { if (it == Long.MIN_VALUE) it else it - 1 }
+                ?: System.currentTimeMillis()
             val summaryMessage = Message(
                 role = MessageRole.SYSTEM,
-                content = "[Context Compacted] Previous conversation summary:\n\n$summaryText"
+                content = ContextCompactionPolicy.checkpointContent(summaryText),
+                timestamp = summaryTimestamp
             )
-            repository.addMessage(workspaceId, convId, summaryMessage, _activeAgent.value?.id ?: 0)
-
-            // Insert a visible assistant message so the user sees what happened
-            val visibleMessage = Message(
-                role = MessageRole.ASSISTANT,
-                content = "The context window has been compacted. I've summarized our previous conversation to free up space. All important details have been preserved — we can continue where we left off."
+            repository.saveContextCheckpoint(
+                workspaceId = workspaceId,
+                conversationId = convId,
+                summary = summaryMessage,
+                agentId = _activeAgent.value?.id
             )
-            repository.addMessage(workspaceId, convId, visibleMessage, _activeAgent.value?.id ?: 0)
 
             _uiState.value = _uiState.value.copy(isCompacting = false)
         }.onFailure { error ->
@@ -815,6 +891,41 @@ RULES:
                 error = "Failed to summarize conversation: ${error.message}"
             )
         }
+    }
+
+    private fun buildCompactionTranscript(
+        messagesToSummarize: List<Message>,
+        tokenBudget: Int
+    ): String {
+        val totalCharacterBudget = (tokenBudget * 3).coerceAtLeast(12_000)
+        val perMessageCharacterLimit = (totalCharacterBudget / messagesToSummarize.size.coerceAtLeast(1))
+            .coerceIn(128, 12_000)
+
+        return buildString {
+            messagesToSummarize.forEach { message ->
+                val details = buildString {
+                    append(message.content)
+                    if (message.attachedFiles.isNotEmpty()) {
+                        append("\nAttached files: ")
+                        append(message.attachedFiles.joinToString(", "))
+                    }
+                    message.toolCalls.forEach { call ->
+                        append("\nTool call ${call.function.name}: ${call.function.arguments}")
+                    }
+                    // Tool messages already persist their provider-visible result in content.
+                    // Fall back to metadata only for old/partial rows whose content is empty.
+                    if (message.content.isBlank()) {
+                        message.toolResults.forEach { result ->
+                            append("\nTool result ${result.name}: ${result.content}")
+                        }
+                    }
+                }.take(perMessageCharacterLimit)
+                if (details.isNotBlank()) {
+                    appendLine("[${message.role.name}]: $details")
+                    appendLine()
+                }
+            }
+        }.take(totalCharacterBudget)
     }
 
     fun updateTerminalInput(text: String) {
@@ -988,16 +1099,8 @@ Reglas:
 
         // Also replace {CURRENT_DATE} placeholder if present in the agent's own prompt
         val basePrompt = agent.systemPrompt.replace("{CURRENT_DATE}", currentDate)
-        var enrichedAgent = if (extraSections.isEmpty()) agent.copy(systemPrompt = basePrompt)
+        val enrichedAgent = if (extraSections.isEmpty()) agent.copy(systemPrompt = basePrompt)
             else agent.copy(systemPrompt = basePrompt + "\n\n" + extraSections.joinToString("\n\n"))
-
-        // Share relevant memories with delegated agents (not Cortex — it has its own memory tools)
-        if (agent.name != "Cortex") {
-            val lastUserMsg = messages.value.lastOrNull { it.role == MessageRole.USER }?.content ?: ""
-            if (lastUserMsg.isNotBlank()) {
-                enrichedAgent = buildAgentWithMemoryContext(enrichedAgent, lastUserMsg)
-            }
-        }
 
         return enrichedAgent
     }
@@ -1048,7 +1151,10 @@ Reglas:
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             taskStartTimeMs = System.currentTimeMillis()
             securePreferences.clearDraft(workspaceId)
-            repository.resetActivatedTools()
+            repository.resetActivatedTools(
+                agent,
+                fileRepository.getWorkspaceFolderPath(workspaceId)
+            )
             autoContinueCount = 0
             clearAllAgentStatuses()
             Log.d("WorkspaceDetailVM", "Sending message with agent: ${agent.name}, model: $modelToUse, attachedFiles: ${attachedFiles.size}")
@@ -1095,6 +1201,7 @@ Reglas:
     }
 
     fun stopAgent() {
+        _conversationId.value?.let { subagentRuntime.cancelForConversation(it) }
         currentAgentJob?.cancel()
         currentAgentJob = null
         _uiState.value = _uiState.value.copy(
@@ -1106,6 +1213,8 @@ Reglas:
         _pendingSequentialAgents.value = mutableListOf()
         Log.d("WorkspaceDetailVM", "Agent stopped by user")
     }
+
+    fun cancelSubagent(taskId: String): Boolean = subagentRuntime.cancel(taskId)
 
     /**
      * Procesa los archivos adjuntos:
@@ -1183,7 +1292,7 @@ Reglas:
             imageDataUris = imageDataUris
         )
         
-        if (agent.name == "Cortex") {
+        if (agent.isOrchestrator) {
             processWithOrchestratorAndImages(agentWithContext, userMessageWithImages, currentMessages + userMessageWithImages, imageDataUris)
         } else {
             _workingAgents.value = listOf(agent.name)
@@ -1204,9 +1313,10 @@ Reglas:
             messages = messagesForApi,
             overrideModel = extractModelId(fullKey),
             overrideProvider = extractProvider(fullKey),
-            enableTerminal = true,
+            enableTerminal = orchestrator.enableTerminal,
             workspaceFolderPath = workspacePath,
-            imageDataUris = imageDataUris
+            imageDataUris = imageDataUris,
+            memorySessionKey = currentMemorySessionKey()
         )
 
         var shouldRestoreCortex = true
@@ -1217,11 +1327,13 @@ Reglas:
             }
             val content = response.content ?: ""
 
-            // ── PRIORITY 1: Tool-based delegation (delegate_to_agent) ──
-            val hasDelegationToolCalls = response.toolCalls?.any { it.function.name == DelegationToolHandler.TOOL_NAME } == true
+            // ── PRIORITY 1: Typed subagent spawning ──
+            val hasDelegationToolCalls = response.toolCalls?.any {
+                it.function.name in DelegationToolHandler.ALL_TOOL_NAMES
+            } == true
 
             if (hasDelegationToolCalls) {
-                Log.d("WorkspaceDetailVM", "Orchestrator using delegate_to_agent tool (images path)")
+                Log.d("WorkspaceDetailVM", "Orchestrator using spawn_subagents (images path)")
                 val cleanContent = agentOrchestrator.stripDelegationLines(content)
                 repository.addMessage(workspaceId, _conversationId.value,
                     Message(role = MessageRole.ASSISTANT, content = cleanContent.ifBlank { content },
@@ -1336,9 +1448,10 @@ Reglas:
             messages = messagesForApi,
             overrideModel = extractModelId(fullKey),
             overrideProvider = extractProvider(fullKey),
-            enableTerminal = true,
+            enableTerminal = agent.enableTerminal,
             workspaceFolderPath = workspacePath,
-            imageDataUris = imageDataUris
+            imageDataUris = imageDataUris,
+            memorySessionKey = currentMemorySessionKey()
         )
 
         var processingComplete = true
@@ -1391,7 +1504,7 @@ Reglas:
     private suspend fun processAssistantResponse(agent: Agent, lastUserMessage: Message) {
         val agentWithContext = buildAgentWithFileContext(agent)
         
-        if (agent.name == "Cortex") {
+        if (agent.isOrchestrator) {
             processWithOrchestrator(agentWithContext, lastUserMessage)
         } else {
             _workingAgents.value = listOf(agent.name)
@@ -1437,7 +1550,7 @@ Reglas:
             return
         }
 
-        val agentName = pending.removeFirst()
+        val agentName = pending.removeAt(0)
         _pendingSequentialAgents.value = pending
         Log.d("WorkspaceDetailVM", "Sequential: processing agent '$agentName', ${pending.size} remaining")
 
@@ -1495,7 +1608,7 @@ Reglas:
             localClient.unloadModel()
 
             result.getOrNull()?.let { response ->
-                Log.d("WorkspaceDetailVM", "Local routing response (${elapsed}ms): $response")
+                Log.d("WorkspaceDetailVM", "Local routing completed in ${elapsed}ms")
                 agentOrchestrator.parseDelegationFromToolCall(response)
             }
         } catch (e: Exception) {
@@ -1522,13 +1635,26 @@ Reglas:
      * without knowing about the ViewModel's internal tool handlers.
      */
     private suspend fun executeToolForSubAgent(
+        task: SubagentTaskEnvelope,
         agent: Agent,
         toolCall: ToolCall,
         workspacePath: String,
-        wsId: Long
+        wsId: Long,
+        subConversationId: Long
     ): ToolResult {
         val toolHandler = repository.getToolHandler()
         return try {
+            val permission = SubagentCapabilityPolicy.permissionFor(
+                task.toolPermissions,
+                toolCall.function.name
+            )
+            if (permission == SubagentToolPermission.DENY) {
+                return ToolResult(
+                    toolCall.id,
+                    toolCall.function.name,
+                    "Error: tool '${toolCall.function.name}' is denied by this subagent's capability policy."
+                )
+            }
             when (toolCall.function.name) {
                 "execute_command" -> {
                     val request = toolHandler.parseToolCall(toolCall)
@@ -1559,16 +1685,51 @@ Reglas:
                     val result = repository.getSerpAPIToolHandler().executeTool(toolCall.id, toolCall.function.arguments, apiKey)
                     ToolResult(toolCall.id, "serpapi_search", result.content)
                 }
-                SubtaskToolHandler.TOOL_NAME -> {
-                    // Block recursive subtask spawning beyond max delegation depth
-                    if (currentDelegationDepth >= IsolatedAgentExecutor.MAX_DELEGATION_DEPTH) {
-                        ToolResult(toolCall.id, SubtaskToolHandler.TOOL_NAME,
-                            "Error: maximum delegation depth (${IsolatedAgentExecutor.MAX_DELEGATION_DEPTH}) reached. Complete this task directly without spawning subtasks.")
-                    } else {
-                        val handler = repository.getSubtaskToolHandler()
-                        val result = handler.executeTool(toolCall.id, toolCall.function.arguments, _selectedModel.value)
-                        ToolResult(toolCall.id, SubtaskToolHandler.TOOL_NAME, result.content)
-                    }
+                in UnifiedWebToolHandler.ALL_TOOL_NAMES -> {
+                    val result = repository.getUnifiedWebToolHandler().executeTool(
+                        toolCall.id,
+                        toolCall.function.name,
+                        toolCall.function.arguments
+                    )
+                    ToolResult(toolCall.id, toolCall.function.name, result.content)
+                }
+                in GoogleWorkspaceToolHandler.ALL_TOOL_NAMES -> {
+                    val accessToken = repository.getGoogleWorkspaceOAuthManager()
+                        .getValidAccessToken()
+                        .getOrElse { error ->
+                            return ToolResult(
+                                toolCall.id,
+                                toolCall.function.name,
+                                "Error: ${error.message ?: "Google Workspace no está autorizado."}"
+                            )
+                        }
+                    val result = repository.getGoogleWorkspaceToolHandler().executeTool(
+                        toolCallId = toolCall.id,
+                        toolName = toolCall.function.name,
+                        arguments = toolCall.function.arguments,
+                        accessToken = accessToken
+                    )
+                    ToolResult(
+                        toolCall.id,
+                        toolCall.function.name,
+                        if (result.success) result.content else "Error: ${result.content}"
+                    )
+                }
+                in SkillToolHandler.ALL_TOOL_NAMES -> {
+                    val result = repository.getSkillToolHandler().executeTool(
+                        toolCall.id,
+                        toolCall.function.name,
+                        toolCall.function.arguments,
+                        allowUserRequestedCreation = userExplicitlyRequestedSkillCreation()
+                    )
+                    ToolResult(toolCall.id, toolCall.function.name, result.content)
+                }
+                LEGACY_SUBTASK_TOOL_NAME -> {
+                    ToolResult(
+                        toolCall.id,
+                        LEGACY_SUBTASK_TOOL_NAME,
+                        "Error: execute_subtask is deprecated. Use spawn_subagents from an orchestrator task."
+                    )
                 }
                 in CodeExecutionHandler.ALL_TOOL_NAMES -> {
                     val result = codeExecutionHandler.executeTool(toolCall.id, toolCall.function.name, toolCall.function.arguments, workspacePath)
@@ -1587,6 +1748,13 @@ Reglas:
                     ToolResult(toolCall.id, toolCall.function.name, result.content)
                 }
                 in MemoryToolHandler.ALL_TOOL_NAMES -> {
+                    if (toolCall.function.name !in MemoryToolHandler.READ_TOOL_NAMES) {
+                        return ToolResult(
+                            toolCall.id,
+                            toolCall.function.name,
+                            "Error: semantic-memory writes are disabled for sub-agents."
+                        )
+                    }
                     val handler = repository.getMemoryToolHandler()
                     val result = handler.executeTool(toolCall.id, toolCall.function.name, toolCall.function.arguments)
                     ToolResult(toolCall.id, toolCall.function.name, result.content)
@@ -1607,9 +1775,8 @@ Reglas:
                     val result = handler.executeTool(toolCall.id, toolCall.function.arguments, wsId)
                     ToolResult(toolCall.id, ScheduledTaskToolHandler.TOOL_NAME, result.content)
                 }
-                DelegationToolHandler.TOOL_NAME -> {
-                    ToolResult(toolCall.id, DelegationToolHandler.TOOL_NAME,
-                        "Error: sub-agents cannot delegate. Complete the task directly without spawning further delegations.")
+                in DelegationToolHandler.ALL_TOOL_NAMES -> {
+                    executeNestedSubagentCall(task, toolCall, subConversationId)
                 }
                 else -> {
                     ToolResult(toolCall.id, toolCall.function.name, "Herramienta '${toolCall.function.name}' no disponible en modo sub-agente aislado")
@@ -1625,21 +1792,28 @@ Reglas:
      * Handles progress updates from IsolatedAgentExecutor, updating UI state.
      */
     private fun handleSubAgentProgress(progress: SubAgentProgress) {
+        val statusKey = "${progress.agentName} #${progress.taskId.take(4)}"
         when (progress) {
+            is SubAgentProgress.Queued -> {
+                updateAgentStatus(statusKey, "En cola...")
+            }
             is SubAgentProgress.Started -> {
-                updateAgentStatus(progress.agentName, "Iniciando...")
+                updateAgentStatus(statusKey, "Iniciando...")
             }
             is SubAgentProgress.Streaming -> {
-                updateAgentStatus(progress.agentName, "Generando respuesta...")
+                updateAgentStatus(statusKey, "Generando respuesta...")
             }
             is SubAgentProgress.ToolUse -> {
-                updateAgentStatus(progress.agentName, "Usando: ${progress.toolName}")
+                updateAgentStatus(statusKey, "Usando: ${progress.toolName}")
             }
             is SubAgentProgress.Completed -> {
-                clearAgentStatus(progress.agentName)
+                clearAgentStatus(statusKey)
             }
             is SubAgentProgress.Failed -> {
-                updateAgentStatus(progress.agentName, "Error: ${progress.error.take(50)}")
+                updateAgentStatus(statusKey, "Error: ${progress.error.take(50)}")
+            }
+            is SubAgentProgress.Cancelled -> {
+                clearAgentStatus(statusKey)
             }
         }
     }
@@ -1654,31 +1828,260 @@ Reglas:
         extraContext: String = "",
         subtaskOverride: String? = null
     ): IsolatedExecutionResult {
-        val fullKey = _selectedModel.value
         val context = buildDelegationContext(userMessage) +
             if (extraContext.isNotBlank()) "\n\n$extraContext" else ""
-        // When a subtask is provided, use it as the primary task description
-        // so the sub-agent focuses on its specific piece of work
-        val taskDescription = subtaskOverride ?: userMessage.content
-        val depth = currentDelegationDepth
-        currentDelegationDepth++
-        return try {
-            isolatedAgentExecutor.executeInIsolation(
-                agent = agent,
-                taskDescription = taskDescription,
-                context = context,
-                parentConversationId = _conversationId.value!!,
-                workspaceId = workspaceId,
-                overrideModel = extractModelId(fullKey),
-                overrideProvider = extractProvider(fullKey),
-                workspacePath = fileRepository.getWorkspaceFolderPath(workspaceId),
-                toolExecutor = { a, tc, wp, wsId -> executeToolForSubAgent(a, tc, wp, wsId) },
-                progressCallback = { handleSubAgentProgress(it) },
-                delegationDepth = depth
-            )
-        } finally {
-            currentDelegationDepth--
+        val task = buildSubagentEnvelope(
+            agent = agent,
+            goal = subtaskOverride ?: userMessage.content,
+            context = context,
+            acceptanceCriteria = "Complete the delegated goal and report verification performed.",
+            mode = SubagentExecutionMode.PARALLEL,
+            failurePolicy = SubagentFailurePolicy.FAIL_FAST,
+            role = SubagentRole.LEAF,
+            workspacePolicy = SubagentWorkspacePolicy.WRITE_EXCLUSIVE,
+            parentConversationId = _conversationId.value!!,
+            parentTaskId = null,
+            depth = 1,
+            modelOverride = null,
+            maxIterations = null
+        )
+        return executeDelegatedAgentIsolated(agent, task)
+    }
+
+    private suspend fun executeDelegatedAgentIsolated(
+        agent: Agent,
+        task: SubagentTaskEnvelope
+    ): IsolatedExecutionResult {
+        val fullKey = task.modelKey
+        return isolatedAgentExecutor.executeInIsolation(
+            agent = agent,
+            task = task,
+            overrideModel = extractModelId(fullKey),
+            overrideProvider = extractProvider(fullKey),
+            workspacePath = fileRepository.getWorkspaceFolderPath(task.workspaceId),
+            toolExecutor = { envelope, delegatedAgent, toolCall, path, delegatedWorkspaceId, childConversationId ->
+                executeToolForSubAgent(
+                    envelope,
+                    delegatedAgent,
+                    toolCall,
+                    path,
+                    delegatedWorkspaceId,
+                    childConversationId
+                )
+            },
+            progressCallback = ::handleSubAgentProgress
+        )
+    }
+
+    private fun buildSubagentEnvelope(
+        agent: Agent,
+        goal: String,
+        context: String,
+        acceptanceCriteria: String,
+        mode: SubagentExecutionMode,
+        failurePolicy: SubagentFailurePolicy,
+        role: SubagentRole,
+        workspacePolicy: SubagentWorkspacePolicy,
+        parentConversationId: Long,
+        parentTaskId: String?,
+        depth: Int,
+        modelOverride: String?,
+        maxIterations: Int?,
+        requestedCapabilities: Set<String> = emptySet()
+    ): SubagentTaskEnvelope {
+        require(depth <= IsolatedAgentExecutor.MAX_DELEGATION_DEPTH) {
+            "Maximum subagent depth (${IsolatedAgentExecutor.MAX_DELEGATION_DEPTH}) exceeded"
         }
+        val selectedModelKey = _selectedModel.value
+        val modelKey = modelOverride
+            ?.takeIf { '|' in it && it.substringAfter('|').isNotBlank() }
+            ?: selectedModelKey
+        // Orchestrators coordinate and must never retain a workspace write lock while waiting
+        // for writer children; concrete modifications belong to leaf workers.
+        val effectiveWorkspacePolicy = if (role == SubagentRole.ORCHESTRATOR) {
+            SubagentWorkspacePolicy.READ_ONLY_SHARED
+        } else {
+            workspacePolicy
+        }
+        val capabilities = requestedCapabilities +
+            SubagentCapabilityPolicy.inferCapabilities("$goal\n$context")
+        val allowedTools = SubagentCapabilityPolicy.allowedTools(
+            workspacePolicy = effectiveWorkspacePolicy,
+            role = role,
+            depth = depth,
+            maxDepth = IsolatedAgentExecutor.MAX_DELEGATION_DEPTH,
+            requestedCapabilities = capabilities
+        )
+        val receiptContract = SubagentCapabilityPolicy.receiptContract(capabilities)
+        return SubagentTaskEnvelope(
+            parentTaskId = parentTaskId,
+            parentConversationId = parentConversationId,
+            workspaceId = workspaceId,
+            agentId = agent.id,
+            agentName = agent.name,
+            goal = goal.take(12_000),
+            context = buildString {
+                append(context)
+                if (receiptContract.isNotBlank()) {
+                    if (isNotEmpty()) appendLine().appendLine()
+                    appendLine("## Result handoff contract")
+                    append(receiptContract)
+                }
+            }.take(24_000),
+            acceptanceCriteria = acceptanceCriteria.take(6_000),
+            mode = mode,
+            failurePolicy = failurePolicy,
+            role = role,
+            depth = depth,
+            modelKey = modelKey,
+            allowedTools = allowedTools,
+            toolPermissions = SubagentCapabilityPolicy.permissions(allowedTools),
+            workspacePolicy = effectiveWorkspacePolicy,
+            budget = SubagentBudget(
+                maxIterations = maxIterations ?: IsolatedAgentExecutor.DEFAULT_MAX_ITERATIONS,
+                maxResultChars = SubagentCapabilityPolicy.boundedResultChars(capabilities)
+            )
+        )
+    }
+
+    private suspend fun executeSubagentBatch(
+        tasks: List<ResolvedSubagentTask>
+    ): List<Pair<ResolvedSubagentTask, IsolatedExecutionResult>> {
+        if (tasks.isEmpty()) return emptyList()
+        val mode = tasks.first().envelope.mode
+        val failurePolicy = tasks.first().envelope.failurePolicy
+        return if (mode == SubagentExecutionMode.PARALLEL && tasks.size > 1) {
+            supervisorScope {
+                tasks.map { resolved ->
+                    resolved to async {
+                        executeDelegatedAgentIsolated(
+                            buildAgentWithFileContext(resolved.agent),
+                            resolved.envelope
+                        )
+                    }
+                }.map { (resolved, deferred) ->
+                    try {
+                        resolved to deferred.await()
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        // A specifically cancelled child must not cancel its siblings. If the
+                        // parent itself was cancelled, ensureActive rethrows immediately.
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                        resolved to IsolatedExecutionResult(
+                            finalContent = "Cancelled: ${cancelled.message ?: "cancelled by user"}",
+                            subConversationId = -1L,
+                            success = false,
+                            agentName = resolved.agent.name,
+                            taskId = resolved.envelope.taskId,
+                            exitReason = "cancelled",
+                            errorCode = "CANCELLED"
+                        )
+                    }
+                }
+            }
+        } else {
+            val results = mutableListOf<Pair<ResolvedSubagentTask, IsolatedExecutionResult>>()
+            var previousResult: IsolatedExecutionResult? = null
+            var dependencyFailed = false
+            for (resolved in tasks) {
+                if (dependencyFailed) {
+                    results += resolved to IsolatedExecutionResult(
+                        finalContent = "Skipped because a required previous subagent failed.",
+                        subConversationId = -1L,
+                        success = false,
+                        agentName = resolved.agent.name,
+                        taskId = resolved.envelope.taskId,
+                        exitReason = "dependency_failed",
+                        errorCode = "DEPENDENCY_FAILED"
+                    )
+                    continue
+                }
+                val envelope = previousResult?.takeIf { it.success }?.let { previous ->
+                    resolved.envelope.copy(
+                        context = buildString {
+                            appendLine(resolved.envelope.context)
+                            appendLine()
+                            appendLine("## Previous step result")
+                            append(previous.summary.take(8_000))
+                        }.take(24_000)
+                    )
+                } ?: resolved.envelope
+                val result = executeDelegatedAgentIsolated(
+                    buildAgentWithFileContext(resolved.agent),
+                    envelope
+                )
+                results += resolved to result
+                previousResult = result
+                dependencyFailed = !result.success && failurePolicy == SubagentFailurePolicy.FAIL_FAST
+            }
+            results
+        }
+    }
+
+    private suspend fun executeNestedSubagentCall(
+        parentTask: SubagentTaskEnvelope,
+        toolCall: ToolCall,
+        parentSubConversationId: Long
+    ): ToolResult {
+        if (parentTask.role != SubagentRole.ORCHESTRATOR) {
+            return ToolResult(
+                toolCall.id,
+                toolCall.function.name,
+                "Error: this is a leaf subagent and cannot spawn children."
+            )
+        }
+        if (parentTask.depth >= IsolatedAgentExecutor.MAX_DELEGATION_DEPTH) {
+            return ToolResult(
+                toolCall.id,
+                toolCall.function.name,
+                "Error: maximum subagent depth (${IsolatedAgentExecutor.MAX_DELEGATION_DEPTH}) reached."
+            )
+        }
+        val batch = SubagentRequestParser.parse(toolCall.function.arguments).getOrElse { error ->
+            return ToolResult(toolCall.id, toolCall.function.name, "Error: ${error.message}")
+        }
+        val resolved = batch.tasks.mapNotNull { parsed ->
+            val childAgent = findAgentFuzzy(parsed.agentName) ?: return@mapNotNull null
+            val childContext = buildString {
+                appendLine("Parent subagent goal: ${parentTask.goal}")
+                if (parsed.context.isNotBlank()) {
+                    appendLine()
+                    append(parsed.context)
+                }
+            }
+            ResolvedSubagentTask(
+                agent = childAgent,
+                envelope = buildSubagentEnvelope(
+                    agent = childAgent,
+                    goal = parsed.goal,
+                    context = childContext,
+                    acceptanceCriteria = parsed.acceptanceCriteria,
+                    mode = batch.mode,
+                    failurePolicy = batch.failurePolicy,
+                    role = parsed.role,
+                    workspacePolicy = parsed.workspacePolicy,
+                    parentConversationId = parentSubConversationId,
+                    parentTaskId = parentTask.taskId,
+                    depth = parentTask.depth + 1,
+                    modelOverride = parsed.modelKey,
+                    maxIterations = parsed.maxIterations,
+                    requestedCapabilities = parsed.capabilities
+                ),
+                sourceToolCall = toolCall
+            )
+        }
+        if (resolved.isEmpty()) {
+            return ToolResult(toolCall.id, toolCall.function.name, "Error: no requested child agent could be resolved.")
+        }
+        val results = executeSubagentBatch(resolved)
+        val content = results.joinToString("\n\n") { (child, result) ->
+            buildString {
+                append("[${child.agent.name} task=${child.envelope.taskId} status=")
+                append(if (result.success) "completed" else result.exitReason)
+                appendLine("]")
+                append(result.summary.take(8_000))
+            }
+        }.take(32_000)
+        return ToolResult(toolCall.id, toolCall.function.name, content)
     }
 
     /**
@@ -1689,53 +2092,38 @@ Reglas:
     private suspend fun synthesizeParallelResults(
         orchestrator: Agent,
         originalRequest: String,
-        results: List<IsolatedExecutionResult>,
-        conversationMessages: List<Message>
+        results: List<IsolatedExecutionResult>
     ): String? {
-        if (results.size < 2) return null // No synthesis needed for single result
-
         val fullKey = _selectedModel.value
         _workingAgents.value = listOf(orchestrator.name)
         updateAgentStatus(orchestrator.name, "Sintetizando resultados...")
-
-        val agentOutputs = results.joinToString("\n\n---\n\n") { result ->
-            "## Agent: ${result.agentName} (sub-conversation #${result.subConversationId})\nStatus: ${if (result.success) "SUCCESS" else "FAILED"}\n\n${result.finalContent}"
-        }
-
-        val synthesisPrompt = """You are synthesizing the output of ${results.size} agents that worked in parallel on subtasks of the user's request.
-
-## Original User Request
-$originalRequest
-
-## Agent Outputs
-$agentOutputs
-
-## Your Task
-1. Review all agent outputs for completeness and quality
-2. Identify any conflicts, duplications, or missing integrations between outputs
-3. Present a UNIFIED, coherent response to the user that combines all results
-4. If agents produced code, ensure imports, interfaces, and naming are consistent
-5. If there are integration points between components, note what needs to be connected
-6. Keep the response focused and actionable — the user should be able to use this directly
-
-Do NOT repeat the full code from each agent unless you need to show corrections. Summarize what was built, highlight any issues, and provide integration guidance."""
+        val synthesisPrompt = SubagentResultFormatter.buildSynthesisPrompt(originalRequest, results)
 
         return try {
-            val synthesisMessages = conversationMessages + Message(
+            val synthesisMessages = listOf(Message(
                 role = MessageRole.USER,
                 content = synthesisPrompt
-            )
-
-            val result = repository.chatWithTools(
-                agent = orchestrator,
-                messages = synthesisMessages,
-                overrideModel = extractModelId(fullKey),
-                overrideProvider = extractProvider(fullKey),
-                enableTerminal = false,
-                workspaceFolderPath = fileRepository.getWorkspaceFolderPath(workspaceId)
-            )
-
-            result.getOrNull()?.content?.takeIf { it.isNotBlank() }
+            ))
+            var lastError: Throwable? = null
+            repeat(3) { attempt ->
+                val result = repository.chat(
+                    agent = orchestrator,
+                    messages = synthesisMessages,
+                    overrideModel = extractModelId(fullKey),
+                    overrideProvider = extractProvider(fullKey),
+                    memorySessionKey = currentMemorySessionKey()
+                )
+                val content = result.getOrNull()?.trim().orEmpty()
+                if (content.isNotBlank()) return content
+                lastError = result.exceptionOrNull()
+                    ?: IllegalStateException("El proveedor devolvió una síntesis vacía")
+                if (attempt < 2) {
+                    Log.w("WorkspaceDetailVM", "Synthesis attempt ${attempt + 1}/3 failed", lastError)
+                    kotlinx.coroutines.delay(500L * (1L shl attempt))
+                }
+            }
+            Log.w("WorkspaceDetailVM", "All synthesis attempts failed; using persisted fallback", lastError)
+            null
         } catch (e: Exception) {
             Log.w("WorkspaceDetailVM", "Parallel synthesis failed, using raw merge", e)
             null
@@ -1746,6 +2134,10 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
 
     private suspend fun processWithOrchestrator(orchestrator: Agent, userMessage: Message) {
         _workingAgents.value = listOf(orchestrator.name)
+
+        // External integrations are executed in a child conversation so discovery, tool calls,
+        // raw API payloads and retries never accumulate in Cortex's durable chat context.
+        if (tryProcessIsolatedIntegrationRequest(orchestrator, userMessage)) return
 
         // --- Hybrid routing: try local model first if enabled ---
         if (orchestrator.useLocalRouting) {
@@ -1810,8 +2202,9 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
             messages = currentMessages,
             overrideModel = extractModelId(fullKey),
             overrideProvider = extractProvider(fullKey),
-            enableTerminal = true,
-            workspaceFolderPath = workspacePath
+            enableTerminal = orchestrator.enableTerminal,
+            workspaceFolderPath = workspacePath,
+            memorySessionKey = currentMemorySessionKey()
         )
 
         streamFlow.collect { chunk ->
@@ -1857,13 +2250,15 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
 
         var shouldRestoreCortex = true
 
-        // ── PRIORITY 1: Tool-based delegation (delegate_to_agent) ──
+        // ── PRIORITY 1: Typed subagent spawning ──
         // Structured tool calls are the most reliable delegation mechanism.
         val capturedToolCalls = toolCalls // Capture for smart cast
-        val hasDelegationToolCalls = capturedToolCalls?.any { it.function.name == DelegationToolHandler.TOOL_NAME } == true
+        val hasDelegationToolCalls = capturedToolCalls?.any {
+            it.function.name in DelegationToolHandler.ALL_TOOL_NAMES
+        } == true
 
         if (hasDelegationToolCalls && capturedToolCalls != null) {
-            Log.d("WorkspaceDetailVM", "Orchestrator using delegate_to_agent tool (${capturedToolCalls.count { it.function.name == DelegationToolHandler.TOOL_NAME }} delegation(s))")
+            Log.d("WorkspaceDetailVM", "Orchestrator spawning subagents (${capturedToolCalls.count { it.function.name in DelegationToolHandler.ALL_TOOL_NAMES }} batch(es))")
             // Save Cortex's message (clean content, no DELEGATE text to strip)
             val cleanContent = agentOrchestrator.stripDelegationLines(content)
             if (cleanContent.isNotBlank()) {
@@ -1910,8 +2305,8 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
                     }
 
                     val merged = results.joinToString("\n\n---\n\n") { "[${it.agentName}]: ${it.finalContent}" }
-                    val synthesized = synthesizeParallelResults(orchestrator, userMessage.content, results, currentMessages)
-                    val finalContentResult = synthesized ?: merged
+                    val synthesized = synthesizeParallelResults(orchestrator, userMessage.content, results)
+                    val finalContentResult = synthesized ?: SubagentResultFormatter.buildFallback(results)
                     repository.addMessage(workspaceId, _conversationId.value,
                         Message(role = MessageRole.ASSISTANT, content = finalContentResult), orchestrator.id)
                     shouldRestoreCortex = true
@@ -2033,8 +2428,9 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
             messages = currentMessages,
             overrideModel = extractModelId(fullKey),
             overrideProvider = extractProvider(fullKey),
-            enableTerminal = true,
-            workspaceFolderPath = workspacePath
+            enableTerminal = agent.enableTerminal,
+            workspaceFolderPath = workspacePath,
+            memorySessionKey = currentMemorySessionKey()
         )
 
         streamFlow.collect { chunk ->
@@ -2131,7 +2527,8 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
         toolName == "create_agent" -> "Creando agente..."
         toolName == "delete_agent" -> "Eliminando agente..."
         toolName in CALENDAR_TOOL_NAMES -> "Accediendo al calendario..."
-        toolName == "brave_web_search" || toolName == "serpapi_search" || toolName == "duckduckgo_search" -> "Buscando en la web..."
+        toolName in UnifiedWebToolHandler.ALL_TOOL_NAMES || toolName == "brave_web_search" || toolName == "serpapi_search" || toolName == "duckduckgo_search" -> "Buscando en la web..."
+        toolName in SkillToolHandler.ALL_TOOL_NAMES -> "Gestionando skills..."
         toolName in GOOGLE_MAPS_TOOL_NAMES -> "Consultando Google Maps..."
         toolName in CanvaToolHandler.ALL_TOOL_NAMES -> "Usando Canva..."
         toolName in PUBMED_TOOL_NAMES -> "Buscando en PubMed..."
@@ -2142,6 +2539,7 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
         toolName in GoogleDriveToolHandler.ALL_TOOL_NAMES -> "Accediendo a Google Drive..."
         toolName in GoogleWorkspaceToolHandler.ALL_TOOL_NAMES -> "Accediendo a Google Workspace..."
         toolName in ReminderToolHandler.ALL_TOOL_NAMES -> "Gestionando recordatorio..."
+        toolName == CortexMemoryToolHandler.TOOL_NAME -> "Curando MEMORY.md..."
         toolName in MemoryToolHandler.ALL_TOOL_NAMES -> "Accediendo a memoria..."
         toolName in CodeExecutionHandler.ALL_TOOL_NAMES -> "Ejecutando código..."
         toolName in PresentationToolHandler.ALL_TOOL_NAMES -> "Creando presentación..."
@@ -2151,8 +2549,8 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
         toolName in ImageGenerationToolHandler.ALL_TOOL_NAMES -> "Generando imagen con IA..."
         toolName == LocationToolHandler.TOOL_NAME -> "Obteniendo ubicación..."
         toolName == ToolSearchHandler.TOOL_NAME -> "Buscando herramientas..."
-        toolName == SubtaskToolHandler.TOOL_NAME -> "Ejecutando subtarea..."
-        toolName == DelegationToolHandler.TOOL_NAME -> "Delegando a agente..."
+        toolName == LEGACY_SUBTASK_TOOL_NAME -> "Migrando subtarea antigua..."
+        toolName in DelegationToolHandler.ALL_TOOL_NAMES -> "Delegando a agente..."
         toolName == AppControlToolHandler.TOOL_NAME -> "Configurando app..."
         toolName in TodoToolHandler.ALL_TOOL_NAMES -> "Actualizando plan..."
         toolName == ScheduledTaskToolHandler.TOOL_NAME -> "Programando tarea..."
@@ -2269,33 +2667,16 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
         // Obtener el directorio del workspace como directorio de trabajo por defecto
         val workspaceDir = fileRepository.getWorkspaceFolderPath(workspaceId)
 
-        // ── delegate_to_agent: structured agent delegation (like OpenCode's task tool) ──
+        // ── spawn_subagents: structured, bounded delegation ──
         // Multiple calls in a single response → true parallel execution via IsolatedAgentExecutor.
-        val delegationCalls = toolCalls.filter { it.function.name == DelegationToolHandler.TOOL_NAME }
-        if (delegationCalls.isNotEmpty() && (agent.name == "Cortex" || agent.role == "Agent Orchestrator")) {
+        val delegationCalls = toolCalls.filter { it.function.name in DelegationToolHandler.ALL_TOOL_NAMES }
+        if (delegationCalls.isNotEmpty() && agent.isOrchestrator) {
             handleDelegationToolCalls(agent, delegationCalls, toolCalls, depth)
             return
         }
 
-        // Run execute_subtask calls in parallel — they are pure API calls with no UI side effects.
-        // This enables multi-agent research/programming: one response can spawn N parallel subtasks.
-        val subtaskCalls = toolCalls.filter { it.function.name == SubtaskToolHandler.TOOL_NAME }
-        if (subtaskCalls.isNotEmpty()) {
-            val label = if (subtaskCalls.size > 1)
-                "Ejecutando ${subtaskCalls.size} subtareas en paralelo..."
-            else "Ejecutando subtarea..."
-            updateAgentStatus(agent.name, label)
-            Log.d("WorkspaceDetailVM", "Running ${subtaskCalls.size} subtask(s) in parallel")
-            coroutineScope {
-                subtaskCalls.map { toolCall -> async { handleSubtaskToolCall(agent, toolCall) } }.awaitAll()
-            }
-        }
-
         try {
             for ((index, toolCall) in toolCalls.withIndex()) {
-                // Already handled in parallel above
-                if (toolCall.function.name == SubtaskToolHandler.TOOL_NAME) continue
-
                 Log.d("WorkspaceDetailVM", "Processing tool call ${index + 1}/${toolCalls.size}: ${toolCall.function.name}")
 
                 // Update agent activity status based on tool type
@@ -2327,7 +2708,7 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
                             return
                         }
 
-                        Log.d("WorkspaceDetailVM", "Command executed successfully: ${request.command}, success=${result.success}, output=${result.output.take(100)}...")
+                        Log.d("WorkspaceDetailVM", "Command finished: success=${result.success}")
                         saveToolResult(agent, toolCall, result)
                     }
 
@@ -2338,7 +2719,7 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
                     "select_agent" -> {
                         // Only Cortex should delegate via select_agent.
                         // If a delegated agent calls it, just save the result and continue.
-                        if (agent.name == "Cortex") {
+                        if (agent.isOrchestrator) {
                             handleAgentSelectionToolCall(agent, toolCall)
                             return
                         } else {
@@ -2398,6 +2779,14 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
                         handleSerpAPIToolCall(agent, toolCall)
                     }
 
+                    in UnifiedWebToolHandler.ALL_TOOL_NAMES -> {
+                        handleUnifiedWebToolCall(agent, toolCall)
+                    }
+
+                    in SkillToolHandler.ALL_TOOL_NAMES -> {
+                        handleSkillToolCall(agent, toolCall)
+                    }
+
                     in GOOGLE_MAPS_TOOL_NAMES -> {
                         handleGoogleMapsToolCall(agent, toolCall)
                     }
@@ -2431,15 +2820,35 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
                     }
 
                     in GoogleDriveToolHandler.ALL_TOOL_NAMES -> {
-                        handleGoogleDriveToolCall(agent, toolCall)
+                        if (agent.isOrchestrator) {
+                            saveMixedDelegationToolError(
+                                agent,
+                                toolCall,
+                                "Google Drive sólo se ejecuta en un subagente aislado. Usa spawn_subagents con capability google_drive."
+                            )
+                        } else {
+                            handleGoogleDriveToolCall(agent, toolCall)
+                        }
                     }
 
                     in GoogleWorkspaceToolHandler.ALL_TOOL_NAMES -> {
-                        handleGoogleWorkspaceToolCall(agent, toolCall)
+                        if (agent.isOrchestrator) {
+                            saveMixedDelegationToolError(
+                                agent,
+                                toolCall,
+                                "Google Workspace sólo se ejecuta en un subagente aislado. Usa spawn_subagents con una capability google_* limitada."
+                            )
+                        } else {
+                            handleGoogleWorkspaceToolCall(agent, toolCall)
+                        }
                     }
 
                     in ReminderToolHandler.ALL_TOOL_NAMES -> {
                         handleReminderToolCall(agent, toolCall)
+                    }
+
+                    CortexMemoryToolHandler.TOOL_NAME -> {
+                        handleCortexMemoryToolCall(agent, toolCall)
                     }
 
                     in MemoryToolHandler.ALL_TOOL_NAMES -> {
@@ -2459,6 +2868,18 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
                     }
 
                     in WeatherToolHandler.ALL_TOOL_NAMES -> {
+                        val weatherHandler = repository.getWeatherToolHandler()
+                        val needsDeviceLocation = weatherHandler.requiresDeviceLocation(
+                            toolCall.function.arguments
+                        )
+                        if (needsDeviceLocation && !weatherHandler.hasLocationPermission()) {
+                            _uiState.value = _uiState.value.copy(
+                                pendingLocationPermission = true,
+                                pendingLocationToolCall = toolCall,
+                                pendingLocationAgent = agent
+                            )
+                            return
+                        }
                         handleWeatherToolCall(agent, toolCall)
                     }
 
@@ -2487,7 +2908,7 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
                         handleToolSearchCall(agent, toolCall)
                     }
 
-                    SubtaskToolHandler.TOOL_NAME -> {
+                    LEGACY_SUBTASK_TOOL_NAME -> {
                         handleSubtaskToolCall(agent, toolCall)
                     }
 
@@ -2503,12 +2924,12 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
                         handleScheduledTaskToolCall(agent, toolCall)
                     }
 
-                    DelegationToolHandler.TOOL_NAME -> {
-                        // Non-orchestrator agent called delegate_to_agent — block it
+                    in DelegationToolHandler.ALL_TOOL_NAMES -> {
+                        // Non-orchestrator primary agent attempted to spawn children — block it.
                         val toolMessage = Message(
                             role = MessageRole.TOOL,
                             content = "Only Cortex can delegate. Complete the task directly.",
-                            toolResults = listOf(ToolResult(toolCallId = toolCall.id, name = DelegationToolHandler.TOOL_NAME, content = "Error: only the orchestrator agent can delegate tasks. Complete the task directly."))
+                            toolResults = listOf(ToolResult(toolCallId = toolCall.id, name = toolCall.function.name, content = "Error: only the orchestrator agent can delegate tasks. Complete the task directly."))
                         )
                         repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
                     }
@@ -2541,9 +2962,102 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
         }
     }
 
+    private suspend fun tryProcessIsolatedIntegrationRequest(
+        orchestrator: Agent,
+        userMessage: Message
+    ): Boolean {
+        val delegationContext = buildDelegationContext(userMessage)
+        if (!SubagentCapabilityPolicy.shouldAutoDelegateIntegration(
+                text = userMessage.content,
+                context = delegationContext
+            )
+        ) {
+            return false
+        }
+        val capabilities = SubagentCapabilityPolicy.inferCapabilities(userMessage.content)
+            .ifEmpty { SubagentCapabilityPolicy.inferCapabilities(delegationContext) }
+        if (capabilities.isEmpty()) return false
+
+        val worker = selectIntegrationWorker(capabilities) ?: return false
+        val workerWithContext = buildAgentWithFileContext(worker)
+        val task = buildSubagentEnvelope(
+            agent = worker,
+            goal = userMessage.content,
+            context = delegationContext,
+            acceptanceCriteria =
+                "Complete the requested external action and return a verifiable compact receipt.",
+            mode = SubagentExecutionMode.PARALLEL,
+            failurePolicy = SubagentFailurePolicy.FAIL_FAST,
+            role = SubagentRole.LEAF,
+            workspacePolicy = SubagentWorkspacePolicy.READ_ONLY_SHARED,
+            parentConversationId = _conversationId.value ?: return false,
+            parentTaskId = null,
+            depth = 1,
+            modelOverride = null,
+            maxIterations = 12,
+            requestedCapabilities = capabilities
+        )
+
+        Log.d(
+            "WorkspaceDetailVM",
+            "Auto-isolating integration task capabilities=${capabilities.sorted()} worker=${worker.name}"
+        )
+        _workingAgents.value = listOf("${worker.name} · integración")
+        updateAgentStatus(worker.name, "Trabajando en contexto aislado...")
+        val result = executeDelegatedAgentIsolated(workerWithContext, task)
+        val receipt = result.summary.trim().ifBlank {
+            if (result.success) "La operación externa se completó." else "No se pudo completar la operación externa."
+        }.take(task.budget.maxResultChars)
+
+        repository.addMessage(
+            workspaceId,
+            _conversationId.value,
+            Message(
+                role = MessageRole.ASSISTANT,
+                content = receipt,
+                subConversationId = result.subConversationId.takeIf { it > 0 }
+            ),
+            orchestrator.id
+        )
+        clearAgentStatus(worker.name)
+        _workingAgents.value = emptyList()
+        _activeAgent.value = orchestrator
+        repository.setActiveAgent(workspaceId, orchestrator.id)
+        _uiState.value = _uiState.value.copy(
+            isLoading = false,
+            currentReasoning = null,
+            streamingContent = null,
+            streamingReasoning = null,
+            error = null
+        )
+        notifyTaskCompletedIfLong(receipt.take(200))
+        checkContextWindowUsage()
+        return true
+    }
+
+    private suspend fun selectIntegrationWorker(capabilities: Set<String>): Agent? {
+        val preferredNames = when {
+            SubagentCapabilityPolicy.GOOGLE_SHEETS in capabilities ->
+                listOf("Data Analyst", "Researcher", "Writer")
+            SubagentCapabilityPolicy.GOOGLE_DOCS in capabilities ||
+                SubagentCapabilityPolicy.GOOGLE_SLIDES in capabilities ||
+                SubagentCapabilityPolicy.GOOGLE_GMAIL in capabilities ->
+                listOf("Writer", "Creative Writer", "Researcher")
+            else -> listOf("Researcher", "Data Analyst", "Writer")
+        }
+        val candidates = repository.getAllAgentsOnce().filterNot { it.isOrchestrator }
+        return preferredNames.firstNotNullOfOrNull { preferred ->
+            candidates.firstOrNull { candidate ->
+                candidate.name.equals(preferred, ignoreCase = true) ||
+                    candidate.name.contains(preferred, ignoreCase = true) ||
+                    preferred.contains(candidate.name, ignoreCase = true)
+            }
+        } ?: candidates.firstOrNull()
+    }
+
     /**
-     * Handles delegate_to_agent tool calls from Cortex.
-     * Multiple calls in a single response are executed in parallel via IsolatedAgentExecutor.
+     * Handles typed spawn_subagents calls from Cortex (and the legacy alias).
+     * Batches are scheduled with bounded concurrency via IsolatedAgentExecutor.
      * Non-delegation tool calls from the same response are processed first.
      * After delegation completes, results are saved as TOOL messages and Cortex synthesizes.
      */
@@ -2553,138 +3067,246 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
         allToolCalls: List<ToolCall>,
         depth: Int
     ) {
-        val otherCalls = allToolCalls.filter { it.function.name != DelegationToolHandler.TOOL_NAME }
+        val otherCalls = allToolCalls.filter { it.function.name !in DelegationToolHandler.ALL_TOOL_NAMES }
 
-        // 1. Process non-delegation tools first (e.g. memory_save, todo_write)
+        // 1. Process non-delegation tools first (e.g. memory, todo_write)
         for (tc in otherCalls) {
             Log.d("WorkspaceDetailVM", "Pre-delegation tool: ${tc.function.name}")
             updateAgentStatus(orchestrator.name, getToolStatusLabel(tc.function.name))
             when (tc.function.name) {
+                CortexMemoryToolHandler.TOOL_NAME -> handleCortexMemoryToolCall(orchestrator, tc)
                 in MemoryToolHandler.ALL_TOOL_NAMES -> handleMemoryToolCall(orchestrator, tc)
                 in TodoToolHandler.ALL_TOOL_NAMES -> handleTodoToolCall(orchestrator, tc)
                 in FILE_TOOL_NAMES -> handleFileToolCall(orchestrator, tc)
-                else -> {
-                    // Save as no-op tool result so the LLM loop stays consistent
-                    val toolMessage = Message(
-                        role = MessageRole.TOOL,
-                        content = "OK",
-                        toolResults = listOf(ToolResult(tc.id, tc.function.name, "OK"))
+                "duckduckgo_search" -> handleDuckDuckGoSearchToolCall(orchestrator, tc)
+                "brave_web_search" -> handleBraveSearchToolCall(orchestrator, tc)
+                "serpapi_search" -> handleSerpAPIToolCall(orchestrator, tc)
+                in UnifiedWebToolHandler.ALL_TOOL_NAMES -> handleUnifiedWebToolCall(orchestrator, tc)
+                in SkillToolHandler.ALL_TOOL_NAMES -> handleSkillToolCall(orchestrator, tc)
+                in GOOGLE_MAPS_TOOL_NAMES -> handleGoogleMapsToolCall(orchestrator, tc)
+                in CanvaToolHandler.ALL_TOOL_NAMES -> handleCanvaToolCall(orchestrator, tc)
+                in PUBMED_TOOL_NAMES -> handlePubMedToolCall(orchestrator, tc)
+                in FinanceToolHandler.ALL_TOOL_NAMES -> handleFinanceToolCall(orchestrator, tc)
+                in ObsidianToolHandler.ALL_TOOL_NAMES -> handleObsidianToolCall(orchestrator, tc)
+                in GitHubToolHandler.ALL_TOOL_NAMES -> handleGitHubToolCall(orchestrator, tc)
+                in NotionToolHandler.ALL_TOOL_NAMES -> handleNotionToolCall(orchestrator, tc)
+                in SlackToolHandler.ALL_TOOL_NAMES -> handleSlackToolCall(orchestrator, tc)
+                in GoogleDriveToolHandler.ALL_TOOL_NAMES -> saveMixedDelegationToolError(
+                    orchestrator,
+                    tc,
+                    "Google Drive sólo se ejecuta en un subagente aislado. Usa spawn_subagents con capability google_drive."
+                )
+                in GoogleWorkspaceToolHandler.ALL_TOOL_NAMES -> saveMixedDelegationToolError(
+                    orchestrator,
+                    tc,
+                    "Google Workspace sólo se ejecuta en un subagente aislado. Usa spawn_subagents con una capability google_* limitada."
+                )
+                in ReminderToolHandler.ALL_TOOL_NAMES -> handleReminderToolCall(orchestrator, tc)
+                in CodeExecutionHandler.ALL_TOOL_NAMES -> handleCodeExecutionToolCall(orchestrator, tc)
+                in PresentationToolHandler.ALL_TOOL_NAMES -> handlePresentationToolCall(orchestrator, tc)
+                in AcademicSearchToolHandler.ALL_TOOL_NAMES -> handleAcademicSearchToolCall(orchestrator, tc)
+                in WeatherToolHandler.ALL_TOOL_NAMES -> {
+                    val handler = repository.getWeatherToolHandler()
+                    if (handler.requiresDeviceLocation(tc.function.arguments) && !handler.hasLocationPermission()) {
+                        saveMixedDelegationToolError(
+                            orchestrator,
+                            tc,
+                            "La ubicación requiere permiso visible. Solicita clima y delegación en pasos separados."
+                        )
+                    } else {
+                        handleWeatherToolCall(orchestrator, tc)
+                    }
+                }
+                ImageGenerationToolHandler.TOOL_NAME_DALLE ->
+                    handleImageGenerationToolCall(orchestrator, tc, provider = "dalle")
+                ImageGenerationToolHandler.TOOL_NAME_GOOGLE_IMAGEN ->
+                    handleImageGenerationToolCall(orchestrator, tc, provider = "google")
+                LocationToolHandler.TOOL_NAME -> {
+                    if (repository.getLocationToolHandler().hasPermission()) {
+                        handleLocationToolCall(orchestrator, tc)
+                    } else {
+                        saveMixedDelegationToolError(
+                            orchestrator,
+                            tc,
+                            "La ubicación requiere permiso visible. Solicítala en un paso separado."
+                        )
+                    }
+                }
+                ToolSearchHandler.TOOL_NAME -> handleToolSearchCall(orchestrator, tc)
+                LEGACY_SUBTASK_TOOL_NAME -> handleSubtaskToolCall(orchestrator, tc)
+                AppControlToolHandler.TOOL_NAME -> handleAppControlToolCall(orchestrator, tc)
+                ScheduledTaskToolHandler.TOOL_NAME -> handleScheduledTaskToolCall(orchestrator, tc)
+                in AgentCreatorToolHandler.ALL_TOOL_NAMES -> handleAgentCreatorToolCall(orchestrator, tc)
+                // These actions can pause for a permission/chooser and cannot safely be mixed.
+                "execute_command", "select_agent", in CALENDAR_TOOL_NAMES, in SYSTEM_APP_TOOL_NAMES ->
+                    saveMixedDelegationToolError(
+                        orchestrator,
+                        tc,
+                        "Esta herramienta requiere una interacción visible; ejecútala separada de spawn_subagents."
                     )
-                    repository.addMessage(workspaceId, _conversationId.value, toolMessage, orchestrator.id)
-                }
+                else -> saveMixedDelegationToolError(
+                    orchestrator,
+                    tc,
+                    "Herramienta no disponible durante una llamada combinada con delegación."
+                )
             }
         }
 
-        // 2. Parse delegation calls
-        data class DelegationEntry(val toolCall: ToolCall, val agent: Agent, val task: String)
+        val parentConversationId = _conversationId.value ?: return
+        val lastUserMessage = messages.value.lastOrNull { it.role == MessageRole.USER }
+        val callErrors = mutableMapOf<String, MutableList<String>>()
+        val resolvedTasks = mutableListOf<ResolvedSubagentTask>()
 
-        val entries = mutableListOf<DelegationEntry>()
-        for (tc in delegationCalls) {
-            try {
-                val args = JsonParser.parseString(tc.function.arguments).asJsonObject
-                val agentName = args.get("agent_name")?.asString
-                val task = args.get("task")?.asString
-                if (agentName == null || task == null) {
-                    val errorResult = ToolResult(tc.id, DelegationToolHandler.TOOL_NAME, "Error: agent_name and task are required")
-                    repository.addMessage(workspaceId, _conversationId.value,
-                        Message(role = MessageRole.TOOL, content = "Error: missing parameters", toolResults = listOf(errorResult)),
-                        orchestrator.id)
+        for (toolCall in delegationCalls) {
+            val parsedBatch = SubagentRequestParser.parse(toolCall.function.arguments)
+            if (parsedBatch.isFailure) {
+                callErrors.getOrPut(toolCall.id) { mutableListOf() } +=
+                    "Invalid spawn request: ${parsedBatch.exceptionOrNull()?.message}"
+                continue
+            }
+            val batch = parsedBatch.getOrThrow()
+            for (parsed in batch.tasks) {
+                val targetAgent = findAgentFuzzy(parsed.agentName)
+                if (targetAgent == null) {
+                    callErrors.getOrPut(toolCall.id) { mutableListOf() } +=
+                        "Agent '${parsed.agentName}' was not found."
                     continue
                 }
-                val resolvedAgent = findAgentFuzzy(agentName)
-                if (resolvedAgent == null) {
-                    Log.w("WorkspaceDetailVM", "Delegation target not found: $agentName")
-                    val errorResult = ToolResult(tc.id, DelegationToolHandler.TOOL_NAME, "Error: agent '$agentName' not found. Available agents: ${repository.getAllAgentsOnce().filter { it.id != orchestrator.id }.joinToString { it.name }}")
-                    repository.addMessage(workspaceId, _conversationId.value,
-                        Message(role = MessageRole.TOOL, content = "Agent not found: $agentName", toolResults = listOf(errorResult)),
-                        orchestrator.id)
-                    continue
+                val relevantContext = buildString {
+                    if (parsed.context.isNotBlank()) appendLine(parsed.context)
+                    lastUserMessage?.content?.takeIf { it.isNotBlank() }?.let { request ->
+                        if (isNotEmpty()) appendLine()
+                        appendLine("## Current user request")
+                        append(request.take(8_000))
+                    }
                 }
-                entries.add(DelegationEntry(tc, resolvedAgent, task))
-            } catch (e: Exception) {
-                Log.e("WorkspaceDetailVM", "Failed to parse delegation args", e)
-                val errorResult = ToolResult(tc.id, DelegationToolHandler.TOOL_NAME, "Error parsing arguments: ${e.message}")
-                repository.addMessage(workspaceId, _conversationId.value,
-                    Message(role = MessageRole.TOOL, content = "Error: ${e.message}", toolResults = listOf(errorResult)),
-                    orchestrator.id)
+                val envelope = buildSubagentEnvelope(
+                    agent = targetAgent,
+                    goal = parsed.goal,
+                    context = relevantContext,
+                    acceptanceCriteria = parsed.acceptanceCriteria,
+                    mode = batch.mode,
+                    failurePolicy = batch.failurePolicy,
+                    role = parsed.role,
+                    workspacePolicy = parsed.workspacePolicy,
+                    parentConversationId = parentConversationId,
+                    parentTaskId = null,
+                    depth = 1,
+                    modelOverride = parsed.modelKey,
+                    maxIterations = parsed.maxIterations,
+                    requestedCapabilities = parsed.capabilities
+                )
+                resolvedTasks += ResolvedSubagentTask(targetAgent, envelope, toolCall)
             }
         }
 
-        if (entries.isEmpty()) {
-            // All delegations failed to resolve — let Cortex handle the errors
-            continueConversationAfterTools(orchestrator, depth + 1)
-            return
+        val modes = resolvedTasks.map { it.envelope.mode }.distinct()
+        if (modes.size > 1) {
+            delegationCalls.forEach { toolCall ->
+                callErrors.getOrPut(toolCall.id) { mutableListOf() } +=
+                    "All spawn_subagents calls in one model response must use the same execution mode."
+            }
+            resolvedTasks.clear()
         }
 
-        // 3. Update UI with working agents
-        _workingAgents.value = entries.mapIndexed { i, e ->
-            if (entries.size > 1) "${e.agent.name} #${i + 1}" else e.agent.name
+        _workingAgents.value = resolvedTasks.map {
+            "${it.agent.name} #${it.envelope.taskId.take(4)}"
         }
         _uiState.value = _uiState.value.copy(isLoading = true)
 
-        val isParallel = entries.size > 1
-        Log.d("WorkspaceDetailVM", "Delegation: ${entries.size} agent(s) ${if (isParallel) "in parallel" else "single"}")
+        val outcomes = executeSubagentBatch(resolvedTasks)
+        val outcomesByCall = outcomes.groupBy { it.first.sourceToolCall?.id }
 
-        // 4. Get the last user message for context
-        val lastUserMsg = messages.value.lastOrNull { it.role == MessageRole.USER }
-            ?: Message(role = MessageRole.USER, content = entries.first().task)
-
-        // 5. Execute delegations (parallel if multiple, single if one)
-        val delegationTimeout = 5 * 60 * 1000L // 5 minutes per agent
-
-        val results: List<Pair<ToolCall, IsolatedExecutionResult>> = if (isParallel) {
-            coroutineScope {
-                entries.map { entry ->
-                    async {
-                        val agentWithCtx = buildAgentWithFileContext(entry.agent)
-                        val enhancedAgent = agentWithCtx.copy(
-                            systemPrompt = agentWithCtx.systemPrompt +
-                                "\n\n## PARALLEL EXECUTION CONTEXT\nYou are one of ${entries.size} agents working simultaneously on different parts of the same project. Focus ONLY on YOUR assigned task. Other parts are being handled by other agents."
-                        )
-                        val result = withTimeoutOrNull(delegationTimeout) {
-                            executeDelegatedAgentIsolated(enhancedAgent, lastUserMsg, subtaskOverride = entry.task)
-                        } ?: IsolatedExecutionResult(
-                            finalContent = "Error: delegation timed out after ${delegationTimeout / 1000}s",
-                            subConversationId = -1L,
-                            success = false,
-                            agentName = entry.agent.name
-                        )
-                        entry.toolCall to result
+        // Exactly one TOOL response is persisted for each spawn tool call.
+        for (toolCall in delegationCalls) {
+            val taskOutcomes = outcomesByCall[toolCall.id].orEmpty()
+            val content = buildString {
+                callErrors[toolCall.id].orEmpty().forEach { error ->
+                    appendLine("[error] $error")
+                }
+                taskOutcomes.forEach { (resolved, result) ->
+                    append("[${resolved.agent.name} task=${resolved.envelope.taskId} status=")
+                    append(if (result.success) "completed" else result.exitReason)
+                    appendLine("]")
+                    appendLine(result.summary.take(resolved.envelope.budget.maxResultChars))
+                    if (result.filesModified.isNotEmpty()) {
+                        appendLine("Files: ${result.filesModified.joinToString()}")
                     }
-                }.awaitAll()
-            }
-        } else {
-            val entry = entries.first()
-            val agentWithCtx = buildAgentWithFileContext(entry.agent)
-            val result = withTimeoutOrNull(delegationTimeout) {
-                executeDelegatedAgentIsolated(agentWithCtx, lastUserMsg, subtaskOverride = entry.task)
-            } ?: IsolatedExecutionResult(
-                finalContent = "Error: delegation timed out after ${delegationTimeout / 1000}s",
-                subConversationId = -1L,
-                success = false,
-                agentName = entry.agent.name
+                    if (result.testsRun.isNotEmpty()) {
+                        appendLine("Checks: ${result.testsRun.joinToString()}")
+                    }
+                    appendLine()
+                }
+                if (isBlank()) append("No subagent task was executed.")
+            }.trim().take(40_000)
+            repository.addMessage(
+                workspaceId,
+                parentConversationId,
+                Message(
+                    role = MessageRole.TOOL,
+                    content = content,
+                    toolResults = listOf(ToolResult(toolCall.id, toolCall.function.name, content)),
+                    subConversationId = taskOutcomes.firstOrNull()?.second?.subConversationId
+                        ?.takeIf { it > 0 }
+                ),
+                orchestrator.id
             )
-            listOf(entry.toolCall to result)
         }
 
-        // 6. Save results as TOOL messages so Cortex sees them in the next turn
-        for ((tc, result) in results) {
-            val content = "[${result.agentName}]:\n${result.finalContent}"
-            val toolResult = ToolResult(tc.id, DelegationToolHandler.TOOL_NAME, content)
-            val toolMessage = Message(
+        val isParallel = resolvedTasks.firstOrNull()?.envelope?.mode == SubagentExecutionMode.PARALLEL
+        _workingAgents.value = listOf(orchestrator.name)
+        updateAgentStatus(orchestrator.name, when {
+            isParallel && outcomes.size > 1 -> "Sintetizando resultados..."
+            !isParallel && outcomes.size > 1 -> "Revisando resultado final del pipeline..."
+            else -> "Finalizando..."
+        })
+        kotlinx.coroutines.delay(100) // Ensure TOOL messages are persisted
+
+        // Delegation completion is a synthesis-only phase. Use a clean request with no
+        // tool-call history or tool definitions, then persist a deterministic fallback.
+        val results = outcomes.map { it.second }
+        val originalRequest = lastUserMessage?.content.orEmpty()
+        val synthesized = synthesizeParallelResults(orchestrator, originalRequest, results)
+        val finalContent = checkAndSetOptions(
+            synthesized ?: SubagentResultFormatter.buildFallback(results)
+        )
+        repository.addMessage(
+            workspaceId,
+            parentConversationId,
+            Message(role = MessageRole.ASSISTANT, content = finalContent),
+            orchestrator.id
+        )
+        _workingAgents.value = emptyList()
+        clearAllAgentStatuses()
+        _activeAgent.value = orchestrator
+        repository.setActiveAgent(workspaceId, orchestrator.id)
+        _uiState.value = _uiState.value.copy(
+            isLoading = false,
+            currentReasoning = null,
+            streamingContent = null,
+            streamingReasoning = null,
+            error = null
+        )
+        notifyTaskCompletedIfLong(finalContent.take(200))
+        checkContextWindowUsage()
+    }
+
+    private suspend fun saveMixedDelegationToolError(
+        agent: Agent,
+        toolCall: ToolCall,
+        message: String
+    ) {
+        val content = "Error: $message"
+        repository.addMessage(
+            workspaceId,
+            _conversationId.value,
+            Message(
                 role = MessageRole.TOOL,
                 content = content,
-                toolResults = listOf(toolResult),
-                subConversationId = if (result.subConversationId > 0) result.subConversationId else null
-            )
-            repository.addMessage(workspaceId, _conversationId.value, toolMessage, orchestrator.id)
-        }
-
-        // 7. Let Cortex synthesize the results naturally
-        _workingAgents.value = listOf(orchestrator.name)
-        updateAgentStatus(orchestrator.name, if (isParallel) "Sintetizando resultados..." else "Finalizando...")
-        kotlinx.coroutines.delay(100) // Ensure TOOL messages are persisted
-        continueConversationAfterTools(orchestrator, depth + 1)
+                toolResults = listOf(ToolResult(toolCall.id, toolCall.function.name, content))
+            ),
+            agent.id
+        )
     }
 
     private suspend fun handleFileToolCall(agent: Agent, toolCall: ToolCall) {
@@ -2753,9 +3375,9 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
         repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
 
         // Delegate to the selected agent immediately
-        if (result.success && result.agentName != "Cortex" && result.agentName != agent.name) {
+        if (result.success && result.agentName != agent.name) {
             val targetAgent = findAgentFuzzy(result.agentName)
-            if (targetAgent != null) {
+            if (targetAgent != null && !targetAgent.isOrchestrator) {
                 Log.d("WorkspaceDetailVM", "select_agent delegating to: ${targetAgent.name} (confidence: ${result.confidence})")
                 _workingAgents.value = listOf(targetAgent.name)
                 val targetAgentWithContext = buildAgentWithFileContext(targetAgent)
@@ -2882,7 +3504,7 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
         val currentMessages = messages.value
         Log.d("WorkspaceDetailVM", "Continuing conversation at depth $depth with ${currentMessages.size} messages")
         currentMessages.lastOrNull()?.let { lastMsg ->
-            Log.d("WorkspaceDetailVM", "Last message: role=${lastMsg.role}, content=${lastMsg.content.take(100)}...")
+            Log.d("WorkspaceDetailVM", "Last message role=${lastMsg.role}, chars=${lastMsg.content.length}")
         }
 
         _uiState.value = _uiState.value.copy(isLoading = true)
@@ -2893,8 +3515,9 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
                 messages = messages.value,
                 overrideModel = extractModelId(fullKey),
                 overrideProvider = extractProvider(fullKey),
-                enableTerminal = true,
-                workspaceFolderPath = workspacePath
+                enableTerminal = agent.enableTerminal,
+                workspaceFolderPath = workspacePath,
+                memorySessionKey = currentMemorySessionKey()
             )
             
             result.onSuccess { response ->
@@ -2945,7 +3568,7 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
         }
         
         // If there are pending sequential agents, process the next one
-        if (agent.name != "Cortex" && _pendingSequentialAgents.value.isNotEmpty()) {
+        if (!agent.isOrchestrator && _pendingSequentialAgents.value.isNotEmpty()) {
             val userMsg = _sequentialUserMessage.value
             if (userMsg != null) {
                 Log.d("WorkspaceDetailVM", "Sequential: agent '${agent.name}' done, continuing pipeline")
@@ -2955,7 +3578,7 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
         }
 
         // Si el agente que procesó no es el orquestador (fue una delegación), restaurarlo
-        if (agent.role != "Agent Orchestrator") {
+        if (!agent.isOrchestrator) {
             Log.d("WorkspaceDetailVM", "Restoring orchestrator after delegation to ${agent.name}")
             _workingAgents.value = emptyList()
             val orchestrator = repository.getOrchestratorAgent()
@@ -3191,19 +3814,16 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
     }
 
     private suspend fun handleSubtaskToolCall(agent: Agent, toolCall: ToolCall) {
-        val result = repository.getSubtaskToolHandler().executeTool(
-            toolCallId = toolCall.id,
-            arguments = toolCall.function.arguments,
-            selectedModelKey = _selectedModel.value
-        )
+        val content = "Error: execute_subtask was replaced by spawn_subagents. " +
+            "Create a typed subagent batch instead."
         val toolResult = ToolResult(
-            toolCallId = result.toolCallId,
-            name = SubtaskToolHandler.TOOL_NAME,
-            content = result.content
+            toolCallId = toolCall.id,
+            name = LEGACY_SUBTASK_TOOL_NAME,
+            content = content
         )
         val toolMessage = Message(
             role = MessageRole.TOOL,
-            content = result.content,
+            content = content,
             toolResults = listOf(toolResult)
         )
         repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
@@ -3297,6 +3917,60 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
             toolResults = listOf(toolResult)
         )
         repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
+    }
+
+    private suspend fun handleUnifiedWebToolCall(agent: Agent, toolCall: ToolCall) {
+        val result = repository.getUnifiedWebToolHandler().executeTool(
+            toolCallId = toolCall.id,
+            toolName = toolCall.function.name,
+            arguments = toolCall.function.arguments
+        )
+        val content = if (result.success) result.content else "Error: ${result.content}"
+        val toolResult = ToolResult(
+            toolCallId = result.toolCallId,
+            name = result.toolName,
+            content = content
+        )
+        repository.addMessage(
+            workspaceId,
+            _conversationId.value,
+            Message(
+                role = MessageRole.TOOL,
+                content = content,
+                toolResults = listOf(toolResult)
+            ),
+            agent.id
+        )
+    }
+
+    private suspend fun handleSkillToolCall(agent: Agent, toolCall: ToolCall) {
+        val result = repository.getSkillToolHandler().executeTool(
+            toolCallId = toolCall.id,
+            toolName = toolCall.function.name,
+            arguments = toolCall.function.arguments,
+            allowUserRequestedCreation = userExplicitlyRequestedSkillCreation()
+        )
+        val content = if (result.success) result.content else "Error: ${result.content}"
+        repository.addMessage(
+            workspaceId,
+            _conversationId.value,
+            Message(
+                role = MessageRole.TOOL,
+                content = content,
+                toolResults = listOf(ToolResult(result.toolCallId, result.toolName, content))
+            ),
+            agent.id
+        )
+    }
+
+    private fun userExplicitlyRequestedSkillCreation(): Boolean {
+        val request = messages.value.lastOrNull { it.role == MessageRole.USER }
+            ?.content?.lowercase().orEmpty()
+        val mentionsSkill = "skill" in request || "habilidad" in request
+        val asksCreation = listOf(
+            "crea", "crear", "créame", "genera", "generar", "construye", "haz", "nueva", "nuevo"
+        ).any(request::contains)
+        return mentionsSkill && asksCreation
     }
 
     private val GOOGLE_MAPS_TOOL_NAMES = setOf(
@@ -3455,9 +4129,9 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
         val token = repository.getValidGoogleDriveToken()
         if (token.isBlank()) {
             val toolMessage = Message(role = MessageRole.TOOL,
-                content = "Error: Google Drive no esta configurado. Ve a MCP para conectar tu cuenta.",
+                content = "Error: Google Workspace no está autorizado. Ve a Ajustes > Google Workspace para conectar o renovar tu cuenta.",
                 toolResults = listOf(ToolResult(toolCall.id, toolCall.function.name,
-                    "Error: Google Drive no esta configurado.")))
+                    "Error: Google Workspace no está autorizado.")))
             repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
             return
         }
@@ -3472,15 +4146,13 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
 
     private suspend fun handleGoogleWorkspaceToolCall(agent: Agent, toolCall: ToolCall) {
         val accessToken = repository.getGoogleWorkspaceOAuthManager().getValidAccessToken().getOrElse {
-            // Try falling back to Google Drive token
-            securePreferences.getGoogleDriveAccessToken() ?: run {
-                val toolMessage = Message(role = MessageRole.TOOL,
-                    content = "Error: Google Workspace not authenticated. Please connect your Google account in Settings > Providers.",
-                    toolResults = listOf(ToolResult(toolCall.id, toolCall.function.name,
-                        "Error: Google Workspace not authenticated.")))
-                repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
-                return
-            }
+            val detail = it.message ?: "Google Workspace no está autorizado."
+            val toolMessage = Message(role = MessageRole.TOOL,
+                content = "Error: $detail",
+                toolResults = listOf(ToolResult(toolCall.id, toolCall.function.name,
+                    "Error: $detail")))
+            repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
+            return
         }
         val result = repository.getGoogleWorkspaceToolHandler().executeTool(
             toolCallId = toolCall.id, toolName = toolCall.function.name,
@@ -3500,7 +4172,44 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
         repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
     }
 
+    private suspend fun handleCortexMemoryToolCall(agent: Agent, toolCall: ToolCall) {
+        val result = repository.getCortexMemoryToolHandler().executeTool(
+            toolCallId = toolCall.id,
+            arguments = toolCall.function.arguments,
+            agent = agent,
+            turnKey = buildMemoryTurnKey(agent)
+        )
+        val toolMessage = Message(
+            role = MessageRole.TOOL,
+            content = result.content,
+            toolResults = listOf(
+                ToolResult(result.toolCallId, CortexMemoryToolHandler.TOOL_NAME, result.content)
+            )
+        )
+        repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
+    }
+
+    private fun buildMemoryTurnKey(agent: Agent): String {
+        val lastUserTimestamp = messages.value
+            .lastOrNull { it.role == MessageRole.USER }
+            ?.timestamp ?: 0L
+        return "${_conversationId.value ?: workspaceId}:${agent.id}:$lastUserTimestamp"
+    }
+
+    private fun currentMemorySessionKey(): String? =
+        _conversationId.value?.let { conversationId -> "conversation:$conversationId" }
+
     private suspend fun handleMemoryToolCall(agent: Agent, toolCall: ToolCall) {
+        if (toolCall.function.name !in MemoryToolHandler.READ_TOOL_NAMES) {
+            val content = "Legacy semantic-memory writes are disabled. Cortex must use the bounded 'memory' tool for durable information."
+            val toolMessage = Message(
+                role = MessageRole.TOOL,
+                content = content,
+                toolResults = listOf(ToolResult(toolCall.id, toolCall.function.name, content))
+            )
+            repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
+            return
+        }
         val result = repository.getMemoryToolHandler().executeTool(
             toolCallId = toolCall.id, toolName = toolCall.function.name, arguments = toolCall.function.arguments
         )
@@ -3573,19 +4282,43 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
 
         val query = args.get("query")?.asString ?: ""
         val workspacePath = fileRepository.getWorkspaceFolderPath(workspaceId)
-        val availableToolNames = repository.getAllAvailableToolNames(agent, true, workspacePath)
+        val availableToolNames = repository.getAllAvailableToolNames(
+            agent,
+            agent.enableTerminal,
+            workspacePath
+        )
 
         val result = handler.search(query, availableToolNames)
+        val isolatedGoogleToolNames =
+            GoogleWorkspaceToolHandler.ALL_TOOL_NAMES + GoogleDriveToolHandler.ALL_TOOL_NAMES
+        val isolatedGoogleTools = if (agent.isOrchestrator) {
+            result.toolNames.intersect(isolatedGoogleToolNames)
+        } else {
+            emptySet()
+        }
+        val activatableTools = result.toolNames - isolatedGoogleTools
 
         // Activate discovered tools so they're included in the next API call
-        if (result.found && result.toolNames.isNotEmpty()) {
-            repository.activateTools(result.toolNames)
+        if (result.found && activatableTools.isNotEmpty()) {
+            repository.activateTools(agent, workspacePath, activatableTools)
+        }
+
+        val resultMessage = buildString {
+            append(result.message)
+            if (isolatedGoogleTools.isNotEmpty()) {
+                appendLine()
+                appendLine()
+                append(
+                    "Google Workspace está aislado del contexto principal. Usa spawn_subagents " +
+                        "con la capability google_* más limitada para ejecutar esta acción."
+                )
+            }
         }
 
         val toolMessage = Message(
             role = MessageRole.TOOL,
-            content = result.message,
-            toolResults = listOf(ToolResult(toolCall.id, ToolSearchHandler.TOOL_NAME, result.message))
+            content = resultMessage,
+            toolResults = listOf(ToolResult(toolCall.id, ToolSearchHandler.TOOL_NAME, resultMessage))
         )
         repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
     }
@@ -3648,27 +4381,11 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
     }
 
     private suspend fun handleWeatherToolCall(agent: Agent, toolCall: ToolCall) {
-        val apiKey = repository.getOpenWeatherApiKey()
-        if (apiKey.isBlank()) {
-            val toolResult = ToolResult(
-                toolCallId = toolCall.id,
-                name = toolCall.function.name,
-                content = "Error: OpenWeather API no está configurado. Ve a la sección MCP para agregar tu API key."
-            )
-            val toolMessage = Message(
-                role = MessageRole.TOOL,
-                content = toolResult.content,
-                toolResults = listOf(toolResult)
-            )
-            repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
-            return
-        }
-
         val handler = repository.getWeatherToolHandler()
         val result = when (toolCall.function.name) {
-            WeatherToolHandler.TOOL_NAME_CURRENT -> handler.executeCurrentWeather(toolCall.id, toolCall.function.arguments, apiKey)
-            WeatherToolHandler.TOOL_NAME_FORECAST -> handler.executeForecast(toolCall.id, toolCall.function.arguments, apiKey)
-            WeatherToolHandler.TOOL_NAME_AIR_QUALITY -> handler.executeAirQuality(toolCall.id, toolCall.function.arguments, apiKey)
+            WeatherToolHandler.TOOL_NAME_CURRENT -> handler.executeCurrentWeather(toolCall.id, toolCall.function.arguments)
+            WeatherToolHandler.TOOL_NAME_FORECAST -> handler.executeForecast(toolCall.id, toolCall.function.arguments)
+            WeatherToolHandler.TOOL_NAME_AIR_QUALITY -> handler.executeAirQuality(toolCall.id, toolCall.function.arguments)
             else -> return
         }
 
@@ -3785,7 +4502,11 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
         )
 
         viewModelScope.launch {
-            handleLocationToolCall(agent, toolCall)
+            if (toolCall.function.name in WeatherToolHandler.ALL_TOOL_NAMES) {
+                handleWeatherToolCall(agent, toolCall)
+            } else {
+                handleLocationToolCall(agent, toolCall)
+            }
             kotlinx.coroutines.delay(100)
             continueConversationAfterTools(agent)
         }
@@ -3796,10 +4517,21 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
         val agent = _uiState.value.pendingLocationAgent ?: _activeAgent.value ?: return
 
         viewModelScope.launch {
+            val isWeatherRequest = toolCall.function.name in WeatherToolHandler.ALL_TOOL_NAMES
+            val denialMessage = if (isWeatherRequest) {
+                "Se necesita permiso de ubicación para consultar el clima de la ubicación actual."
+            } else {
+                "El usuario no ha concedido acceso a la ubicación."
+            }
+            val weatherData = if (isWeatherRequest) {
+                "\n<!--WEATHER_DATA:{\"type\":\"error\",\"code\":\"LOCATION_PERMISSION_REQUIRED\",\"message\":\"$denialMessage\",\"source\":\"Open-Meteo\"}-->"
+            } else {
+                ""
+            }
             val toolResult = ToolResult(
                 toolCallId = toolCall.id,
                 name = toolCall.function.name,
-                content = "Permiso denegado: El usuario no ha concedido acceso a la ubicacion. Informa al usuario que necesita otorgar el permiso de ubicacion para esta funcionalidad."
+                content = "Permiso denegado: $denialMessage$weatherData"
             )
             val toolMessage = Message(
                 role = MessageRole.TOOL,
@@ -3948,18 +4680,4 @@ Do NOT repeat the full code from each agent unless you need to show corrections.
         triggerInactiveConversationsExtraction()
     }
 
-    /**
-     * Fetches relevant memories and appends them to an agent's system prompt
-     * before delegation. This gives delegated agents personal context about the user.
-     */
-    private suspend fun buildAgentWithMemoryContext(agent: Agent, userMessage: String): Agent {
-        try {
-            val memorySummary = repository.getImportantMemoriesCompact() ?: return agent
-            val memorySection = "\n\n## User context\n$memorySummary\n\nUse this to personalize. Don't mention memory."
-            return agent.copy(systemPrompt = agent.systemPrompt + memorySection)
-        } catch (e: Exception) {
-            Log.w("WorkspaceDetailVM", "Memory sharing failed (non-critical)", e)
-            return agent
-        }
-    }
 }

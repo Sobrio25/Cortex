@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">AI Agents</string>
+    <string name="app_name">Cortex</string>
     <string name="agents">Agentes</string>
     <string name="providers">Proveedores</string>
     <string name="settings">Configuración</string>
@@ -34,7 +34,7 @@
     <string name="error_connection">Error de conexión</string>
 
     <!-- Onboarding -->
-    <string name="onboarding_welcome_title">Bienvenido a AI Agents</string>
+    <string name="onboarding_welcome_title">Bienvenido a Cortex</string>
     <string name="onboarding_cortex_intro">¡Hola! Soy Cortex, tu coordinador de IA. Te ayudaré a configurar todo.</string>
     <string name="onboarding_select_language">Selecciona tu idioma</string>
     <string name="onboarding_your_name">¿Cómo te llamas?</string>
@@ -88,14 +88,23 @@
     <string name="onboarding_ready_desc">Siempre puedes configurar estos ajustes después desde el menú de configuración. ¡Disfruta!</string>
 
     <!-- Settings -->
-    <string name="settings_agents_title">Agentes</string>
-    <string name="settings_agents_subtitle">Gestionar agentes y personalidad</string>
-    <string name="settings_providers_title">Proveedores</string>
-    <string name="settings_providers_subtitle">API keys y modelos</string>
-    <string name="settings_local_models_title">Modelos Locales</string>
-    <string name="settings_local_models_subtitle">Modelos on-device con MediaPipe</string>
-    <string name="settings_mcp_title">Skills y MCP</string>
-    <string name="settings_mcp_subtitle">Servidores de herramientas</string>
-    <string name="settings_memory_title">Memoria</string>
-    <string name="settings_memory_subtitle">Memoria persistente de Cortex</string>
+    <string name="settings_title">Ajustes</string>
+    <string name="settings_back">Volver</string>
+    <string name="settings_section_ai">Modelos e IA</string>
+    <string name="settings_section_personalization">Personalización</string>
+    <string name="settings_section_integrations">Herramientas e integraciones</string>
+    <string name="settings_agents_title">Agentes y orquestación</string>
+    <string name="settings_agents_subtitle">Personalidad, roles y delegación</string>
+    <string name="settings_providers_title">Proveedores de IA</string>
+    <string name="settings_providers_subtitle">Cuentas, API keys y modelos en la nube</string>
+    <string name="settings_local_models_title">Modelos locales</string>
+    <string name="settings_local_models_subtitle">Buscar, descargar y ejecutar modelos en el dispositivo</string>
+    <string name="settings_mcp_title">Herramientas y servicios</string>
+    <string name="settings_mcp_subtitle">MCP, búsqueda web, servicios externos y API keys</string>
+    <string name="settings_memory_title">Identidad y memoria</string>
+    <string name="settings_memory_subtitle">SOUL.md, USER.md, MEMORY.md y archivo histórico</string>
+    <string name="settings_skills_title">Skills</string>
+    <string name="settings_skills_subtitle">Biblioteca, creación y sugerencias automáticas</string>
+    <string name="settings_google_workspace_title">Google Workspace</string>
+    <string name="settings_google_workspace_subtitle">Drive, Docs, Gmail y Calendar con permiso del usuario</string>
 </resources>

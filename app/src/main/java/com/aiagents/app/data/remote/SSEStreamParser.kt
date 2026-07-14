@@ -76,10 +76,11 @@ fun streamOpenAICompatible(
         return@flow
     }
 
-    val reader = response.body?.byteStream()?.bufferedReader()
-    if (reader == null) {
+    val rawBody = response.body?.string()
+    response.close()
+
+    if (rawBody.isNullOrBlank()) {
         emit(StreamingChunk(error = "Empty response body"))
-        response.close()
         return@flow
     }
 
@@ -88,8 +89,13 @@ fun streamOpenAICompatible(
     val toolCallsMap = mutableMapOf<Int, MutableToolCallAccumulator>()
     var finishReason: String? = null
 
-    try {
-        reader.useLines { lines ->
+    // Determine if response is SSE (has at least one "data:" line) or plain JSON
+    val lines = rawBody.lines()
+    val isSSE = lines.any { it.startsWith("data:") }
+
+    if (isSSE) {
+        // ── SSE path ─────────────────────────────────────────────────────────
+        try {
             for (line in lines) {
                 if (line.isBlank()) continue
                 if (!line.startsWith("data:")) continue
@@ -136,9 +142,7 @@ fun streamOpenAICompatible(
                         for (tc in toolCallDeltas) {
                             val tcObj = tc.asJsonObject
                             val index = tcObj.get("index")?.asInt ?: 0
-                            val acc = toolCallsMap.getOrPut(index) {
-                                MutableToolCallAccumulator()
-                            }
+                            val acc = toolCallsMap.getOrPut(index) { MutableToolCallAccumulator() }
                             tcObj.get("id")?.asString?.let { acc.id = it }
                             tcObj.getAsJsonObject("function")?.let { fn ->
                                 fn.get("name")?.asString?.let { acc.functionName = it }
@@ -150,13 +154,61 @@ fun streamOpenAICompatible(
                     Log.w(TAG, "Error parsing SSE chunk: ${e.message}")
                 }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading SSE stream", e)
+            emit(StreamingChunk(error = "Stream error: ${e.message}"))
+            return@flow
         }
-    } catch (e: Exception) {
-        Log.e(TAG, "Error reading SSE stream", e)
-        emit(StreamingChunk(error = "Stream error: ${e.message}"))
-        return@flow
-    } finally {
-        response.close()
+    } else {
+        // ── JSON fallback path (non-streaming response) ───────────────────────
+        // Some APIs return plain JSON even when stream:true is requested.
+        Log.d(TAG, "Non-SSE response detected, attempting JSON parse")
+        try {
+            val json = JsonParser.parseString(rawBody).asJsonObject
+            val choices = json.getAsJsonArray("choices")
+            if (choices != null && choices.size() > 0) {
+                val choice = choices[0].asJsonObject
+                finishReason = choice.get("finish_reason")?.let {
+                    if (it.isJsonNull) null else it.asString
+                }
+                // Non-streaming uses "message" instead of "delta"
+                val message = choice.getAsJsonObject("message") ?: choice.getAsJsonObject("delta")
+                val msgContent = message?.get("content")?.let {
+                    if (it.isJsonNull) null else it.asString
+                }
+                if (!msgContent.isNullOrEmpty()) {
+                    contentBuilder.append(msgContent)
+                    emit(StreamingChunk(content = msgContent))
+                }
+                // Tool calls in non-streaming format
+                message?.getAsJsonArray("tool_calls")?.let { tcs ->
+                    tcs.forEachIndexed { index, tc ->
+                        val tcObj = tc.asJsonObject
+                        val acc = MutableToolCallAccumulator()
+                        acc.id = tcObj.get("id")?.asString
+                        tcObj.getAsJsonObject("function")?.let { fn ->
+                            acc.functionName = fn.get("name")?.asString
+                            acc.argumentsBuilder.append(fn.get("arguments")?.asString ?: "")
+                        }
+                        toolCallsMap[index] = acc
+                    }
+                }
+            } else {
+                // Not a valid choices response — maybe an error object
+                val errorMsg = json.getAsJsonObject("error")?.get("message")?.asString
+                    ?: json.get("message")?.asString
+                    ?: json.get("error")?.asString
+                if (!errorMsg.isNullOrBlank()) {
+                    emit(StreamingChunk(error = errorMsg))
+                    return@flow
+                }
+                Log.w(TAG, "Unexpected JSON response without choices (${rawBody.length} chars)")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "JSON fallback parse failed: ${e.message}. Raw: ${rawBody.take(200)}")
+            emit(StreamingChunk(error = "Unexpected response format: ${rawBody.take(100)}"))
+            return@flow
+        }
     }
 
     // Note: <think> tag extraction is now handled in real-time by
@@ -208,7 +260,8 @@ fun streamOpenAICompatible(
  */
 fun streamAnthropic(
     okHttpClient: OkHttpClient,
-    apiKey: String,
+    apiKey: String? = null,
+    authorization: String? = null,
     requestBody: Map<String, Any?>,
     url: String = "https://api.anthropic.com/v1/messages",
     extraHeaders: Map<String, String> = mapOf("anthropic-version" to "2023-06-01")
@@ -218,9 +271,14 @@ fun streamAnthropic(
 
     val requestBuilder = Request.Builder()
         .url(url)
-        .addHeader("x-api-key", apiKey)
         .addHeader("Content-Type", "application/json")
         .post(body)
+    // OAuth uses Authorization header; API key uses x-api-key
+    if (!authorization.isNullOrBlank()) {
+        requestBuilder.addHeader("Authorization", authorization)
+    } else if (!apiKey.isNullOrBlank()) {
+        requestBuilder.addHeader("x-api-key", apiKey)
+    }
     extraHeaders.forEach { (k, v) -> requestBuilder.addHeader(k, v) }
     val request = requestBuilder.build()
 
