@@ -129,6 +129,13 @@
     <string name="assistant_enable_role">Usar Cortex</string>
     <string name="assistant_change_role">Revisar</string>
     <string name="assistant_try_now">Probar</string>
+    <string name="assistant_model_title">Modelo y acciones del asistente</string>
+    <string name="assistant_model_subtitle">Elige un modelo sólo para las invocaciones rápidas. No cambia el modelo de los chats.</string>
+    <string name="assistant_model_field">Modelo de respuesta</string>
+    <string name="assistant_model_chat_default">Usar el modelo del chat</string>
+    <string name="assistant_model_empty">Selecciona al menos un modelo en Proveedores para asignar aquí un modelo dedicado.</string>
+    <string name="assistant_phone_actions_title">Acciones del teléfono siempre listas</string>
+    <string name="assistant_phone_actions_detail">Clima, ubicación, recordatorios, alarmas, calendario, tareas programadas y control del dispositivo se precargan en cada invocación.</string>
     <string name="assistant_voice_title">Voz local y gratuita</string>
     <string name="assistant_voice_subtitle">Sin API keys de voz, cuentas, cuotas ni cobros por minuto.</string>
     <string name="assistant_voice_input">Reconocimiento de voz</string>

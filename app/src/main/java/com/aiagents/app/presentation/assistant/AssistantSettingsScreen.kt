@@ -40,12 +40,17 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -88,6 +93,8 @@ fun AssistantSettingsScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val autoListen by viewModel.autoListen.collectAsState()
     val speakResponses by viewModel.speakResponses.collectAsState()
+    val assistantModel by viewModel.assistantModel.collectAsState()
+    val availableModels by viewModel.availableModels.collectAsState()
     val offlineVoiceAvailable by viewModel.offlineVoiceAvailable.collectAsState()
     val voskDownloaded by viewModel.voskModelDownloaded.collectAsState()
     val isDownloading by viewModel.isDownloading.collectAsState()
@@ -205,6 +212,26 @@ fun AssistantSettingsScreen(
                             Text(stringResource(R.string.assistant_try_now))
                         }
                     }
+                }
+            }
+
+            item {
+                SettingsCard(
+                    title = stringResource(R.string.assistant_model_title),
+                    subtitle = stringResource(R.string.assistant_model_subtitle)
+                ) {
+                    AssistantModelSelector(
+                        selectedModel = assistantModel,
+                        availableModels = availableModels,
+                        onModelSelected = viewModel::setAssistantModel
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    AssistantStatusRow(
+                        icon = Icons.Default.CheckCircle,
+                        title = stringResource(R.string.assistant_phone_actions_title),
+                        detail = stringResource(R.string.assistant_phone_actions_detail),
+                        ready = true
+                    )
                 }
             }
 
@@ -335,6 +362,72 @@ fun AssistantSettingsScreen(
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AssistantModelSelector(
+    selectedModel: String,
+    availableModels: List<String>,
+    onModelSelected: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val chatDefault = stringResource(R.string.assistant_model_chat_default)
+    val selectedLabel = selectedModel.takeIf(String::isNotBlank)?.toAssistantModelLabel()
+        ?: chatDefault
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded }
+    ) {
+        OutlinedTextField(
+            value = selectedLabel,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(stringResource(R.string.assistant_model_field)) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth()
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text(chatDefault) },
+                onClick = {
+                    onModelSelected("")
+                    expanded = false
+                }
+            )
+            availableModels.forEach { modelKey ->
+                DropdownMenuItem(
+                    text = { Text(modelKey.toAssistantModelLabel()) },
+                    onClick = {
+                        onModelSelected(modelKey)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+    if (availableModels.isEmpty()) {
+        Text(
+            stringResource(R.string.assistant_model_empty),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp)
+        )
+    }
+}
+
+private fun String.toAssistantModelLabel(): String {
+    val provider = substringBefore('|', missingDelimiterValue = "")
+        .lowercase()
+        .replaceFirstChar { it.titlecase() }
+    val model = substringAfter('|', missingDelimiterValue = this)
+    return if (provider.isBlank()) model else "$provider · $model"
 }
 
 @Composable

@@ -17,7 +17,9 @@ conversación completa al tocar el texto de la burbuja.
    - Vosk puede descargarse para garantizar que la entrada permanezca offline.
    - Para las respuestas se selecciona exclusivamente una voz TTS embebida, nunca una voz que
      requiera red.
-4. Usa el gesto de asistente configurado por el fabricante (por ejemplo, mantener pulsado el botón
+4. En **Modelo y acciones del asistente**, elige un modelo dedicado o conserva **Usar el modelo del
+   chat**. Esta preferencia sólo se aplica a la superficie de asistente.
+5. Usa el gesto de asistente configurado por el fabricante (por ejemplo, mantener pulsado el botón
    de encendido o el gesto desde una esquina).
 
 También se puede usar **Probar** sin cambiar el asistente predeterminado.
@@ -33,9 +35,13 @@ También se puede usar **Probar** sin cambiar el asistente predeterminado.
   red.
 - Vosk es la opción descargable para garantizar reconocimiento offline.
 - `TextToSpeech` filtra cualquier voz con `isNetworkConnectionRequired = true`.
-- El modelo que razona y genera la respuesta sigue siendo el modelo seleccionado para Cortex. Para
-  una experiencia totalmente offline, además de la voz local debe elegirse un modelo local en la
-  app.
+- El asistente puede usar un modelo dedicado distinto de los chats. Para una experiencia totalmente
+  offline, además de la voz local debe elegirse un modelo local en esa preferencia.
+- El prompt breve, las skills integradas de clima y control de Android, y las herramientas de
+  ubicación, recordatorios, alarmas, calendario y tareas programadas sólo se precargan en la
+  superficie de asistente; no alteran los chats normales.
+- El texto visible renderiza Markdown sencillo, mientras que TTS elimina sus marcadores antes de
+  hablar para no pronunciar asteriscos, enlaces ni sintaxis de formato.
 
 ## Flujo técnico
 

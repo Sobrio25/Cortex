@@ -129,6 +129,13 @@
     <string name="assistant_enable_role">Use Cortex</string>
     <string name="assistant_change_role">Review</string>
     <string name="assistant_try_now">Try</string>
+    <string name="assistant_model_title">Assistant model and actions</string>
+    <string name="assistant_model_subtitle">Choose a model only for quick assistant invocations. Chat model selections are not changed.</string>
+    <string name="assistant_model_field">Response model</string>
+    <string name="assistant_model_chat_default">Use the chat model</string>
+    <string name="assistant_model_empty">Select at least one model under Providers to assign a dedicated model here.</string>
+    <string name="assistant_phone_actions_title">Phone actions always ready</string>
+    <string name="assistant_phone_actions_detail">Weather, location, reminders, alarms, calendar, scheduled tasks, and device controls are preloaded for every invocation.</string>
     <string name="assistant_voice_title">Free, local voice</string>
     <string name="assistant_voice_subtitle">No voice API keys, accounts, quotas, or per-minute charges.</string>
     <string name="assistant_voice_input">Voice recognition</string>

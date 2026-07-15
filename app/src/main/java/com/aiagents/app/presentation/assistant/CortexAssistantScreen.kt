@@ -88,11 +88,14 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.aiagents.app.data.repository.ContextCompactionPolicy
 import com.aiagents.app.data.local.AssistantPreferences
 import com.aiagents.app.data.speech.AndroidTextToSpeechManager
+import com.aiagents.app.data.terminal.WeatherToolHandler
 import com.aiagents.app.domain.model.Message
 import com.aiagents.app.domain.model.MessageRole
 import com.aiagents.app.presentation.stt.STTViewModel
 import com.aiagents.app.presentation.workspace_detail.WorkspaceDetailViewModel
 import com.aiagents.app.presentation.workspace_detail.LinkableText
+import com.aiagents.app.ui.components.WeatherResultCard
+import com.aiagents.app.ui.components.extractWeatherDataJson
 import com.aiagents.app.ui.theme.CortexColors
 import com.aiagents.app.ui.theme.CortexTheme
 import com.aiagents.app.ui.theme.cortexGlass
@@ -130,6 +133,7 @@ fun CortexAssistantScreen(
     val ttsError by textToSpeech.error.collectAsState()
     val autoListen by preferences.autoListen.collectAsState()
     val speakResponses by preferences.speakResponses.collectAsState()
+    val assistantModel by preferences.modelKey.collectAsState()
 
     // Every invocation starts compact and gets a fresh opportunity to listen. These are
     // deliberately not saveable across assistant activity recreation/restoration.
@@ -143,20 +147,30 @@ fun CortexAssistantScreen(
     }
     var lastSpokenKey by remember { mutableStateOf("") }
 
-    DisposableEffect(cortexViewModel) {
-        cortexViewModel.setAssistantMode(true)
+    DisposableEffect(cortexViewModel, assistantModel) {
+        cortexViewModel.setAssistantMode(true, assistantModel)
         onDispose { cortexViewModel.setAssistantMode(false) }
     }
 
     val visibleMessages = remember(messages) {
-        ContextCompactionPolicy.visibleHistory(messages).filter {
-            it.role == MessageRole.USER || it.role == MessageRole.ASSISTANT
+        ContextCompactionPolicy.visibleHistory(messages, includeInternalActions = true).filter {
+            it.role == MessageRole.USER ||
+                (it.role == MessageRole.ASSISTANT && it.toolCalls.isEmpty()) ||
+                it.weatherToolContent() != null
         }
     }
-    val latestAssistantMessage = visibleMessages.lastOrNull { it.role == MessageRole.ASSISTANT }
+    val latestAssistantMessage = visibleMessages.lastOrNull {
+        it.role == MessageRole.ASSISTANT && it.content.isNotBlank()
+    }
+    val latestWeatherMessage = visibleMessages.lastOrNull { it.weatherToolContent() != null }
+    val latestResultMessage = listOfNotNull(latestAssistantMessage, latestWeatherMessage)
+        .maxByOrNull(Message::timestamp)
+    val settledResponse = latestResultMessage?.let { message ->
+        message.weatherToolContent()?.toCompactWeatherSummary() ?: message.content
+    }.orEmpty()
     val displayResponse = uiState.streamingContent
         ?.takeIf { it.isNotBlank() }
-        ?: latestAssistantMessage?.content.orEmpty()
+        ?: settledResponse
     val error = uiState.error ?: sttError?.takeIf { displayResponse.isBlank() }
     val stage = when {
         error != null -> AssistantStage.ERROR
@@ -172,6 +186,18 @@ fun CortexAssistantScreen(
     ) { granted ->
         hasRecordPermission = granted
         if (granted) sttViewModel.startListening()
+    }
+    val locationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions.values.any { it }) cortexViewModel.onLocationPermissionGranted()
+        else cortexViewModel.onLocationPermissionDenied()
+    }
+    val calendarPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions.values.all { it }) cortexViewModel.onCalendarPermissionGranted()
+        else cortexViewModel.onCalendarPermissionDenied()
     }
 
     fun requestListening() {
@@ -213,16 +239,57 @@ fun CortexAssistantScreen(
         cortexViewModel.sendMessage()
     }
 
+    LaunchedEffect(uiState.pendingLocationPermission) {
+        if (!uiState.pendingLocationPermission) return@LaunchedEffect
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            cortexViewModel.onLocationPermissionGranted()
+        } else {
+            locationPermission.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+        }
+    }
+
+    LaunchedEffect(uiState.pendingCalendarPermission) {
+        if (!uiState.pendingCalendarPermission) return@LaunchedEffect
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.READ_CALENDAR
+        ) == PackageManager.PERMISSION_GRANTED && ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.WRITE_CALENDAR
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            cortexViewModel.onCalendarPermissionGranted()
+        } else {
+            calendarPermission.launch(
+                arrayOf(
+                    Manifest.permission.READ_CALENDAR,
+                    Manifest.permission.WRITE_CALENDAR
+                )
+            )
+        }
+    }
+
     LaunchedEffect(
-        latestAssistantMessage?.id,
-        latestAssistantMessage?.content,
+        latestResultMessage?.id,
+        settledResponse,
         uiState.isLoading,
         speakResponses
     ) {
-        val response = latestAssistantMessage?.content?.takeIf { it.isNotBlank() }
-            ?: return@LaunchedEffect
+        val response = settledResponse.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
         if (uiState.isLoading) return@LaunchedEffect
-        val key = "${latestAssistantMessage.id}:${latestAssistantMessage.timestamp}:${response.hashCode()}"
+        val key = "${latestResultMessage?.id}:${latestResultMessage?.timestamp}:${response.hashCode()}"
         if (speakResponses && key != lastSpokenKey) {
             lastSpokenKey = key
             textToSpeech.speak(response, Locale.getDefault())
@@ -593,6 +660,16 @@ private fun ExpandedAssistantPanel(
 
 @Composable
 private fun AssistantMessage(message: Message) {
+    message.weatherToolContent()
+        ?.let(::extractWeatherDataJson)
+        ?.let { weatherJson ->
+            WeatherResultCard(
+                weatherJson = weatherJson,
+                modifier = Modifier.fillMaxWidth()
+            )
+            return
+        }
+
     val isUser = message.role == MessageRole.USER
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -638,6 +715,18 @@ private fun AssistantMessage(message: Message) {
         }
     }
 }
+
+private fun Message.weatherToolContent(): String? = toolResults.firstOrNull { result ->
+    result.name in WeatherToolHandler.ALL_TOOL_NAMES && extractWeatherDataJson(result.content) != null
+}?.content
+
+private fun String.toCompactWeatherSummary(): String =
+    substringBefore("<!--WEATHER_DATA:")
+        .lineSequence()
+        .map(String::trim)
+        .filter(String::isNotBlank)
+        .take(4)
+        .joinToString("\n")
 
 @Composable
 private fun EmptyAssistantConversation(cortexName: String) {

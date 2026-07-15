@@ -236,6 +236,8 @@ class WorkspaceDetailViewModel @Inject constructor(
 
     @Volatile
     private var assistantModeEnabled = false
+    @Volatile
+    private var assistantModelOverride: String? = null
 
     // workspaceId: from nav arg first, then from active workspace preference
     private val workspaceId: Long = (savedStateHandle.get<Long>("workspaceId") ?: 0L).let { navId ->
@@ -261,6 +263,10 @@ class WorkspaceDetailViewModel @Inject constructor(
     val selectedModel: StateFlow<String> = _selectedModel.asStateFlow()
     private val _contextWindowOverride = MutableStateFlow<Int?>(null)
     private var contextWindowRefreshModel: String? = null
+
+    private fun effectiveSelectedModel(): String =
+        assistantModelOverride?.takeIf { assistantModeEnabled }.orEmpty()
+            .ifBlank { _selectedModel.value }
 
     val agents: StateFlow<List<Agent>> = repository.getAllAgents()
         .stateIn(executionScope, SharingStarted.Lazily, emptyList())
@@ -881,7 +887,7 @@ class WorkspaceDetailViewModel @Inject constructor(
 
     private suspend fun performContextCompaction() {
         val currentMessages = messages.value
-        val fullKey = _selectedModel.value
+        val fullKey = effectiveSelectedModel()
         val modelContextWindow = repository.getContextWindowForModel(fullKey)
         val activeModelHistory = ContextCompactionPolicy.modelHistory(currentMessages)
         val plan = ContextCompactionPlanner.plan(activeModelHistory, modelContextWindow)
@@ -1073,7 +1079,7 @@ Rules:
     }
 
     fun getSupportedFileTypes(): List<String> {
-        return TokenCounter.getSupportedFileTypes(extractModelId(_selectedModel.value))
+        return TokenCounter.getSupportedFileTypes(extractModelId(effectiveSelectedModel()))
     }
 
     fun importFileToWorkspace(context: Context, uri: Uri) {
@@ -1147,12 +1153,22 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         val enrichedAgent = if (extraSections.isEmpty()) agent
             else agent.copy(systemPrompt = agent.systemPrompt + "\n\n" + extraSections.joinToString("\n\n"))
 
-        return enrichedAgent
+        return if (
+            assistantModeEnabled &&
+            enrichedAgent.enabledTools.isNotBlank() &&
+            "weather" !in enrichedAgent.enabledTools.split(",").map(String::trim)
+        ) {
+            enrichedAgent.copy(enabledTools = enrichedAgent.enabledTools + ",weather")
+        } else {
+            enrichedAgent
+        }
     }
 
     /** Applies compact response rules only to the system-assistant activity's ViewModel. */
-    fun setAssistantMode(enabled: Boolean) {
+    fun setAssistantMode(enabled: Boolean, modelKey: String? = null) {
         assistantModeEnabled = enabled
+        assistantModelOverride = modelKey
+            ?.takeIf { enabled && '|' in it && it.substringAfter('|').isNotBlank() }
     }
 
     fun sendMessage() {
@@ -1167,7 +1183,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             return
         }
 
-        val modelToUse = _selectedModel.value
+        val modelToUse = effectiveSelectedModel()
         if (modelToUse.isEmpty()) {
             _uiState.value = _uiState.value.copy(error = "Selecciona un modelo primero")
             return
@@ -1215,10 +1231,15 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             var cancelled = false
             try {
                 securePreferences.clearDraft(workspaceId)
-                repository.resetActivatedTools(
-                    agent,
-                    fileRepository.getWorkspaceFolderPath(workspaceId)
-                )
+                val workspaceFolderPath = fileRepository.getWorkspaceFolderPath(workspaceId)
+                repository.resetActivatedTools(agent, workspaceFolderPath)
+                if (assistantModeEnabled) {
+                    repository.activateTools(
+                        agent,
+                        workspaceFolderPath,
+                        CortexAssistantPrompt.ALWAYS_ACTIVE_TOOL_NAMES
+                    )
+                }
                 autoContinueCount = 0
                 clearAllAgentStatuses()
                 Log.d("WorkspaceDetailVM", "Sending message with agent: ${agent.name}, model: $modelToUse, attachedFiles: ${attachedFiles.size}")
@@ -1363,7 +1384,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
 
     private suspend fun processAssistantResponseWithImages(agent: Agent, lastUserMessage: Message, imageDataUris: List<String>) {
         val agentWithContext = buildAgentWithFileContext(agent)
-        val fullKey = _selectedModel.value
+        val fullKey = effectiveSelectedModel()
         val currentMessages = messages.value.filter { it.role != MessageRole.USER || it == lastUserMessage }
         
         // Agregar mensaje del usuario con imágenes
@@ -1381,9 +1402,11 @@ Directorio de trabajo: $workspacePath""".trimIndent())
 
     private suspend fun processWithOrchestratorAndImages(orchestrator: Agent, userMessage: Message, messagesForApi: List<Message>, imageDataUris: List<String>) {
         _workingAgents.value = listOf(orchestrator.name)
-        val fullKey = _selectedModel.value
+        val fullKey = effectiveSelectedModel()
 
-        val enhancedPrompt = agentOrchestrator.buildPrompt(orchestrator)
+        val enhancedPrompt = agentOrchestrator.buildPrompt(orchestrator).let { prompt ->
+            if (assistantModeEnabled) CortexAssistantPrompt.appendTo(prompt) else prompt
+        }
         val agentWithEnhancedPrompt = orchestrator.copy(systemPrompt = enhancedPrompt)
         val workspacePath = fileRepository.getWorkspaceFolderPath(workspaceId)
 
@@ -1516,7 +1539,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
      * @return true si el procesamiento completó (sin tool calls pendientes), false si está en progreso
      */
     private suspend fun processWithNormalAgentAndImages(agent: Agent, userMessage: Message, messagesForApi: List<Message>, imageDataUris: List<String>): Boolean {
-        val fullKey = _selectedModel.value
+        val fullKey = effectiveSelectedModel()
         val workspacePath = fileRepository.getWorkspaceFolderPath(workspaceId)
 
         val result = repository.chatWithImages(
@@ -2054,7 +2077,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         require(depth <= IsolatedAgentExecutor.MAX_DELEGATION_DEPTH) {
             "Maximum subagent depth (${IsolatedAgentExecutor.MAX_DELEGATION_DEPTH}) exceeded"
         }
-        val selectedModelKey = _selectedModel.value
+        val selectedModelKey = effectiveSelectedModel()
         val modelKey = modelOverride
             ?.takeIf { '|' in it && it.substringAfter('|').isNotBlank() }
             ?: selectedModelKey
@@ -2262,7 +2285,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         originalRequest: String,
         results: List<IsolatedExecutionResult>
     ): String? {
-        val fullKey = _selectedModel.value
+        val fullKey = effectiveSelectedModel()
         _workingAgents.value = listOf(orchestrator.name)
         updateAgentStatus(orchestrator.name, "Sintetizando resultados...")
         val synthesisPrompt = SubagentResultFormatter.buildSynthesisPrompt(originalRequest, results)
@@ -2346,13 +2369,15 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         }
 
         // --- Cloud routing (streaming flow) ---
-        val fullKey = _selectedModel.value
+        val fullKey = effectiveSelectedModel()
         val msgsFromDb = messages.value
         val currentMessages = if (msgsFromDb.lastOrNull()?.let {
             it.role == userMessage.role && it.content == userMessage.content
         } == true) msgsFromDb else msgsFromDb + userMessage
 
-        val enhancedPrompt = agentOrchestrator.buildPrompt(orchestrator)
+        val enhancedPrompt = agentOrchestrator.buildPrompt(orchestrator).let { prompt ->
+            if (assistantModeEnabled) CortexAssistantPrompt.appendTo(prompt) else prompt
+        }
         val agentWithEnhancedPrompt = orchestrator.copy(systemPrompt = enhancedPrompt)
         val workspacePath = fileRepository.getWorkspaceFolderPath(workspaceId)
 
@@ -2575,7 +2600,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
      * @return true si el procesamiento completó (sin tool calls pendientes), false si está en progreso
      */
     private suspend fun processWithNormalAgent(agent: Agent, lastUserMessage: Message): Boolean {
-        val fullKey = _selectedModel.value
+        val fullKey = effectiveSelectedModel()
         updateAgentStatus(agent.name, "Pensando...")
         // Small delay to ensure Room Flow has emitted latest messages
         kotlinx.coroutines.delay(50)
@@ -3733,7 +3758,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             return
         }
         
-        val fullKey = _selectedModel.value
+        val fullKey = effectiveSelectedModel()
         val workspacePath = fileRepository.getWorkspaceFolderPath(workspaceId)
         
         // Log el estado actual de los mensajes para debuggear
@@ -4911,7 +4936,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
      * The active conversation is excluded to avoid interfering with current chat.
      */
     private fun triggerInactiveConversationsExtraction() {
-        val fullKey = _selectedModel.value
+        val fullKey = effectiveSelectedModel()
         val modelId = extractModelId(fullKey).ifBlank { return }
         val provider = extractProvider(fullKey) ?: return
         val activeConversationId = _conversationId.value
@@ -4940,7 +4965,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         // Update our local tracking
         _conversationId.value = conversationId
         
-        val fullKey = _selectedModel.value
+        val fullKey = effectiveSelectedModel()
         val modelId = extractModelId(fullKey).ifBlank { return }
         val provider = extractProvider(fullKey) ?: return
 

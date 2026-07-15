@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aiagents.app.data.local.AssistantPreferences
+import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.data.speech.AndroidTextToSpeechManager
 import com.aiagents.app.data.speech.ModelDownloader
 import com.aiagents.app.data.speech.STTManager
@@ -22,6 +23,7 @@ import javax.inject.Inject
 class AssistantSettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val preferences: AssistantPreferences,
+    private val repository: AgentRepository,
     private val sttManager: STTManager,
     private val textToSpeech: AndroidTextToSpeechManager
 ) : ViewModel() {
@@ -35,6 +37,7 @@ class AssistantSettingsViewModel @Inject constructor(
 
     val autoListen = preferences.autoListen
     val speakResponses = preferences.speakResponses
+    val assistantModel = preferences.modelKey
     val offlineVoiceAvailable = textToSpeech.offlineVoiceAvailable
 
     private val _voskModelDownloaded = MutableStateFlow(
@@ -51,6 +54,21 @@ class AssistantSettingsViewModel @Inject constructor(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    private val _availableModels = MutableStateFlow(repository.getSelectedModels().sorted())
+    val availableModels: StateFlow<List<String>> = _availableModels.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            repository.selectedModelsFlow.collect { selected ->
+                val models = selected.sorted()
+                _availableModels.value = models
+                if (preferences.modelKey.value.isNotBlank() && preferences.modelKey.value !in models) {
+                    preferences.setModel("")
+                }
+            }
+        }
+    }
+
     val onDeviceRecognitionAvailable: Boolean
         get() = sttManager.isOnDeviceRecognitionAvailable()
 
@@ -60,6 +78,8 @@ class AssistantSettingsViewModel @Inject constructor(
     fun setAutoListen(enabled: Boolean) = preferences.setAutoListen(enabled)
 
     fun setSpeakResponses(enabled: Boolean) = preferences.setSpeakResponses(enabled)
+
+    fun setAssistantModel(modelKey: String) = preferences.setModel(modelKey)
 
     fun downloadSpanishVoiceModel() {
         if (_isDownloading.value) return

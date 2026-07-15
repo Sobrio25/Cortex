@@ -20,6 +20,9 @@ class AssistantPreferences @Inject constructor(
     private val _speakResponses = MutableStateFlow(preferences.getBoolean(KEY_SPEAK_RESPONSES, true))
     val speakResponses: StateFlow<Boolean> = _speakResponses.asStateFlow()
 
+    private val _modelKey = MutableStateFlow(preferences.getString(KEY_MODEL, "").orEmpty())
+    val modelKey: StateFlow<String> = _modelKey.asStateFlow()
+
     fun setAutoListen(enabled: Boolean) {
         preferences.edit().putBoolean(KEY_AUTO_LISTEN, enabled).apply()
         _autoListen.value = enabled
@@ -30,9 +33,15 @@ class AssistantPreferences @Inject constructor(
         _speakResponses.value = enabled
     }
 
+    fun setModel(modelKey: String) {
+        preferences.edit().putString(KEY_MODEL, modelKey).apply()
+        _modelKey.value = modelKey
+    }
+
     companion object {
         private const val FILE_NAME = "cortex_assistant_preferences"
         private const val KEY_AUTO_LISTEN = "auto_listen"
         private const val KEY_SPEAK_RESPONSES = "speak_responses"
+        private const val KEY_MODEL = "assistant_model"
     }
 }

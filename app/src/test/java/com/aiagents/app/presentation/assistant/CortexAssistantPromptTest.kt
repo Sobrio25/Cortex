@@ -1,0 +1,47 @@
+package com.aiagents.app.presentation.assistant
+
+import com.aiagents.app.domain.model.AndroidAppControlBuiltin
+import com.aiagents.app.domain.model.WeatherWidgetsBuiltin
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class CortexAssistantPromptTest {
+    @Test
+    fun `assistant prompt enforces a brief final response`() {
+        val prompt = CortexAssistantPrompt.SYSTEM_INSTRUCTIONS
+
+        assertTrue(prompt.contains("at most 45 words"))
+        assertTrue(prompt.contains("1–3 short sentences"))
+        assertTrue(prompt.contains("ALWAYS-READY PHONE CAPABILITIES"))
+    }
+
+    @Test
+    fun `assistant preloads phone action tool families`() {
+        val tools = CortexAssistantPrompt.ALWAYS_ACTIVE_TOOL_NAMES
+
+        assertTrue("weather_current" in tools)
+        assertTrue("set_reminder" in tools)
+        assertTrue("add_calendar_event" in tools)
+        assertTrue("device_control" in tools)
+    }
+
+    @Test
+    fun `assistant prompt fully preloads weather and phone action skills`() {
+        assertTrue(CortexAssistantPrompt.SYSTEM_INSTRUCTIONS.contains(WeatherWidgetsBuiltin.instructions))
+        assertTrue(CortexAssistantPrompt.SYSTEM_INSTRUCTIONS.contains(AndroidAppControlBuiltin.instructions))
+        assertTrue(CortexAssistantPrompt.SYSTEM_INSTRUCTIONS.contains("without calling `skill_view`"))
+    }
+
+    @Test
+    fun `assistant instructions survive an orchestrator prompt rebuild without duplication`() {
+        val rebuiltPrompt = "## OPERATING MODEL\nUse tools when helpful."
+        val enriched = CortexAssistantPrompt.appendTo(rebuiltPrompt)
+
+        assertTrue(enriched.startsWith(rebuiltPrompt))
+        assertTrue(enriched.contains(CortexAssistantPrompt.SYSTEM_INSTRUCTIONS))
+        assertTrue(
+            CortexAssistantPrompt.appendTo(enriched).indexOf(CortexAssistantPrompt.MODE_MARKER) ==
+                enriched.lastIndexOf(CortexAssistantPrompt.MODE_MARKER)
+        )
+    }
+}
