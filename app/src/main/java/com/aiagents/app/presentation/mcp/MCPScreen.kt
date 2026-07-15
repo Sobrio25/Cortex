@@ -1,6 +1,7 @@
 package com.aiagents.app.presentation.mcp
 
 import android.content.Context
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -34,6 +35,8 @@ fun MCPScreen(
     val uiState by viewModel.uiState.collectAsState()
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.settings_mcp_title)) },
@@ -61,9 +64,8 @@ fun MCPScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer
-                    )
+                    colors = toolServiceCardColors(),
+                    border = toolServiceCardBorder()
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp)
@@ -72,21 +74,21 @@ fun MCPScreen(
                             Icon(
                                 Icons.Default.Info,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                tint = MaterialTheme.colorScheme.onSurface
                             )
                             Spacer(Modifier.width(8.dp))
                             Text(
                                 "¿Qué es MCP?",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                         }
                         Spacer(Modifier.height(8.dp))
                         Text(
                             "Model Context Protocol (MCP) permite a los agentes acceder a herramientas externas como búsqueda web, bases de datos y más.",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -334,6 +336,57 @@ fun MCPScreen(
 
 }
 
+/**
+ * Tool cards intentionally use the surface family instead of primaryContainer.
+ * Dynamic dark themes can expose a very light primaryContainer, which makes
+ * onSurface/onSurfaceVariant content illegible when a tool becomes active.
+ */
+@Composable
+private fun toolServiceCardColors(isActive: Boolean = false): CardColors {
+    val colors = MaterialTheme.colorScheme
+    val container = if (isActive) colors.surfaceContainerHigh else colors.surfaceContainerLow
+    return CardDefaults.cardColors(
+        containerColor = container,
+        contentColor = colors.onSurface,
+        disabledContainerColor = container.copy(alpha = 0.6f),
+        disabledContentColor = colors.onSurface.copy(alpha = 0.38f)
+    )
+}
+
+@Composable
+private fun toolServiceCardBorder(isActive: Boolean = false): BorderStroke {
+    val colors = MaterialTheme.colorScheme
+    return BorderStroke(
+        width = 1.dp,
+        color = if (isActive) colors.primary.copy(alpha = 0.9f)
+        else colors.outlineVariant.copy(alpha = 0.65f)
+    )
+}
+
+@Composable
+private fun toolServiceActionButtonColors(): ButtonColors {
+    val colors = MaterialTheme.colorScheme
+    return ButtonDefaults.buttonColors(
+        containerColor = colors.surfaceContainerHighest,
+        contentColor = colors.onSurface,
+        disabledContainerColor = colors.surfaceContainerHighest.copy(alpha = 0.45f),
+        disabledContentColor = colors.onSurface.copy(alpha = 0.38f)
+    )
+}
+
+@Composable
+private fun toolServiceSwitchColors(): SwitchColors {
+    val colors = MaterialTheme.colorScheme
+    return SwitchDefaults.colors(
+        checkedThumbColor = colors.primary,
+        checkedTrackColor = colors.surfaceContainerHighest,
+        checkedBorderColor = colors.primary,
+        uncheckedThumbColor = colors.onSurfaceVariant,
+        uncheckedTrackColor = colors.surfaceContainerLow,
+        uncheckedBorderColor = colors.outline
+    )
+}
+
 @Composable
 private fun WebSearchProviderCard(
     selectedProvider: WebSearchProvider,
@@ -345,13 +398,16 @@ private fun WebSearchProviderCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer
-        )
+        colors = toolServiceCardColors(isActive = true),
+        border = toolServiceCardBorder(isActive = true)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Language, contentDescription = null)
+                Icon(
+                    Icons.Default.Language,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text(
@@ -362,7 +418,7 @@ private fun WebSearchProviderCard(
                     Text(
                         "La opción nativa no utiliza API keys",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -442,12 +498,8 @@ private fun BraveSearchCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isSelected)
-                MaterialTheme.colorScheme.primaryContainer
-            else
-                MaterialTheme.colorScheme.surface
-        )
+        colors = toolServiceCardColors(isActive = isSelected),
+        border = toolServiceCardBorder(isActive = isSelected)
     ) {
         Column(
             modifier = Modifier.padding(16.dp)
@@ -523,13 +575,7 @@ private fun BraveSearchCard(
             Button(
                 onClick = onConfigure,
                 modifier = Modifier.fillMaxWidth(),
-                colors = if (isConfigured) {
-                    ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary
-                    )
-                } else {
-                    ButtonDefaults.buttonColors()
-                }
+                colors = toolServiceActionButtonColors()
             ) {
                 Icon(
                     if (isConfigured) Icons.Default.Edit else Icons.Default.Add,
@@ -552,12 +598,8 @@ private fun GoogleMapsCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isConfigured)
-                MaterialTheme.colorScheme.primaryContainer
-            else
-                MaterialTheme.colorScheme.surface
-        )
+        colors = toolServiceCardColors(isActive = isConfigured),
+        border = toolServiceCardBorder(isActive = isConfigured)
     ) {
         Column(
             modifier = Modifier.padding(16.dp)
@@ -651,13 +693,7 @@ private fun GoogleMapsCard(
             Button(
                 onClick = onConfigure,
                 modifier = Modifier.fillMaxWidth(),
-                colors = if (isConfigured) {
-                    ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary
-                    )
-                } else {
-                    ButtonDefaults.buttonColors()
-                }
+                colors = toolServiceActionButtonColors()
             ) {
                 Icon(
                     if (isConfigured) Icons.Default.Edit else Icons.Default.Add,
@@ -864,12 +900,8 @@ private fun SerpApiCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isSelected)
-                MaterialTheme.colorScheme.primaryContainer
-            else
-                MaterialTheme.colorScheme.surface
-        )
+        colors = toolServiceCardColors(isActive = isSelected),
+        border = toolServiceCardBorder(isActive = isSelected)
     ) {
         Column(
             modifier = Modifier.padding(16.dp)
@@ -969,13 +1001,7 @@ private fun SerpApiCard(
             Button(
                 onClick = onConfigure,
                 modifier = Modifier.fillMaxWidth(),
-                colors = if (isConfigured) {
-                    ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary
-                    )
-                } else {
-                    ButtonDefaults.buttonColors()
-                }
+                colors = toolServiceActionButtonColors()
             ) {
                 Icon(
                     if (isConfigured) Icons.Default.Edit else Icons.Default.Add,
@@ -1050,9 +1076,8 @@ private fun SerpApiConfigDialog(
                 }
 
                 Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer
-                    )
+                    colors = toolServiceCardColors(),
+                    border = toolServiceCardBorder()
                 ) {
                     Column(Modifier.padding(12.dp)) {
                         Text(
@@ -1110,9 +1135,8 @@ private fun CanvaCard(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isConfigured) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
-        )
+        colors = toolServiceCardColors(isActive = isConfigured),
+        border = toolServiceCardBorder(isActive = isConfigured)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1135,7 +1159,11 @@ private fun CanvaCard(
             Spacer(Modifier.height(12.dp))
             Text("Crea diseños profesionales: posters, presentaciones, contenido para redes sociales.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(12.dp))
-            Button(onClick = onConfigure, modifier = Modifier.fillMaxWidth(), colors = if (isConfigured) ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary) else ButtonDefaults.buttonColors()) {
+            Button(
+                onClick = onConfigure,
+                modifier = Modifier.fillMaxWidth(),
+                colors = toolServiceActionButtonColors()
+            ) {
                 Icon(if (isConfigured) Icons.Default.Edit else Icons.Default.Add, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text(if (isConfigured) "Editar configuración" else "Configurar")
@@ -1211,12 +1239,8 @@ private fun PubMedCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isEnabled)
-                MaterialTheme.colorScheme.primaryContainer
-            else
-                MaterialTheme.colorScheme.surface
-        )
+        colors = toolServiceCardColors(isActive = isEnabled),
+        border = toolServiceCardBorder(isActive = isEnabled)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -1260,7 +1284,8 @@ private fun PubMedCard(
 
                 Switch(
                     checked = isEnabled,
-                    onCheckedChange = { onToggle() }
+                    onCheckedChange = { onToggle() },
+                    colors = toolServiceSwitchColors()
                 )
             }
 
@@ -1326,12 +1351,8 @@ private fun FinanceCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isEnabled)
-                MaterialTheme.colorScheme.primaryContainer
-            else
-                MaterialTheme.colorScheme.surface
-        )
+        colors = toolServiceCardColors(isActive = isEnabled),
+        border = toolServiceCardBorder(isActive = isEnabled)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -1379,7 +1400,8 @@ private fun FinanceCard(
 
                 Switch(
                     checked = isEnabled,
-                    onCheckedChange = { onToggle() }
+                    onCheckedChange = { onToggle() },
+                    colors = toolServiceSwitchColors()
                 )
             }
 
@@ -1447,12 +1469,8 @@ private fun ObsidianCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isConfigured)
-                MaterialTheme.colorScheme.primaryContainer
-            else
-                MaterialTheme.colorScheme.surface
-        )
+        colors = toolServiceCardColors(isActive = isConfigured),
+        border = toolServiceCardBorder(isActive = isConfigured)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -1648,9 +1666,8 @@ private fun GitHubCard(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isConfigured) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
-        )
+        colors = toolServiceCardColors(isActive = isConfigured),
+        border = toolServiceCardBorder(isActive = isConfigured)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1703,9 +1720,8 @@ private fun NotionCard(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isConfigured) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
-        )
+        colors = toolServiceCardColors(isActive = isConfigured),
+        border = toolServiceCardBorder(isActive = isConfigured)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1758,9 +1774,8 @@ private fun SlackCard(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isConfigured) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
-        )
+        colors = toolServiceCardColors(isActive = isConfigured),
+        border = toolServiceCardBorder(isActive = isConfigured)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1810,9 +1825,8 @@ private fun SlackCard(
 private fun WeatherCard() {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer
-        )
+        colors = toolServiceCardColors(isActive = true),
+        border = toolServiceCardBorder(isActive = true)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1862,9 +1876,8 @@ private fun ImageGenCard(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isConfigured) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
-        )
+        colors = toolServiceCardColors(isActive = isConfigured),
+        border = toolServiceCardBorder(isActive = isConfigured)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
