@@ -54,7 +54,7 @@
     <string name="onboarding_configure_providers">Configure Providers</string>
     <string name="onboarding_free_plan_title">Ready from the first message</string>
     <string name="onboarding_free_plan_desc">Your free plan is already active. Cortex automatically chooses an available model, with no API keys or technical setup.</string>
-    <string name="onboarding_free_plan_messages">30 free messages every month</string>
+    <string name="onboarding_free_plan_messages">100 free messages every week</string>
     <string name="onboarding_free_plan_no_config">Download, open, and start using it. You can add your own providers later from advanced settings.</string>
 
     <string name="onboarding_mcp_title">Tool Servers (MCP)</string>
@@ -105,7 +105,7 @@
     <string name="settings_subscription_title">Plan and usage</string>
     <string name="settings_subscription_subtitle">Subscription, models, and monthly usage</string>
     <string name="subscription_title">Plan and usage</string>
-    <string name="subscription_free_usage">%1$d of %2$d messages used this month</string>
+    <string name="subscription_free_usage">%1$d of %2$d messages used this week</string>
     <string name="subscription_budget_remaining">%1$d%% of this period’s inference budget remains</string>
     <string name="managed_privacy_notice">AI requests may be processed by external providers. Some providers may store inputs and responses or use them to improve their services. Do not send personal, confidential, or sensitive information.</string>
     <string name="subscription_restore">Restore purchases</string>
@@ -113,7 +113,7 @@
     <string name="subscription_current_plan">Current plan</string>
     <string name="subscription_choose_plan">Choose plan</string>
     <string name="subscription_store_pending">Pending in Google Play</string>
-    <string name="plan_free_feature">30 messages every month with automatic model selection</string>
+    <string name="plan_free_feature">100 messages every week with automatic model selection</string>
     <string name="plan_fallback_feature">Automatic continuity with free models when the budget is exhausted</string>
     <string name="plan_auto_manual_feature">Auto mode and manual model selection</string>
     <string name="plan_everything_previous">Everything in the previous plan</string>

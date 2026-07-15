@@ -25,18 +25,29 @@ export class EntitlementError extends Error {
 }
 
 const db = () => getFirestore();
-const monthKey = () => new Date().toISOString().slice(0, 7);
+export const FREE_MESSAGES_LIMIT = 100;
+
+/** ISO-8601 week in UTC. Weeks start on Monday and belong to the year of Thursday. */
+export function quotaPeriodKey(now: Date = new Date()): string {
+  const thursday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const isoDay = thursday.getUTCDay() || 7;
+  thursday.setUTCDate(thursday.getUTCDate() + 4 - isoDay);
+  const isoYear = thursday.getUTCFullYear();
+  const yearStart = new Date(Date.UTC(isoYear, 0, 1));
+  const week = Math.ceil(((thursday.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+  return `${isoYear}-W${String(week).padStart(2, "0")}`;
+}
 
 function normalize(raw: FirebaseFirestore.DocumentData | undefined): AccountState {
   const now = Date.now();
   let plan = (raw?.plan && PLANS[raw.plan as PlanId] ? raw.plan : "FREE") as PlanId;
   const periodEndEpochMillis = raw?.periodEndEpochMillis ? Number(raw.periodEndEpochMillis) : undefined;
   if (plan !== "FREE" && periodEndEpochMillis && periodEndEpochMillis <= now) plan = "FREE";
-  const currentPeriod = monthKey();
+  const currentPeriod = quotaPeriodKey();
   return {
     plan,
     freeMessagesUsed: raw?.freePeriod === currentPeriod ? Number(raw?.freeMessagesUsed ?? 0) : 0,
-    freeMessagesLimit: 30,
+    freeMessagesLimit: FREE_MESSAGES_LIMIT,
     freePeriod: currentPeriod,
     spentMicros: plan === "FREE" ? 0 : Number(raw?.spentMicros ?? 0),
     budgetMicros: PLANS[plan].budgetMicros,
@@ -98,7 +109,7 @@ export async function claimFreeTurn(uid: string, turnId: string): Promise<void> 
     if (turnSnapshot.data()?.freeClaimed === true) return;
     const account = normalize(accountSnapshot.data());
     if (account.freeMessagesUsed >= account.freeMessagesLimit) {
-      throw new EntitlementError(429, "Alcanzaste tus 30 mensajes gratuitos de este mes");
+      throw new EntitlementError(429, "Alcanzaste tus 100 mensajes gratuitos de esta semana");
     }
     transaction.set(accountRef, {
       ...account,

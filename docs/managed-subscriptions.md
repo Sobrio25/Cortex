@@ -4,8 +4,8 @@ The Android client and Firebase backend are linked to project `cortex-agents-ai`
 End users only see plan and model names. Gateway/provider identities are internal and
 must never be copied into onboarding, subscription UI, public API errors, or fallback notices.
 
-The free allowance is 30 user messages per calendar month (UTC). Tool-call loops for
-the same user message reuse one allowance entry.
+The free allowance is 100 user messages per ISO week (Monday 00:00 UTC). Tool-call
+loops for the same user message reuse one allowance entry.
 
 ## Routing invariant
 

@@ -24,7 +24,7 @@ private const val MANAGED_BASE_URL = "https://us-central1-cortex-agents-ai.cloud
 data class ManagedAccountResponse(
     val plan: String = "FREE",
     val freeMessagesUsed: Int = 0,
-    val freeMessagesLimit: Int = 30,
+    val freeMessagesLimit: Int = 100,
     val spentMicros: Long = 0,
     val budgetMicros: Long = 0,
     val periodEndEpochMillis: Long? = null

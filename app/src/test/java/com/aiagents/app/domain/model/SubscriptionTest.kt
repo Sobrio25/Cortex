@@ -26,7 +26,7 @@ class SubscriptionTest {
 
     @Test
     fun usagePercentageUsesMessagesOrBudget() {
-        assertEquals(50, UsageSnapshot(freeMessagesUsed = 15).remainingPercentage)
+        assertEquals(50, UsageSnapshot(freeMessagesUsed = 50).remainingPercentage)
         assertEquals(
             75,
             UsageSnapshot(

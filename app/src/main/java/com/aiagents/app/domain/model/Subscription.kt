@@ -34,7 +34,7 @@ data class ManagedModel(
 data class UsageSnapshot(
     val plan: SubscriptionPlan = SubscriptionPlan.FREE,
     val freeMessagesUsed: Int = 0,
-    val freeMessagesLimit: Int = 30,
+    val freeMessagesLimit: Int = 100,
     val spentMicros: Long = 0,
     val budgetMicros: Long = 0,
     val periodEndEpochMillis: Long? = null
