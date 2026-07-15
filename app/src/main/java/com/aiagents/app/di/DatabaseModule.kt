@@ -1,6 +1,7 @@
 package com.aiagents.app.di
 
 import android.content.Context
+import android.util.Log
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
@@ -12,6 +13,7 @@ import com.aiagents.app.data.local.CustomLocalModelDao
 import com.aiagents.app.data.local.DownloadProgressDao
 import com.aiagents.app.data.local.FileDao
 import com.aiagents.app.data.local.FinanceDao
+import com.aiagents.app.data.local.FinanceDatabase
 import com.aiagents.app.data.local.MCPDao
 import com.aiagents.app.data.local.MemoryDao
 import com.aiagents.app.data.local.MessageDao
@@ -33,9 +35,23 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
+    private const val TAG = "DatabaseModule"
+
     @Provides
     @Singleton
-    fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
+    fun provideFinanceDatabase(@ApplicationContext context: Context): FinanceDatabase =
+        Room.databaseBuilder(
+            context,
+            FinanceDatabase::class.java,
+            FinanceDatabase.DATABASE_NAME
+        ).build()
+
+    @Provides
+    @Singleton
+    fun provideDatabase(
+        @ApplicationContext context: Context,
+        financeDatabase: FinanceDatabase
+    ): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, "ai_agents_db")
             .addMigrations(
                 AppDatabase.MIGRATION_1_2,
@@ -80,7 +96,8 @@ object DatabaseModule {
                 AppDatabase.MIGRATION_40_41,
                 AppDatabase.MIGRATION_41_42,
                 AppDatabase.MIGRATION_42_43,
-                AppDatabase.MIGRATION_43_44
+                AppDatabase.MIGRATION_43_44,
+                AppDatabase.MIGRATION_44_45
             )
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onCreate(db: SupportSQLiteDatabase) {
@@ -90,11 +107,77 @@ object DatabaseModule {
 
                 override fun onOpen(db: SupportSQLiteDatabase) {
                     super.onOpen(db)
+                    runCatching {
+                        migrateLegacyFinanceData(
+                            sourceDatabase = db,
+                            targetDatabase = financeDatabase.openHelper.writableDatabase
+                        )
+                    }.onFailure { error ->
+                        // Keep the legacy table intact so migration can retry on
+                        // the next launch without losing financial records.
+                        Log.e(TAG, "Unable to migrate legacy finance data", error)
+                    }
                     AppDatabase.repairMemoryFtsTriggers(db)
                     AppDatabase.ensureBuiltInSkills(db)
                 }
             })
             .build()
+
+    private fun migrateLegacyFinanceData(
+        sourceDatabase: SupportSQLiteDatabase,
+        targetDatabase: SupportSQLiteDatabase
+    ) {
+        val hasLegacyTable = sourceDatabase.query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'finance_transactions'"
+        ).use { it.moveToFirst() }
+        if (!hasLegacyTable) return
+
+        var migratedRows = 0
+        targetDatabase.beginTransaction()
+        try {
+            val insert = targetDatabase.compileStatement(
+                """
+                INSERT OR REPLACE INTO finance_transactions (
+                    id, type, amount, currency, category, description,
+                    date, createdAt, updatedAt
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """.trimIndent()
+            )
+            try {
+                sourceDatabase.query(
+                    """
+                    SELECT id, type, amount, currency, category, description, date, createdAt
+                    FROM finance_transactions
+                    ORDER BY id
+                    """.trimIndent()
+                ).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        insert.clearBindings()
+                        insert.bindLong(1, cursor.getLong(0))
+                        insert.bindString(2, cursor.getString(1))
+                        insert.bindDouble(3, cursor.getDouble(2))
+                        insert.bindString(4, cursor.getString(3))
+                        insert.bindString(5, cursor.getString(4))
+                        insert.bindString(6, cursor.getString(5))
+                        insert.bindLong(7, cursor.getLong(6))
+                        insert.bindLong(8, cursor.getLong(7))
+                        insert.bindLong(9, cursor.getLong(7))
+                        insert.executeInsert()
+                        migratedRows++
+                    }
+                }
+            } finally {
+                insert.close()
+            }
+            targetDatabase.setTransactionSuccessful()
+        } finally {
+            targetDatabase.endTransaction()
+        }
+
+        // Removal happens only after the target transaction commits.
+        sourceDatabase.execSQL("DROP TABLE finance_transactions")
+        Log.i(TAG, "Migrated $migratedRows finance rows to ${FinanceDatabase.DATABASE_NAME}")
+    }
 
     /** New installations start with Cortex only; task workers are created in memory on demand. */
     private fun insertDefaultCortex(db: SupportSQLiteDatabase) {
@@ -168,7 +251,7 @@ object DatabaseModule {
         database.customLocalModelDao()
 
     @Provides
-    fun provideFinanceDao(database: AppDatabase): FinanceDao = database.financeDao()
+    fun provideFinanceDao(database: FinanceDatabase): FinanceDao = database.financeDao()
 
     @Provides
     fun provideTodoDao(database: AppDatabase): TodoDao = database.todoDao()

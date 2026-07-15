@@ -14,7 +14,6 @@ import com.aiagents.app.data.model.MessageEntity
 import com.aiagents.app.data.model.ConversationEntity
 import com.aiagents.app.data.model.CustomLocalModelEntity
 import com.aiagents.app.data.model.DownloadProgressEntity
-import com.aiagents.app.data.model.FinanceTransactionEntity
 import com.aiagents.app.data.model.ScheduledTaskEntity
 import com.aiagents.app.data.model.SkillEntity
 import com.aiagents.app.data.model.SkillReviewEntity
@@ -41,7 +40,6 @@ import com.aiagents.app.domain.model.WeatherWidgetsBuiltin
         MemoryFtsEntity::class,
         MemoryLinkEntity::class,
         CustomLocalModelEntity::class,
-        FinanceTransactionEntity::class,
         TodoEntity::class,
         ScheduledTaskEntity::class,
         DownloadProgressEntity::class,
@@ -49,7 +47,7 @@ import com.aiagents.app.domain.model.WeatherWidgetsBuiltin
         SkillReviewEntity::class,
         SubagentExecutionEntity::class
     ],
-    version = 44,
+    version = 45,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -63,7 +61,6 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun conversationDao(): ConversationDao
     abstract fun memoryDao(): MemoryDao
     abstract fun customLocalModelDao(): CustomLocalModelDao
-    abstract fun financeDao(): FinanceDao
     abstract fun todoDao(): TodoDao
     abstract fun scheduledTaskDao(): ScheduledTaskDao
     abstract fun downloadProgressDao(): DownloadProgressDao
@@ -1111,6 +1108,14 @@ SIEMPRE usa la herramienta pubmed_search para buscar estudios científicos relev
                     "CREATE INDEX IF NOT EXISTS index_scheduled_tasks_conversationId " +
                         "ON scheduled_tasks(conversationId)"
                 )
+            }
+        }
+
+        val MIGRATION_44_45 = object : Migration(44, 45) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // finance_transactions is intentionally left in place during
+                // schema migration. DatabaseModule copies it into the isolated
+                // FinanceDatabase on open and only then removes the legacy table.
             }
         }
 

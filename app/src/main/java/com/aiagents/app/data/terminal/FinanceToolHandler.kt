@@ -4,11 +4,16 @@ import android.content.Context
 import android.os.Environment
 import android.util.Log
 import com.aiagents.app.data.local.FinanceDao
+import com.aiagents.app.data.local.FinanceTypeTotal
 import com.aiagents.app.data.model.FinanceTransactionEntity
 import com.google.gson.JsonParser
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
-import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import java.util.Calendar
 import java.util.Locale
 import javax.inject.Inject
@@ -28,6 +33,7 @@ class FinanceToolHandler @Inject constructor(
     companion object {
         private const val TAG = "FinanceToolHandler"
         const val TOOL_ADD_TRANSACTION = "finance_add_transaction"
+        const val TOOL_UPDATE_TRANSACTION = "finance_update_transaction"
         const val TOOL_LIST_TRANSACTIONS = "finance_list_transactions"
         const val TOOL_GET_SUMMARY = "finance_get_summary"
         const val TOOL_SEARCH = "finance_search_transactions"
@@ -36,8 +42,12 @@ class FinanceToolHandler @Inject constructor(
         const val TOOL_EXPORT_CSV = "finance_export_csv"
 
         val ALL_TOOL_NAMES = setOf(
-            TOOL_ADD_TRANSACTION, TOOL_LIST_TRANSACTIONS, TOOL_GET_SUMMARY,
+            TOOL_ADD_TRANSACTION, TOOL_UPDATE_TRANSACTION, TOOL_LIST_TRANSACTIONS, TOOL_GET_SUMMARY,
             TOOL_SEARCH, TOOL_DELETE, TOOL_GET_BALANCE, TOOL_EXPORT_CSV
+        )
+
+        private val EDITABLE_FIELDS = setOf(
+            "type", "amount", "currency", "category", "description", "date"
         )
 
         private fun param(type: String, desc: String) = mapOf("type" to type, "description" to desc)
@@ -57,16 +67,29 @@ class FinanceToolHandler @Inject constructor(
 
         fun getToolDefinitionsJson(): List<Map<String, Any>> = listOf(
             toolDef(TOOL_ADD_TRANSACTION,
-                "Registra una transaccion financiera (gasto, ingreso o inversion). Siempre confirma con el usuario antes de registrar. IMPORTANTE: currency es obligatorio. Si no sabes la moneda del usuario, busca en memoria (memory_search) o preguntale directamente antes de registrar.",
+                "Registra una transaccion financiera aislada de chats y memoria. Clasificala como gasto, ingreso o inversion y siempre confirma los datos con el usuario antes de guardar. currency es obligatorio.",
                 mapOf(
                     "type" to param("string", "Tipo: expense, income, investment"),
                     "amount" to param("number", "Monto positivo de la transaccion"),
-                    "category" to param("string", "Categoria. Ej: food, salary, rent, transport, stocks, freelance, entertainment, health, education, savings"),
+                    "category" to param("string", "Categoria libre dentro del tipo. Ej: alimentacion, salario, renta, transporte, acciones, freelance, entretenimiento, salud, educacion, ahorro"),
                     "currency" to param("string", "Moneda ISO 4217. Ej: USD, MXN, EUR, COP, ARS. OBLIGATORIO: pregunta al usuario o busca en memoria si no lo sabes"),
                     "description" to param("string", "Descripcion o nota (opcional)"),
                     "date" to param("string", "Fecha yyyy-MM-dd (default: hoy)")
                 ),
                 listOf("type", "amount", "category", "currency")
+            ),
+            toolDef(TOOL_UPDATE_TRANSACTION,
+                "Edita una transaccion financiera existente por ID. Permite cambiar monto, descripcion, tipo, categoria, moneda o fecha. Confirma con el usuario antes de modificar.",
+                mapOf(
+                    "transaction_id" to param("integer", "ID de la transaccion a editar"),
+                    "type" to param("string", "Nuevo tipo: expense, income, investment (opcional)"),
+                    "amount" to param("number", "Nuevo monto positivo (opcional)"),
+                    "category" to param("string", "Nueva categoria (opcional)"),
+                    "currency" to param("string", "Nueva moneda ISO 4217 (opcional)"),
+                    "description" to param("string", "Nueva descripcion; puede ser vacia (opcional)"),
+                    "date" to param("string", "Nueva fecha yyyy-MM-dd (opcional)")
+                ),
+                listOf("transaction_id")
             ),
             toolDef(TOOL_LIST_TRANSACTIONS,
                 "Lista transacciones financieras recientes. Puede filtrar por tipo o categoria.",
@@ -78,7 +101,7 @@ class FinanceToolHandler @Inject constructor(
                 listOf()
             ),
             toolDef(TOOL_GET_SUMMARY,
-                "Obtiene un resumen financiero con totales por tipo para un periodo. Muestra ingresos, gastos, inversiones y balance neto.",
+                "Obtiene un resumen por moneda, tipo y categoria para un periodo. Muestra ingresos, gastos, inversiones y balance neto sin mezclar monedas.",
                 mapOf(
                     "period" to param("string", "Periodo: today, week, month, year, all (default: month)"),
                     "from" to param("string", "Fecha inicio yyyy-MM-dd (si se usa rango personalizado)"),
@@ -96,14 +119,14 @@ class FinanceToolHandler @Inject constructor(
                 listOf("query")
             ),
             toolDef(TOOL_DELETE,
-                "Elimina una transaccion por su ID.",
+                "Elimina una transaccion por su ID. Confirma con el usuario antes de eliminar.",
                 mapOf(
                     "transaction_id" to param("integer", "ID de la transaccion a eliminar")
                 ),
                 listOf("transaction_id")
             ),
             toolDef(TOOL_GET_BALANCE,
-                "Calcula el balance neto (ingresos - gastos) para un periodo.",
+                "Calcula por moneda el balance neto (ingresos - gastos - inversiones) para un periodo.",
                 mapOf(
                     "period" to param("string", "Periodo: today, week, month, year, all (default: month)"),
                     "from" to param("string", "Fecha inicio yyyy-MM-dd (rango personalizado)"),
@@ -112,7 +135,7 @@ class FinanceToolHandler @Inject constructor(
                 listOf()
             ),
             toolDef(TOOL_EXPORT_CSV,
-                "Exporta transacciones financieras a un archivo CSV en Documents/AIAgents/Finance. Devuelve la ruta del archivo creado.",
+                "Exporta transacciones financieras a un CSV dentro del almacenamiento privado de la app. Devuelve la ruta del archivo creado.",
                 mapOf(
                     "period" to param("string", "Periodo: today, week, month, year, all (default: all)"),
                     "from" to param("string", "Fecha inicio yyyy-MM-dd (rango personalizado)"),
@@ -129,6 +152,7 @@ class FinanceToolHandler @Inject constructor(
             val args = JsonParser.parseString(arguments).asJsonObject
             when (toolName) {
                 TOOL_ADD_TRANSACTION -> addTransaction(toolCallId, args)
+                TOOL_UPDATE_TRANSACTION -> updateTransaction(toolCallId, args)
                 TOOL_LIST_TRANSACTIONS -> listTransactions(toolCallId, args)
                 TOOL_GET_SUMMARY -> getSummary(toolCallId, args)
                 TOOL_SEARCH -> searchTransactions(toolCallId, args)
@@ -144,40 +168,126 @@ class FinanceToolHandler @Inject constructor(
     }
 
     private suspend fun addTransaction(toolCallId: String, args: com.google.gson.JsonObject): FinanceToolResult {
-        val type = args.get("type")?.asString ?: return FinanceToolResult(toolCallId, false, "Error: 'type' es requerido (expense, income, investment)")
-        if (type !in listOf("expense", "income", "investment")) {
-            return FinanceToolResult(toolCallId, false, "Error: type debe ser 'expense', 'income' o 'investment'")
-        }
+        val typeValue = args.stringOrNull("type")
+            ?: return FinanceToolResult(toolCallId, false, "Error: 'type' es requerido (expense, income, investment)")
+        val type = normalizeType(typeValue)
+            ?: return FinanceToolResult(toolCallId, false, "Error: type debe ser expense/gasto, income/ingreso o investment/inversion")
         val amount = args.get("amount")?.asDouble ?: return FinanceToolResult(toolCallId, false, "Error: 'amount' es requerido")
-        val category = args.get("category")?.asString ?: return FinanceToolResult(toolCallId, false, "Error: 'category' es requerido")
-        val currency = args.get("currency")?.asString ?: return FinanceToolResult(toolCallId, false, "Error: 'currency' es requerido. Pregunta al usuario su moneda o busca en memoria con memory_search.")
-        val description = args.get("description")?.asString ?: ""
-        val dateStr = args.get("date")?.asString
-        val date = if (dateStr != null) parseDate(dateStr) else todayStart()
+        if (!amount.isFinite() || amount <= 0.0) {
+            return FinanceToolResult(toolCallId, false, "Error: 'amount' debe ser un numero positivo")
+        }
+        val category = args.stringOrNull("category")?.trim().orEmpty()
+        if (category.isBlank()) {
+            return FinanceToolResult(toolCallId, false, "Error: 'category' es requerido y no puede estar vacio")
+        }
+        val currency = normalizeCurrency(args.stringOrNull("currency"))
+            ?: return FinanceToolResult(toolCallId, false, "Error: 'currency' debe ser una moneda ISO 4217 de 3 letras, por ejemplo MXN, USD o EUR")
+        val description = args.stringOrNull("description")?.trim().orEmpty()
+        val dateStr = args.stringOrNull("date")
+        val date = if (dateStr != null) {
+            parseDateOrNull(dateStr)
+                ?: return FinanceToolResult(toolCallId, false, "Error: 'date' debe usar el formato yyyy-MM-dd")
+        } else {
+            todayStart()
+        }
 
+        val now = System.currentTimeMillis()
         val entity = FinanceTransactionEntity(
             type = type,
             amount = amount,
             currency = currency,
             category = category,
             description = description,
-            date = date
+            date = date,
+            createdAt = now,
+            updatedAt = now
         )
         val id = financeDao.insert(entity)
-        val typeLabel = when (type) { "expense" -> "Gasto"; "income" -> "Ingreso"; else -> "Inversion" }
         return FinanceToolResult(toolCallId, true,
-            "$typeLabel registrado: $currency ${"%.2f".format(amount)} en '$category'" +
+            "${typeLabel(type)} registrado: $currency ${formatAmount(amount)} en '$category'" +
             (if (description.isNotBlank()) " — $description" else "") +
             " (ID: $id, Fecha: ${formatDate(date)})"
         )
     }
 
+    private suspend fun updateTransaction(
+        toolCallId: String,
+        args: com.google.gson.JsonObject
+    ): FinanceToolResult {
+        val id = args.get("transaction_id")?.asLong
+            ?: return FinanceToolResult(toolCallId, false, "Error: 'transaction_id' es requerido")
+        val existing = financeDao.getById(id)
+            ?: return FinanceToolResult(toolCallId, false, "Error: No se encontro transaccion con ID $id")
+
+        val requestedFields = EDITABLE_FIELDS.filter(args::has)
+        if (requestedFields.isEmpty()) {
+            return FinanceToolResult(
+                toolCallId,
+                false,
+                "Error: indica al menos un campo para editar: amount, description, type, category, currency o date"
+            )
+        }
+
+        var updated = existing
+        if (args.has("type")) {
+            val type = normalizeType(args.stringOrNull("type"))
+                ?: return FinanceToolResult(toolCallId, false, "Error: type debe ser expense/gasto, income/ingreso o investment/inversion")
+            updated = updated.copy(type = type)
+        }
+        if (args.has("amount")) {
+            val amount = args.get("amount")?.takeUnless { it.isJsonNull }?.asDouble
+                ?: return FinanceToolResult(toolCallId, false, "Error: 'amount' no puede ser nulo")
+            if (!amount.isFinite() || amount <= 0.0) {
+                return FinanceToolResult(toolCallId, false, "Error: 'amount' debe ser un numero positivo")
+            }
+            updated = updated.copy(amount = amount)
+        }
+        if (args.has("currency")) {
+            val currency = normalizeCurrency(args.stringOrNull("currency"))
+                ?: return FinanceToolResult(toolCallId, false, "Error: 'currency' debe ser una moneda ISO 4217 de 3 letras")
+            updated = updated.copy(currency = currency)
+        }
+        if (args.has("category")) {
+            val category = args.stringOrNull("category")?.trim().orEmpty()
+            if (category.isBlank()) {
+                return FinanceToolResult(toolCallId, false, "Error: 'category' no puede estar vacia")
+            }
+            updated = updated.copy(category = category)
+        }
+        if (args.has("description")) {
+            val description = args.stringOrNull("description")?.trim().orEmpty()
+            updated = updated.copy(description = description)
+        }
+        if (args.has("date")) {
+            val date = args.stringOrNull("date")?.let(::parseDateOrNull)
+                ?: return FinanceToolResult(toolCallId, false, "Error: 'date' debe usar el formato yyyy-MM-dd")
+            updated = updated.copy(date = date)
+        }
+
+        updated = updated.copy(updatedAt = System.currentTimeMillis())
+        if (financeDao.update(updated) == 0) {
+            return FinanceToolResult(toolCallId, false, "Error: no se pudo actualizar la transaccion #$id")
+        }
+
+        return FinanceToolResult(
+            toolCallId,
+            true,
+            "Transaccion #$id actualizada: ${typeLabel(updated.type)}, " +
+                "${updated.currency} ${formatAmount(updated.amount)}, categoria '${updated.category}', " +
+                "descripcion '${updated.description.ifBlank { "Sin descripcion" }}', fecha ${formatDate(updated.date)}"
+        )
+    }
+
     private suspend fun listTransactions(toolCallId: String, args: com.google.gson.JsonObject): FinanceToolResult {
-        val limit = args.get("limit")?.asInt ?: 20
-        val type = args.get("type")?.asString
-        val category = args.get("category")?.asString
+        val limit = (args.get("limit")?.asInt ?: 20).coerceIn(1, 100)
+        val type = args.stringOrNull("type")?.let { raw ->
+            normalizeType(raw)
+                ?: return FinanceToolResult(toolCallId, false, "Error: filtro 'type' invalido")
+        }
+        val category = args.stringOrNull("category")?.trim()?.takeIf(String::isNotBlank)
 
         val transactions = when {
+            category != null && type != null -> financeDao.getByTypeAndCategory(type, category, limit)
             category != null -> financeDao.getByCategory(category, limit)
             type != null -> financeDao.getByType(type, limit)
             else -> financeDao.getRecent(limit)
@@ -190,7 +300,7 @@ class FinanceToolHandler @Inject constructor(
         val sb = StringBuilder("**Transacciones** (${transactions.size}):\n\n")
         transactions.forEach { tx ->
             val icon = when (tx.type) { "income" -> "+" ; "expense" -> "-"; else -> "~" }
-            sb.appendLine("- **#${tx.id}** [$icon${tx.currency} ${"%.2f".format(tx.amount)}] ${tx.category}" +
+            sb.appendLine("- **#${tx.id}** [$icon${tx.currency} ${formatAmount(tx.amount)}] ${tx.category}" +
                 (if (tx.description.isNotBlank()) " — ${tx.description}" else "") +
                 " (${formatDate(tx.date)})")
         }
@@ -199,35 +309,54 @@ class FinanceToolHandler @Inject constructor(
 
     private suspend fun getSummary(toolCallId: String, args: com.google.gson.JsonObject): FinanceToolResult {
         val (from, to) = parsePeriod(args)
-
-        val income = financeDao.getSumByType("income", from, to) ?: 0.0
-        val expenses = financeDao.getSumByType("expense", from, to) ?: 0.0
-        val investments = financeDao.getSumByType("investment", from, to) ?: 0.0
-        val balance = income - expenses - investments
-
-        val period = args.get("period")?.asString ?: "month"
-        val periodLabel = when (period) {
-            "today" -> "Hoy"; "week" -> "Esta semana"; "month" -> "Este mes"
-            "year" -> "Este año"; "all" -> "Todo el historial"
-            else -> "${formatDate(from)} — ${formatDate(to)}"
+        val totals = financeDao.getTotalsByTypeAndCurrency(from, to)
+        if (totals.isEmpty()) {
+            return FinanceToolResult(toolCallId, true, "No hay transacciones en el periodo seleccionado.")
         }
+        val categoryTotals = financeDao.getTotalsByCategory(from, to)
+
+        val periodLabel = periodLabel(args, from, to, capitalize = true)
 
         return FinanceToolResult(toolCallId, true, buildString {
             appendLine("**Resumen Financiero** ($periodLabel)")
-            appendLine()
-            appendLine("| Concepto | Monto |")
-            appendLine("|----------|-------|")
-            appendLine("| Ingresos | +${"%.2f".format(income)} |")
-            appendLine("| Gastos | -${"%.2f".format(expenses)} |")
-            appendLine("| Inversiones | ~${"%.2f".format(investments)} |")
-            appendLine("| **Balance neto** | **${"%.2f".format(balance)}** |")
+            totals.groupBy { it.currency }.forEach { (currency, currencyTotals) ->
+                val income = currencyTotals.totalFor("income")
+                val expenses = currencyTotals.totalFor("expense")
+                val investments = currencyTotals.totalFor("investment")
+                val balance = income - expenses - investments
+                appendLine()
+                appendLine("**$currency**")
+                appendLine("| Concepto | Monto |")
+                appendLine("|----------|-------|")
+                appendLine("| Ingresos | +${formatAmount(income)} |")
+                appendLine("| Gastos | -${formatAmount(expenses)} |")
+                appendLine("| Inversiones | ~${formatAmount(investments)} |")
+                appendLine("| **Balance neto** | **${formatSignedAmount(balance)}** |")
+
+                val categoriesForCurrency = categoryTotals.filter { it.currency == currency }
+                if (categoriesForCurrency.isNotEmpty()) {
+                    appendLine()
+                    appendLine("Categorias:")
+                    categoriesForCurrency.groupBy { it.type }.forEach { (type, categories) ->
+                        appendLine("- ${typeLabel(type)}: " + categories.joinToString { category ->
+                            "${category.category} ${formatAmount(category.total)}"
+                        })
+                    }
+                }
+            }
         }.trim())
     }
 
     private suspend fun searchTransactions(toolCallId: String, args: com.google.gson.JsonObject): FinanceToolResult {
-        val query = args.get("query")?.asString ?: return FinanceToolResult(toolCallId, false, "Error: 'query' es requerido")
-        val type = args.get("type")?.asString
-        val limit = args.get("limit")?.asInt ?: 20
+        val query = args.stringOrNull("query")?.trim().orEmpty()
+        if (query.isBlank()) {
+            return FinanceToolResult(toolCallId, false, "Error: 'query' es requerido y no puede estar vacio")
+        }
+        val type = args.stringOrNull("type")?.let { raw ->
+            normalizeType(raw)
+                ?: return FinanceToolResult(toolCallId, false, "Error: filtro 'type' invalido")
+        }
+        val limit = (args.get("limit")?.asInt ?: 20).coerceIn(1, 100)
 
         val results = if (type != null) {
             financeDao.searchByType(query, type, limit)
@@ -242,7 +371,7 @@ class FinanceToolHandler @Inject constructor(
         val sb = StringBuilder("**Resultados para '$query'** (${results.size}):\n\n")
         results.forEach { tx ->
             val icon = when (tx.type) { "income" -> "+"; "expense" -> "-"; else -> "~" }
-            sb.appendLine("- **#${tx.id}** [$icon${tx.currency} ${"%.2f".format(tx.amount)}] ${tx.category}" +
+            sb.appendLine("- **#${tx.id}** [$icon${tx.currency} ${formatAmount(tx.amount)}] ${tx.category}" +
                 (if (tx.description.isNotBlank()) " — ${tx.description}" else "") +
                 " (${formatDate(tx.date)})")
         }
@@ -257,33 +386,43 @@ class FinanceToolHandler @Inject constructor(
         }
         financeDao.deleteById(id)
         return FinanceToolResult(toolCallId, true,
-            "Transaccion eliminada: #$id [${existing.type}] ${existing.currency} ${"%.2f".format(existing.amount)} — ${existing.category}")
+            "Transaccion eliminada: #$id [${typeLabel(existing.type)}] ${existing.currency} ${formatAmount(existing.amount)} — ${existing.category}")
     }
 
     private suspend fun getBalance(toolCallId: String, args: com.google.gson.JsonObject): FinanceToolResult {
         val (from, to) = parsePeriod(args)
-
-        val income = financeDao.getSumByType("income", from, to) ?: 0.0
-        val expenses = financeDao.getSumByType("expense", from, to) ?: 0.0
-        val balance = income - expenses
-
-        val period = args.get("period")?.asString ?: "month"
-        val periodLabel = when (period) {
-            "today" -> "hoy"; "week" -> "esta semana"; "month" -> "este mes"
-            "year" -> "este año"; "all" -> "todo el historial"
-            else -> "${formatDate(from)} — ${formatDate(to)}"
+        val totals = financeDao.getTotalsByTypeAndCurrency(from, to)
+        if (totals.isEmpty()) {
+            return FinanceToolResult(toolCallId, true, "No hay transacciones en el periodo seleccionado.")
         }
 
-        val sign = if (balance >= 0) "+" else ""
-        return FinanceToolResult(toolCallId, true,
-            "**Balance $periodLabel:** $sign${"%.2f".format(balance)} (Ingresos: ${"%.2f".format(income)}, Gastos: ${"%.2f".format(expenses)})")
+        val periodLabel = periodLabel(args, from, to, capitalize = false)
+
+        val content = buildString {
+            appendLine("**Balance $periodLabel**")
+            totals.groupBy { it.currency }.forEach { (currency, currencyTotals) ->
+                val income = currencyTotals.totalFor("income")
+                val expenses = currencyTotals.totalFor("expense")
+                val investments = currencyTotals.totalFor("investment")
+                val balance = income - expenses - investments
+                appendLine(
+                    "- $currency: **${formatSignedAmount(balance)}** " +
+                        "(Ingresos: ${formatAmount(income)}, Gastos: ${formatAmount(expenses)}, " +
+                        "Inversiones: ${formatAmount(investments)})"
+                )
+            }
+        }.trim()
+        return FinanceToolResult(toolCallId, true, content)
     }
 
     private suspend fun exportCsv(toolCallId: String, args: com.google.gson.JsonObject): FinanceToolResult {
         val periodArgs = args.deepCopy()
         if (!periodArgs.has("period")) periodArgs.addProperty("period", "all")
         val (from, to) = parsePeriod(periodArgs)
-        val type = args.get("type")?.asString
+        val type = args.stringOrNull("type")?.let { raw ->
+            normalizeType(raw)
+                ?: return FinanceToolResult(toolCallId, false, "Error: filtro 'type' invalido")
+        }
 
         val transactions = if (type != null) {
             financeDao.getByDateRange(from, to).filter { it.type == type }
@@ -295,13 +434,16 @@ class FinanceToolHandler @Inject constructor(
             return FinanceToolResult(toolCallId, true, "No hay transacciones para exportar en el periodo seleccionado.")
         }
 
-        val dir = File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
-            "AIAgents/Finance"
-        )
-        dir.mkdirs()
+        val documentsDirectory = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
+            ?: File(context.filesDir, "documents")
+        val dir = File(documentsDirectory, "AIAgents/Finance")
+        if (!dir.exists() && !dir.mkdirs()) {
+            return FinanceToolResult(toolCallId, false, "Error: no se pudo crear el directorio privado de exportacion")
+        }
 
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(System.currentTimeMillis())
+        val timestamp = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss", Locale.US)
+            .withZone(ZoneId.systemDefault())
+            .format(Instant.now())
         val file = File(dir, "finanzas_$timestamp.csv")
 
         val sb = StringBuilder()
@@ -320,37 +462,99 @@ class FinanceToolHandler @Inject constructor(
 
     // --- Helpers ---
 
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    private val dateFormatter = DateTimeFormatter.ISO_LOCAL_DATE
+    private val zoneId: ZoneId
+        get() = ZoneId.systemDefault()
 
-    private fun parseDate(dateStr: String): Long {
-        return try {
-            dateFormat.parse(dateStr)?.time ?: todayStart()
-        } catch (e: Exception) {
-            todayStart()
-        }
+    private fun com.google.gson.JsonObject.stringOrNull(name: String): String? =
+        get(name)?.takeUnless { it.isJsonNull }?.asString
+
+    private fun normalizeType(value: String?): String? = when (value?.trim()?.lowercase(Locale.ROOT)) {
+        "expense", "gasto", "gastos" -> "expense"
+        "income", "ingreso", "ingresos" -> "income"
+        "investment", "inversion", "inversión", "inversiones" -> "investment"
+        else -> null
     }
 
-    private fun formatDate(millis: Long): String = dateFormat.format(millis)
+    private fun normalizeCurrency(value: String?): String? {
+        val currency = value?.trim()?.uppercase(Locale.ROOT) ?: return null
+        return currency.takeIf { it.matches(Regex("[A-Z]{3}")) }
+    }
+
+    private fun typeLabel(type: String): String = when (type) {
+        "expense" -> "Gasto"
+        "income" -> "Ingreso"
+        "investment" -> "Inversion"
+        else -> type
+    }
+
+    private fun formatAmount(amount: Double): String = String.format(Locale.US, "%.2f", amount)
+
+    private fun formatSignedAmount(amount: Double): String =
+        (if (amount >= 0.0) "+" else "") + formatAmount(amount)
+
+    private fun List<FinanceTypeTotal>.totalFor(type: String): Double =
+        firstOrNull { it.type == type }?.total ?: 0.0
+
+    private fun parseDateOrNull(dateStr: String): Long? = try {
+        LocalDate.parse(dateStr.trim(), dateFormatter)
+            .atStartOfDay(zoneId)
+            .toInstant()
+            .toEpochMilli()
+    } catch (_: DateTimeParseException) {
+        null
+    }
+
+    private fun formatDate(millis: Long): String =
+        Instant.ofEpochMilli(millis).atZone(zoneId).toLocalDate().format(dateFormatter)
+
+    private fun periodLabel(
+        args: com.google.gson.JsonObject,
+        from: Long,
+        to: Long,
+        capitalize: Boolean
+    ): String {
+        val label = if (args.stringOrNull("from") != null) {
+            "${formatDate(from)} — ${formatDate(to - 1L)}"
+        } else {
+            when (args.stringOrNull("period") ?: "month") {
+                "today" -> "hoy"
+                "week" -> "esta semana"
+                "month" -> "este mes"
+                "year" -> "este año"
+                "all" -> "todo el historial"
+                else -> error("Periodo no validado")
+            }
+        }
+        return if (capitalize) label.replaceFirstChar { it.uppercase() } else label
+    }
 
     private fun todayStart(): Long {
-        val cal = Calendar.getInstance()
-        cal.set(Calendar.HOUR_OF_DAY, 0)
-        cal.set(Calendar.MINUTE, 0)
-        cal.set(Calendar.SECOND, 0)
-        cal.set(Calendar.MILLISECOND, 0)
-        return cal.timeInMillis
+        return LocalDate.now(zoneId).atStartOfDay(zoneId).toInstant().toEpochMilli()
     }
 
     private fun parsePeriod(args: com.google.gson.JsonObject): Pair<Long, Long> {
-        val fromStr = args.get("from")?.asString
-        val toStr = args.get("to")?.asString
+        val fromStr = args.stringOrNull("from")
+        val toStr = args.stringOrNull("to")
+        if ((fromStr == null) != (toStr == null)) {
+            throw IllegalArgumentException("'from' y 'to' deben enviarse juntos")
+        }
         if (fromStr != null && toStr != null) {
-            return parseDate(fromStr) to parseDate(toStr) + 86400000L // end of day
+            val from = parseDateOrNull(fromStr)
+                ?: throw IllegalArgumentException("'from' debe usar el formato yyyy-MM-dd")
+            val toDate = try {
+                LocalDate.parse(toStr.trim(), dateFormatter)
+            } catch (_: DateTimeParseException) {
+                throw IllegalArgumentException("'to' debe usar el formato yyyy-MM-dd")
+            }
+            val to = toDate.plusDays(1).atStartOfDay(zoneId).toInstant().toEpochMilli()
+            require(from < to) { "'from' debe ser anterior o igual a 'to'" }
+            return from to to
         }
 
-        val period = args.get("period")?.asString ?: "month"
+        val period = args.stringOrNull("period") ?: "month"
         val cal = Calendar.getInstance()
-        val to = cal.timeInMillis
+        val to = cal.timeInMillis + 1L
 
         when (period) {
             "today" -> {
@@ -363,6 +567,7 @@ class FinanceToolHandler @Inject constructor(
             "month" -> cal.add(Calendar.MONTH, -1)
             "year" -> cal.add(Calendar.YEAR, -1)
             "all" -> cal.timeInMillis = 0L
+            else -> throw IllegalArgumentException("period debe ser today, week, month, year o all")
         }
         return cal.timeInMillis to to
     }

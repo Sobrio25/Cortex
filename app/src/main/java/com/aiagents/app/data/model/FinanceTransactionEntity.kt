@@ -13,5 +13,6 @@ data class FinanceTransactionEntity(
     val category: String,
     val description: String = "",
     val date: Long,            // Epoch millis of transaction date
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = createdAt
 )
