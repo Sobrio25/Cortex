@@ -112,7 +112,7 @@
     <string name="settings_scheduled_tasks_title">Scheduled tasks</string>
     <string name="settings_scheduled_tasks_subtitle">Create and manage recurring agent jobs</string>
     <string name="settings_assistant_title">Cortex assistant</string>
-    <string name="settings_assistant_subtitle">Voice, system invocation, and private on-device processing</string>
+    <string name="settings_assistant_subtitle">System invocation and voice without API keys</string>
 
     <!-- Cortex assistant -->
     <string name="assistant_settings_title">Cortex assistant</string>
@@ -133,6 +133,7 @@
     <string name="assistant_voice_subtitle">No voice API keys, accounts, quotas, or per-minute charges.</string>
     <string name="assistant_voice_input">Voice recognition</string>
     <string name="assistant_voice_android_local">Android on-device is available; Vosk can be added as a guaranteed fallback</string>
+    <string name="assistant_voice_android_system">Android’s free system recognizer is ready; download Vosk for guaranteed offline use</string>
     <string name="assistant_voice_vosk_ready">The Vosk language model is ready offline</string>
     <string name="assistant_voice_vosk_needed">An offline model is required on this device</string>
     <string name="assistant_download_vosk">Download offline model</string>
@@ -146,8 +147,8 @@
     <string name="assistant_auto_listen_subtitle">Open the microphone automatically after the bubble appears.</string>
     <string name="assistant_speak_title">Read responses aloud</string>
     <string name="assistant_speak_subtitle">Use the installed offline Android voice.</string>
-    <string name="assistant_privacy_title">Voice stays on this device</string>
-    <string name="assistant_privacy_detail">Speech recognition and synthesis use local engines. Cortex still uses the model selected in the app; choose a local model if you also want AI inference to stay fully offline.</string>
+    <string name="assistant_privacy_title">Local first, always without voice API keys</string>
+    <string name="assistant_privacy_detail">Recognition starts on-device and can use Android’s system recognizer if its local language is missing. Download Vosk to guarantee offline input. Cortex still uses the model selected in the app; choose a local model for fully offline AI inference.</string>
 
     <!-- Scheduled tasks -->
     <string name="scheduled_tasks_title">Scheduled tasks</string>

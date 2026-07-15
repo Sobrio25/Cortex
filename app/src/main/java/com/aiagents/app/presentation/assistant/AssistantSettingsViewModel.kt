@@ -54,6 +54,9 @@ class AssistantSettingsViewModel @Inject constructor(
     val onDeviceRecognitionAvailable: Boolean
         get() = sttManager.isOnDeviceRecognitionAvailable()
 
+    val systemRecognitionAvailable: Boolean
+        get() = sttManager.isSystemRecognitionAvailable()
+
     fun setAutoListen(enabled: Boolean) = preferences.setAutoListen(enabled)
 
     fun setSpeakResponses(enabled: Boolean) = preferences.setSpeakResponses(enabled)

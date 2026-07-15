@@ -177,6 +177,43 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!--
+          The system invokes the selected VoiceInteractionService for assistant gestures
+          (including a long press of the power button on Pixel devices). ACTION_ASSIST on
+          the activity is kept as a compatibility path for launchers that use an intent.
+        -->
+        <service
+            android:name=".presentation.assistant.CortexVoiceInteractionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:process=":cortex_voice">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/cortex_voice_interaction_service" />
+        </service>
+
+        <service
+            android:name=".presentation.assistant.CortexVoiceInteractionSessionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+
+        <!-- Required metadata companion for VoiceInteractionService on Android 11 and older. -->
+        <service
+            android:name=".presentation.assistant.CortexRecognitionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_SPEECH_RECOGNITION_SERVICE"
+            android:process=":cortex_voice">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.speech"
+                android:resource="@xml/cortex_recognition_service" />
+        </service>
         
         <provider
             android:name="androidx.core.content.FileProvider"

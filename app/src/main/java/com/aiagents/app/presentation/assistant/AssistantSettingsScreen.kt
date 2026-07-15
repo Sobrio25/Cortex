@@ -7,6 +7,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
+import android.service.voice.VoiceInteractionService
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -92,6 +93,7 @@ fun AssistantSettingsScreen(
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val error by viewModel.error.collectAsState()
     val onDeviceRecognition = viewModel.onDeviceRecognitionAvailable
+    val systemRecognition = viewModel.systemRecognitionAvailable
 
     var roleHeld by remember { mutableStateOf(context.isAssistantRoleHeld()) }
     val assistantRoleLauncher = rememberLauncherForActivityResult(
@@ -216,9 +218,10 @@ fun AssistantSettingsScreen(
                         detail = when {
                             onDeviceRecognition -> stringResource(R.string.assistant_voice_android_local)
                             voskDownloaded -> stringResource(R.string.assistant_voice_vosk_ready)
+                            systemRecognition -> stringResource(R.string.assistant_voice_android_system)
                             else -> stringResource(R.string.assistant_voice_vosk_needed)
                         },
-                        ready = onDeviceRecognition || voskDownloaded
+                        ready = onDeviceRecognition || voskDownloaded || systemRecognition
                     )
                     if (!voskDownloaded) {
                         Spacer(Modifier.height(10.dp))
@@ -467,10 +470,10 @@ private fun PreferenceSwitch(
 }
 
 private fun Context.isAssistantRoleHeld(): Boolean {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
-    val roleManager = getSystemService(RoleManager::class.java) ?: return false
-    return roleManager.isRoleAvailable(RoleManager.ROLE_ASSISTANT) &&
-        roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)
+    return VoiceInteractionService.isActiveService(
+        this,
+        android.content.ComponentName(this, CortexVoiceInteractionService::class.java)
+    )
 }
 
 @Suppress("unused")

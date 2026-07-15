@@ -80,8 +80,9 @@ class STTViewModel @Inject constructor(
     }
 
     /**
-     * Prepares the hidden global workspace for a private, API-keyless assistant session.
-     * AUTO uses Android's on-device recognizer when available and Vosk otherwise.
+     * Prepares the hidden global workspace for an API-keyless assistant session.
+     * AUTO starts on-device, retries with Android's system recognizer if the local language is
+     * missing, and uses Vosk when its downloaded model has been explicitly selected.
      */
     fun prepareOfflineAssistant(workspaceId: Long, language: String) {
         viewModelScope.launch {

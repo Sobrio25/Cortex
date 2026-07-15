@@ -118,17 +118,26 @@ class STTManager @Inject constructor(
     }
 
     private fun createLocalService(config: STTConfig): STTService {
-        if (
-            config.localEngine == STTConfig.LocalSTTEngine.AUTO &&
-            AndroidSpeechRecognizerSTTService.isOnDeviceRecognitionAvailable(context)
-        ) {
-            return AndroidSpeechRecognizerSTTService(context, onDeviceOnly = true)
-        }
-
         val modelInfo = ModelDownloader.getVoskModelInfo(config.voskModelId)
         val dirName = modelInfo?.dirName ?: "vosk-model-small-es"
         val modelPath = VoskSTTService.getModelPath(context, dirName)
-        return VoskSTTService(context, modelPath)
+        if (config.localEngine == STTConfig.LocalSTTEngine.VOSK) {
+            return VoskSTTService(context, modelPath)
+        }
+
+        return when {
+            AndroidSpeechRecognizerSTTService.isOnDeviceRecognitionAvailable(context) ->
+                AndroidSpeechRecognizerSTTService(
+                    context,
+                    onDeviceOnly = true,
+                    fallbackToSystemRecognizer = true
+                )
+            VoskSTTService.isModelDownloaded(context, dirName) ->
+                VoskSTTService(context, modelPath)
+            AndroidSpeechRecognizerSTTService.isSystemRecognitionAvailable(context) ->
+                AndroidSpeechRecognizerSTTService(context)
+            else -> VoskSTTService(context, modelPath)
+        }
     }
 
     fun setEnabled(enabled: Boolean) {
@@ -150,6 +159,9 @@ class STTManager @Inject constructor(
 
     fun isOnDeviceRecognitionAvailable(): Boolean =
         AndroidSpeechRecognizerSTTService.isOnDeviceRecognitionAvailable(context)
+
+    fun isSystemRecognitionAvailable(): Boolean =
+        AndroidSpeechRecognizerSTTService.isSystemRecognitionAvailable(context)
 
     private fun releaseService() {
         _currentService.value?.release()

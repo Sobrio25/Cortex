@@ -11,8 +11,10 @@ conversación completa al tocar el texto de la burbuja.
 1. Abre **Ajustes → Cortex como asistente**.
 2. Toca **Usar Cortex** y elige Cortex en el diálogo de Android.
 3. Verifica las dos capacidades de voz:
-   - Android on-device se usa cuando el sistema tiene disponible el idioma.
-   - Vosk puede descargarse como respaldo local garantizado.
+   - Android on-device se usa primero cuando el sistema tiene disponible el idioma.
+   - Si falta el paquete local, Android programa su descarga y esa sesión reintenta con el
+     reconocedor gratuito del sistema, sin API key.
+   - Vosk puede descargarse para garantizar que la entrada permanezca offline.
    - Para las respuestas se selecciona exclusivamente una voz TTS embebida, nunca una voz que
      requiera red.
 4. Usa el gesto de asistente configurado por el fabricante (por ejemplo, mantener pulsado el botón
@@ -24,8 +26,12 @@ También se puede usar **Probar** sin cambiar el asistente predeterminado.
 
 - STT y TTS no requieren cuentas, API keys, cuotas ni pagos por minuto.
 - `SpeechRecognizer.createOnDeviceSpeechRecognizer` es la primera opción cuando Android 12 o
-  posterior ofrece reconocimiento local.
-- Vosk es el fallback descargable para equipos o idiomas sin paquete on-device.
+  posterior ofrece reconocimiento local. En Android 13 o posterior se solicita la descarga del
+  modelo automáticamente si falta el idioma.
+- El `SpeechRecognizer` normal del sistema mantiene funcional la sesión sin API keys mientras se
+  instala el paquete; dependiendo del proveedor configurado por Android, este fallback puede usar
+  red.
+- Vosk es la opción descargable para garantizar reconocimiento offline.
 - `TextToSpeech` filtra cualquier voz con `isNetworkConnectionRequired = true`.
 - El modelo que razona y genera la respuesta sigue siendo el modelo seleccionado para Cortex. Para
   una experiencia totalmente offline, además de la voz local debe elegirse un modelo local en la
@@ -34,13 +40,18 @@ También se puede usar **Probar** sin cambiar el asistente predeterminado.
 ## Flujo técnico
 
 ```text
-Gesto ACTION_ASSIST
+Gesto del sistema / botón de encendido
+  → CortexVoiceInteractionService (proceso ligero)
+  → CortexVoiceInteractionSession + assistant activity layer
   → CortexAssistantActivity translúcida
-  → STT local (Android on-device o Vosk)
+  → STT local primero (Android on-device o Vosk)
+    ↳ reconocedor gratuito del sistema si falta el idioma local
   → Workspace global + WorkspaceDetailViewModel
   → Respuesta compacta / conversación expandida
   → TTS embebido de Android
 ```
 
-La actividad no pide `SYSTEM_ALERT_WINDOW`: Android la inicia mediante el rol oficial de asistente,
-lo que evita un overlay permanente y mantiene el control de invocación en manos del usuario.
+La actividad no pide `SYSTEM_ALERT_WINDOW`: `VoiceInteractionSession.startAssistantActivity` hace
+que Android la coloque en la capa oficial del asistente. El `VoiceInteractionService` registrado es
+lo que permite que el botón de encendido sustituya a Gemini después de elegir Cortex en el diálogo
+del sistema.
