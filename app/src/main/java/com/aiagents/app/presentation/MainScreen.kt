@@ -32,6 +32,7 @@ import com.aiagents.app.presentation.providers.ProvidersScreen
 import com.aiagents.app.presentation.scheduled_tasks.ScheduledTasksScreen
 import com.aiagents.app.presentation.settings.GoogleWorkspaceSettingsScreen
 import com.aiagents.app.presentation.settings.SettingsScreen
+import com.aiagents.app.presentation.subscription.SubscriptionScreen
 import com.aiagents.app.presentation.skills.SkillsScreen
 import com.aiagents.app.presentation.workspaces.WorkspacesScreen
 import com.aiagents.app.presentation.workspace_detail.WorkspaceDetailScreen
@@ -45,6 +46,7 @@ sealed class Screen(val route: String) {
     }
     data object Workspaces : Screen("workspaces")
     data object Settings : Screen("settings")
+    data object Subscription : Screen("settings/subscription")
     data object Agents : Screen("settings/agents")
     data object Providers : Screen("settings/providers")
     data object LocalModels : Screen("settings/local_models")
@@ -311,6 +313,7 @@ private fun MainAppContent(
             composable(Screen.Settings.route) {
                 SettingsScreen(
                     onBack = { navController.popBackStack() },
+                    onNavigateToSubscription = { navController.navigate(Screen.Subscription.route) },
                     onNavigateToAgents = { navController.navigate(Screen.Agents.route) },
                     onNavigateToProviders = { navController.navigate(Screen.Providers.route) },
                     onNavigateToLocalModels = { navController.navigate(Screen.LocalModels.route) },
@@ -327,6 +330,9 @@ private fun MainAppContent(
                         navController.navigate(Screen.GoogleWorkspace.route)
                     }
                 )
+            }
+            composable(Screen.Subscription.route) {
+                SubscriptionScreen(onBack = { navController.popBackStack() })
             }
             composable(Screen.Agents.route) {
                 AgentsScreen(

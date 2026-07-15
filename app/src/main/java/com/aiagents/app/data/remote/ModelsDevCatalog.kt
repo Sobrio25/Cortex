@@ -146,6 +146,7 @@ internal fun modelsDevProviderId(provider: ProviderType, baseUrl: String?): Stri
         // NVIDIA and Ollama expose their own model metadata. OpenCode already merges its
         // gateway-specific catalog with the appropriate opencode/opencode-go entry.
         ProviderType.NVIDIA,
+        ProviderType.MANAGED,
         ProviderType.OPENCODE,
         ProviderType.OLLAMA,
         ProviderType.LM_STUDIO,

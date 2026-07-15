@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudSync
@@ -49,6 +50,7 @@ import com.aiagents.app.R
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    onNavigateToSubscription: () -> Unit,
     onNavigateToAgents: () -> Unit,
     onNavigateToProviders: () -> Unit,
     onNavigateToLocalModels: () -> Unit,
@@ -108,6 +110,12 @@ fun SettingsScreen(
                 SettingsSection(
                     title = stringResource(R.string.settings_section_ai),
                     entries = listOf(
+                        SettingsEntry(
+                            icon = Icons.Default.CreditCard,
+                            title = stringResource(R.string.settings_subscription_title),
+                            subtitle = stringResource(R.string.settings_subscription_subtitle),
+                            onClick = onNavigateToSubscription
+                        ),
                         SettingsEntry(
                             icon = Icons.Default.SmartToy,
                             title = stringResource(R.string.settings_agents_title),

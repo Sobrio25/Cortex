@@ -15,7 +15,8 @@ class AIClientFactory(
     private val okHttpClient: OkHttpClient,
     private val localModelRepository: LocalModelRepository? = null,
     private val context: Context? = null,
-    private val securePreferences: SecurePreferences? = null
+    private val securePreferences: SecurePreferences? = null,
+    private val managedAIClient: ManagedAIClient? = null
 ) {
     fun createClient(
         providerType: ProviderType,
@@ -23,6 +24,9 @@ class AIClientFactory(
         baseUrl: String? = null
     ): AIClient {
         val client = when (providerType) {
+            ProviderType.MANAGED -> requireNotNull(managedAIClient) {
+                "ManagedAIClient no está disponible"
+            }
             ProviderType.OPENROUTER -> OpenRouterClient(okHttpClient, apiKey)
             ProviderType.GOOGLE_AI -> GoogleAIClient(okHttpClient, apiKey)
             ProviderType.OPENAI -> OpenAIClient(okHttpClient, apiKey, baseUrl)
@@ -153,7 +157,9 @@ data class ChatMessage(
     val name: String? = null,
     val imageDataUri: String? = null,
     /** Imagen resultante de una tool (ej. read_image_file). Solo usada por AnthropicClient. */
-    val toolResultImageUri: String? = null
+    val toolResultImageUri: String? = null,
+    /** Stable local ID used only for managed-plan turn accounting; never sent upstream. */
+    val clientMessageId: String? = null
 )
 
 data class ChatResponseWithTools(

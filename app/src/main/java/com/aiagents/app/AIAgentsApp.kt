@@ -12,6 +12,7 @@ import com.aiagents.app.data.scheduling.TaskSchedulerManager
 import com.aiagents.app.data.runtime.RuntimeContextProvider
 import com.aiagents.app.data.terminal.MemoryExtractor
 import com.aiagents.app.data.terminal.MemoryMaintenanceWorker
+import com.aiagents.app.domain.model.ProviderType
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.delay
@@ -93,6 +94,12 @@ class AIAgentsApp : Application(), Configuration.Provider {
                 val provider = securePreferences.getActiveProvider()
                 if (provider == null) {
                     Log.d("AIAgentsApp", "No active provider, skipping startup extraction")
+                    return@launch
+                }
+                // Managed requests may fall back to privacy-restricted free capacity.
+                // Never send semantic memory through an unattended managed request.
+                if (provider == ProviderType.MANAGED) {
+                    Log.d("AIAgentsApp", "Managed provider active, skipping startup memory extraction")
                     return@launch
                 }
 

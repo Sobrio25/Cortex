@@ -70,6 +70,7 @@ import com.aiagents.app.domain.model.isOrchestrator
 import com.aiagents.app.domain.model.AgentFile
 import com.aiagents.app.domain.model.Conversation
 import com.aiagents.app.domain.model.Message
+import com.aiagents.app.domain.model.MessageRole
 import com.aiagents.app.domain.model.OpenCodeVariantType
 import com.aiagents.app.domain.model.ProviderType
 import com.aiagents.app.domain.model.ToolCall
@@ -531,6 +532,9 @@ class AgentRepository @Inject constructor(
     }
 
     fun hasApiKey(provider: ProviderType): Boolean {
+        if (provider == ProviderType.MANAGED) {
+            return securePreferences.isManagedPrivacyAccepted()
+        }
         // Para proveedor LOCAL, verificar si hay modelos descargados
         if (provider == ProviderType.LOCAL) {
             return localModelRepository?.getDownloadedModels()?.isNotEmpty() == true
@@ -603,6 +607,9 @@ class AgentRepository @Inject constructor(
             ChatMessage(
                 role = msg.role.name.lowercase(),
                 content = msg.content,
+                clientMessageId = if (msg.role == MessageRole.USER && msg.id > 0) {
+                    "${msg.id}:${msg.timestamp}"
+                } else null,
                 toolCalls = msg.toolCalls.ifEmpty { null },
                 toolCallId = toolResult?.toolCallId,
                 name = toolResult?.name,

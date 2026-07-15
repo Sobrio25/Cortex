@@ -33,6 +33,7 @@ import com.aiagents.app.data.repository.ContextCompactionPolicy
 import com.aiagents.app.data.repository.ContextWindowPolicy
 import com.aiagents.app.data.repository.FileRepository
 import com.aiagents.app.data.repository.TokenCounter
+import com.aiagents.app.data.repository.SubscriptionRepository
 import com.aiagents.app.data.terminal.BraveSearchToolHandler
 import com.aiagents.app.data.terminal.DuckDuckGoSearchToolHandler
 import com.aiagents.app.data.terminal.GoogleMapsToolHandler
@@ -218,6 +219,7 @@ enum class WorkspaceTab {
 @HiltViewModel
 class WorkspaceDetailViewModel @Inject constructor(
     private val repository: AgentRepository,
+    private val subscriptionRepository: SubscriptionRepository,
     private val fileRepository: FileRepository,
     private val agentOrchestrator: AgentOrchestrator,
     private val localModelRepository: LocalModelRepository,
@@ -432,6 +434,7 @@ class WorkspaceDetailViewModel @Inject constructor(
         loadWorkspace()
         loadAvailableModels()
         observeSelectedModelsChanges()
+        observeManagedModels()
         startFileScanning()
         loadShowReasoningPreference()
         loadShowCommandsPreference()
@@ -646,8 +649,30 @@ class WorkspaceDetailViewModel @Inject constructor(
         }
     }
 
+    private fun observeManagedModels() {
+        viewModelScope.launch {
+            subscriptionRepository.refresh()
+            subscriptionRepository.models.collect {
+                val available = buildAvailableModelsList()
+                _uiState.value = _uiState.value.copy(availableModels = available)
+                if (_selectedModel.value.startsWith("${ProviderType.MANAGED.name}|") &&
+                    _selectedModel.value !in available
+                ) {
+                    setSelectedModel("${ProviderType.MANAGED.name}|auto")
+                }
+            }
+        }
+    }
+
     private suspend fun buildAvailableModelsList(): List<String> {
-        val selected = repository.getSelectedModels().toMutableSet()
+        val selected = repository.getSelectedModels()
+            .filterNot { it.startsWith("${ProviderType.MANAGED.name}|") }
+            .toMutableSet()
+        if (securePreferences.isManagedPrivacyAccepted()) {
+            subscriptionRepository.models.value.forEach { model ->
+                selected.add("${ProviderType.MANAGED.name}|${model.id}")
+            }
+        }
         val downloadedLocalModels = localModelRepository.getDownloadedModels()
         downloadedLocalModels.forEach { model ->
             selected.add("${ProviderType.LOCAL.name}|${model.id}")

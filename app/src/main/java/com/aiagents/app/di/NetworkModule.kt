@@ -4,6 +4,7 @@ import android.content.Context
 import com.aiagents.app.data.local.LocalModelRepository
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.remote.AIClientFactory
+import com.aiagents.app.data.remote.ManagedAIClient
 import com.aiagents.app.data.remote.OpenRouterClient
 import com.aiagents.app.data.remote.GoogleAIClient
 import com.aiagents.app.data.remote.OpenAIClient
@@ -15,6 +16,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import com.aiagents.app.data.remote.HuggingFaceApiService
 import okhttp3.OkHttpClient
+import com.google.firebase.auth.FirebaseAuth
+import com.google.gson.Gson
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
@@ -23,6 +26,14 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
+
+    @Provides
+    @Singleton
+    fun provideGson(): Gson = Gson()
+
+    @Provides
+    @Singleton
+    fun provideFirebaseAuth(): FirebaseAuth = FirebaseAuth.getInstance()
 
     @Provides
     @Singleton
@@ -57,8 +68,9 @@ object NetworkModule {
         okHttpClient: OkHttpClient,
         localModelRepository: LocalModelRepository,
         @ApplicationContext context: Context,
-        securePreferences: SecurePreferences
+        securePreferences: SecurePreferences,
+        managedAIClient: ManagedAIClient
     ): AIClientFactory {
-        return AIClientFactory(okHttpClient, localModelRepository, context, securePreferences)
+        return AIClientFactory(okHttpClient, localModelRepository, context, securePreferences, managedAIClient)
     }
 }

@@ -71,7 +71,7 @@ fun ProvidersScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            items(ProviderType.entries.toList()) { type ->
+            items(ProviderType.entries.filterNot { it == ProviderType.MANAGED }) { type ->
                 val state = providerStates[type] ?: return@items
                 val selectedCount = selectedModels.count { it.startsWith("${type.name}|") }
 
@@ -94,6 +94,7 @@ fun ProvidersScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         val providerLogo = when (type) {
+                            ProviderType.MANAGED -> null
                             ProviderType.OPENROUTER -> R.drawable.ic_openrouter
                             ProviderType.GOOGLE_AI -> R.drawable.ic_google_ai
                             ProviderType.OPENAI -> R.drawable.ic_openai

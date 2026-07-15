@@ -4,6 +4,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.dagger.hilt.android")
     id("com.google.devtools.ksp")
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -14,8 +15,8 @@ android {
         applicationId = "com.aiagents.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.2.1"
+        versionCode = 4
+        versionName = "0.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -101,6 +102,11 @@ dependencies {
     implementation("com.google.android.gms:play-services-location:21.3.0")
     // Google Identity Services authorization for Workspace APIs
     implementation("com.google.android.gms:play-services-auth:21.6.0")
+
+    // Managed subscriptions: anonymous Firebase identity + Google Play purchases.
+    implementation(platform("com.google.firebase:firebase-bom:34.15.0"))
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.android.billingclient:billing-ktx:9.1.0")
 
     // Local LLM inference via MediaPipe (Google)
     implementation("com.google.mediapipe:tasks-genai:0.10.27")

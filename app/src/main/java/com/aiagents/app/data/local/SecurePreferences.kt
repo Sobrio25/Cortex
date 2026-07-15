@@ -170,6 +170,19 @@ class SecurePreferences @Inject constructor(
         return getSelectedModels().contains("${providerType.name}|$modelId")
     }
 
+    fun setManagedPrivacyAccepted(accepted: Boolean) {
+        encryptedPrefs.edit().putBoolean("MANAGED_PRIVACY_ACCEPTED", accepted).apply()
+    }
+
+    fun isManagedPrivacyAccepted(): Boolean =
+        encryptedPrefs.getBoolean("MANAGED_PRIVACY_ACCEPTED", false)
+
+    fun enableManagedFreePlan() {
+        setManagedPrivacyAccepted(true)
+        addSelectedModel(ProviderType.MANAGED, "auto")
+        setActiveProvider(ProviderType.MANAGED)
+    }
+
     fun saveHuggingFaceToken(token: String) {
         encryptedPrefs.edit().putString("HUGGINGFACE_TOKEN", token).apply()
     }

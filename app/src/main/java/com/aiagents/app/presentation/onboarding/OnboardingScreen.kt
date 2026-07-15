@@ -52,6 +52,7 @@ fun OnboardingScreen(
     val formality by viewModel.formalityLevel.collectAsState()
     val empathy by viewModel.empathyLevel.collectAsState()
     val technical by viewModel.technicalPrecision.collectAsState()
+    val managedPrivacyAccepted by viewModel.managedPrivacyAccepted.collectAsState()
     val lastStep = TOTAL_ONBOARDING_STEPS - 1
 
     Scaffold(
@@ -122,12 +123,9 @@ fun OnboardingScreen(
                         onEmpathyChange = { viewModel.setEmpathy(it) },
                         onTechnicalChange = { viewModel.setTechnicalPrecision(it) }
                     )
-                    2 -> FeatureStep(
-                        icon = Icons.Default.Cloud,
-                        title = stringResource(R.string.onboarding_providers_title),
-                        description = stringResource(R.string.onboarding_providers_desc),
-                        actionLabel = stringResource(R.string.onboarding_configure_providers),
-                        onAction = onNavigateToProviders
+                    2 -> ManagedFreePlanStep(
+                        privacyAccepted = managedPrivacyAccepted,
+                        onPrivacyAcceptedChange = viewModel::setManagedPrivacyAccepted
                     )
                     3 -> FeatureStep(
                         icon = Icons.Default.Extension,
@@ -157,7 +155,11 @@ fun OnboardingScreen(
             OnboardingBottomBar(
                 currentStep = currentStep,
                 lastStep = lastStep,
-                isNextEnabled = currentStep != 0 || userName.isNotBlank(),
+                isNextEnabled = when (currentStep) {
+                    0 -> userName.isNotBlank()
+                    2 -> managedPrivacyAccepted
+                    else -> true
+                },
                 onBack = { viewModel.previousStep() },
                 onNext = {
                     if (currentStep == lastStep) {
@@ -168,6 +170,82 @@ fun OnboardingScreen(
                 },
                 onSkip = { viewModel.nextStep() }
             )
+        }
+    }
+}
+
+@Composable
+private fun ManagedFreePlanStep(
+    privacyAccepted: Boolean,
+    onPrivacyAcceptedChange: (Boolean) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(Modifier.height(34.dp))
+        Box(
+            modifier = Modifier
+                .size(80.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Default.AutoAwesome, null, Modifier.size(46.dp))
+        }
+        Spacer(Modifier.height(20.dp))
+        Text(
+            stringResource(R.string.onboarding_free_plan_title),
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            stringResource(R.string.onboarding_free_plan_desc),
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+        Spacer(Modifier.height(22.dp))
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+        ) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    stringResource(R.string.onboarding_free_plan_messages),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(stringResource(R.string.onboarding_free_plan_no_config))
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth().clickable {
+                onPrivacyAcceptedChange(!privacyAccepted)
+            },
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+            )
+        ) {
+            Row(
+                Modifier.padding(14.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Checkbox(
+                    checked = privacyAccepted,
+                    onCheckedChange = onPrivacyAcceptedChange
+                )
+                Text(
+                    stringResource(R.string.managed_privacy_notice),
+                    Modifier.padding(start = 8.dp, top = 10.dp),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
     }
 }
@@ -719,7 +797,7 @@ private fun OnboardingBottomBar(
 
             Row {
                 // Skip button (feature steps 2-4, not on welcome, personality, or final)
-                if (currentStep in 2..(lastStep - 1)) {
+                if (currentStep in 3..(lastStep - 1)) {
                     TextButton(onClick = onSkip) {
                         Text(stringResource(R.string.onboarding_skip))
                     }

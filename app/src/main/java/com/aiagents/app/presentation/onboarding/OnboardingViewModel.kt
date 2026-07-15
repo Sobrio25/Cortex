@@ -42,6 +42,10 @@ class OnboardingViewModel @Inject constructor(
     val formalityLevel = savedStateHandle.getStateFlow("formality", 50)
     val empathyLevel = savedStateHandle.getStateFlow("empathy", 50)
     val technicalPrecision = savedStateHandle.getStateFlow("technical", 70)
+    val managedPrivacyAccepted = savedStateHandle.getStateFlow(
+        "managedPrivacyAccepted",
+        securePreferences.isManagedPrivacyAccepted()
+    )
 
     val isOnboardingDone: Boolean
         get() = securePreferences.isOnboardingCompleted()
@@ -68,6 +72,10 @@ class OnboardingViewModel @Inject constructor(
     fun setFormality(value: Int) { savedStateHandle["formality"] = value }
     fun setEmpathy(value: Int) { savedStateHandle["empathy"] = value }
     fun setTechnicalPrecision(value: Int) { savedStateHandle["technical"] = value }
+    fun setManagedPrivacyAccepted(accepted: Boolean) {
+        savedStateHandle["managedPrivacyAccepted"] = accepted
+        securePreferences.setManagedPrivacyAccepted(accepted)
+    }
 
     fun nextStep() {
         savedStateHandle["currentStep"] = (currentStep.value + 1).coerceAtMost(TOTAL_ONBOARDING_STEPS - 1)
@@ -88,6 +96,7 @@ class OnboardingViewModel @Inject constructor(
             val now = System.currentTimeMillis()
 
             securePreferences.saveUserIdentity(name, nickname)
+            securePreferences.enableManagedFreePlan()
 
             // Update Cortex name, personality and prompt
             val chosenCortexName = cortexName.value.trim().ifBlank { "Cortex" }

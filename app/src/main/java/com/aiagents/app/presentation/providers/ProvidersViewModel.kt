@@ -654,6 +654,7 @@ class ProvidersViewModel @Inject constructor(
 
     fun getDefaultBaseUrl(type: ProviderType): String {
         return when (type) {
+            ProviderType.MANAGED -> ""
             ProviderType.OPENROUTER -> "https://openrouter.ai/api/v1/"
             ProviderType.GOOGLE_AI -> "https://generativelanguage.googleapis.com/v1beta/"
             ProviderType.OPENAI -> "https://api.openai.com/v1/"
@@ -675,6 +676,7 @@ class ProvidersViewModel @Inject constructor(
 
     fun getProviderDisplayName(type: ProviderType): String {
         return when (type) {
+            ProviderType.MANAGED -> "Plan administrado"
             ProviderType.OPENROUTER -> "OpenRouter"
             ProviderType.GOOGLE_AI -> "Google AI (Gemini)"
             ProviderType.OPENAI -> "OpenAI"

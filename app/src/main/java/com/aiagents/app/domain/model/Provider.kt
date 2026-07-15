@@ -1,6 +1,7 @@
 package com.aiagents.app.domain.model
 
 enum class ProviderType {
+    MANAGED,
     OPENROUTER,
     GOOGLE_AI,
     OPENAI,

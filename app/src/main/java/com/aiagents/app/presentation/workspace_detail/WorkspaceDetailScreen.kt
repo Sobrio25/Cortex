@@ -934,7 +934,7 @@ fun ModelSelectorCompact(
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                                 Text(
-                                    modelInfo.provider.name,
+                                    if (modelInfo.provider == com.aiagents.app.domain.model.ProviderType.MANAGED) "Plan" else modelInfo.provider.name,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -3024,7 +3024,7 @@ fun SettingsDialog(
                                                 style = MaterialTheme.typography.bodyMedium
                                             )
                                             Text(
-                                                modelInfo.provider.name,
+                                                if (modelInfo.provider == com.aiagents.app.domain.model.ProviderType.MANAGED) "Plan" else modelInfo.provider.name,
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.primary
                                             )

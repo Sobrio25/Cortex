@@ -21,6 +21,7 @@ class ProviderCredentialResolver @Inject constructor(
     private val securePreferences: SecurePreferences
 ) {
     fun resolve(provider: ProviderType): ProviderCredentials? = when (provider) {
+        ProviderType.MANAGED -> ProviderCredentials(apiKey = "managed", baseUrl = null)
         ProviderType.LOCAL -> ProviderCredentials(apiKey = "", baseUrl = null)
         ProviderType.OLLAMA -> ProviderCredentials(
             apiKey = "",
