@@ -105,7 +105,8 @@ class AndroidSpeechRecognizerSTTService(
                         SpeechRecognizer.ERROR_SERVER -> "Error del servidor"
                         SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Timeout - no se detecto habla"
                         SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED -> "Idioma no compatible"
-                        SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> "Idioma no descargado"
+                        SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ->
+                            "Idioma no descargado; instala el paquete de Android o el respaldo Vosk"
                         else -> "Error desconocido ($error)"
                     }
                     Log.e(TAG, "Error: $errorMessage")
@@ -156,6 +157,7 @@ class AndroidSpeechRecognizerSTTService(
 
     override suspend fun stopListening() {
         withContext(Dispatchers.Main) {
+            if (!_isListening.value) return@withContext
             try {
                 // Let the recognizer produce its final result. onResults/onError owns the
                 // isListening transition; cancelling here would discard the last phrase.

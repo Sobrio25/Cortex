@@ -87,7 +87,12 @@ class CortexAssistantActivity : AppCompatActivity() {
     private fun configureGlassWindow() {
         window.setDimAmount(0.18f)
         window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-        setShowWhenLocked(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)

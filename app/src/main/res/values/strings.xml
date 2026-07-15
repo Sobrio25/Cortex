@@ -132,7 +132,7 @@
     <string name="assistant_voice_title">Free, local voice</string>
     <string name="assistant_voice_subtitle">No voice API keys, accounts, quotas, or per-minute charges.</string>
     <string name="assistant_voice_input">Voice recognition</string>
-    <string name="assistant_voice_android_local">Android on-device recognition is available</string>
+    <string name="assistant_voice_android_local">Android on-device is available; Vosk can be added as a guaranteed fallback</string>
     <string name="assistant_voice_vosk_ready">The Vosk language model is ready offline</string>
     <string name="assistant_voice_vosk_needed">An offline model is required on this device</string>
     <string name="assistant_download_vosk">Download offline model</string>

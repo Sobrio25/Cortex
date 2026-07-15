@@ -132,7 +132,7 @@
     <string name="assistant_voice_title">Voz local y gratuita</string>
     <string name="assistant_voice_subtitle">Sin API keys de voz, cuentas, cuotas ni cobros por minuto.</string>
     <string name="assistant_voice_input">Reconocimiento de voz</string>
-    <string name="assistant_voice_android_local">El reconocimiento on-device de Android está disponible</string>
+    <string name="assistant_voice_android_local">Android on-device está disponible; Vosk puede añadirse como respaldo garantizado</string>
     <string name="assistant_voice_vosk_ready">El modelo Vosk en español está listo sin conexión</string>
     <string name="assistant_voice_vosk_needed">Este dispositivo necesita un modelo sin conexión</string>
     <string name="assistant_download_vosk">Descargar modelo en español</string>

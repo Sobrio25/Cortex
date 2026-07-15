@@ -86,17 +86,31 @@ class STTViewModel @Inject constructor(
     fun prepareOfflineAssistant(workspaceId: Long, language: String) {
         viewModelScope.launch {
             val existing = sttSettingsDao.getSettingsForWorkspace(workspaceId.toInt())
+            val fallbackModelId = if (language.substringBefore('-').equals("en", ignoreCase = true)) {
+                "vosk-small-en"
+            } else {
+                "vosk-small-es"
+            }
+            val fallbackModelDirectory = ModelDownloader.getVoskModelInfo(fallbackModelId)?.dirName
+                ?: "vosk-model-small-es"
+            val localEngine = if (
+                VoskSTTService.isModelDownloaded(context, fallbackModelDirectory)
+            ) {
+                com.aiagents.app.data.model.LocalSTTEngine.VOSK
+            } else {
+                com.aiagents.app.data.model.LocalSTTEngine.AUTO
+            }
             val settings = (existing ?: STTSettingsEntity(workspaceId = workspaceId.toInt())).copy(
                 enabled = true,
                 mode = STTMode.LOCAL.name,
-                localEngine = com.aiagents.app.data.model.LocalSTTEngine.AUTO.name,
+                localEngine = localEngine.name,
                 apiKey = "",
                 language = language,
                 updatedAt = System.currentTimeMillis()
             )
             sttSettingsDao.insertSettings(settings)
-            _currentSettings.value = settings
             sttManager.initializeFromSettings(settings)
+            _currentSettings.value = settings
         }
     }
 
@@ -192,7 +206,12 @@ class STTViewModel @Inject constructor(
                 _transcription.value = ""
                 _pendingTranscription.value = null
 
-                val service = sttManager.currentService.value
+                val service = sttManager.currentService.value ?: _currentSettings.value?.let { settings ->
+                    // A different screen can release the shared manager while the translucent
+                    // assistant is in front. Rehydrate it at the actual point of use.
+                    sttManager.initializeFromSettings(settings)
+                    sttManager.currentService.value
+                }
                 if (service == null) {
                     _error.value = "Servicio STT no inicializado"
                     _isListening.value = false

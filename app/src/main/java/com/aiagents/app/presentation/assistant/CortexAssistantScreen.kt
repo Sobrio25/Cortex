@@ -22,7 +22,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -66,7 +65,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -136,8 +134,10 @@ fun CortexAssistantScreen(
     val autoListen by preferences.autoListen.collectAsState()
     val speakResponses by preferences.speakResponses.collectAsState()
 
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    var initialListeningRequested by rememberSaveable { mutableStateOf(false) }
+    // Every invocation starts compact and gets a fresh opportunity to listen. These are
+    // deliberately not saveable across assistant activity recreation/restoration.
+    var expanded by remember { mutableStateOf(false) }
+    var initialListeningRequested by remember { mutableStateOf(false) }
     var hasRecordPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
@@ -231,16 +231,10 @@ fun CortexAssistantScreen(
         if (expanded) expanded = false else onDismiss()
     }
 
-    val outsideInteraction = remember { MutableInteractionSource() }
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = if (expanded) 0.18f else 0.06f))
-            .clickable(
-                interactionSource = outsideInteraction,
-                indication = null,
-                onClick = onDismiss
-            )
     ) {
         AnimatedContent(
             targetState = expanded,
@@ -752,11 +746,6 @@ private fun GlassPanel(
                     listOf(Color.White.copy(0.42f), CortexBlue.copy(0.28f), Color.White.copy(0.10f))
                 ),
                 shape = shape
-            )
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = {}
             )
     ) {
         content()

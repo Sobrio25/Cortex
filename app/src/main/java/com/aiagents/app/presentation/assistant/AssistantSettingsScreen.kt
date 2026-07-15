@@ -220,7 +220,7 @@ fun AssistantSettingsScreen(
                         },
                         ready = onDeviceRecognition || voskDownloaded
                     )
-                    if (!onDeviceRecognition && !voskDownloaded) {
+                    if (!voskDownloaded) {
                         Spacer(Modifier.height(10.dp))
                         Button(
                             onClick = viewModel::downloadSpanishVoiceModel,

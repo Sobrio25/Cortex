@@ -31,6 +31,12 @@ Soporta 7 proveedores con sus logos oficiales:
 - Sistema de permisos para ejecución de comandos
 - Niveles de riesgo para comandos del terminal
 
+### 🎙️ Cortex como asistente
+- Invocación mediante el rol oficial de asistente de Android
+- Burbuja translúcida compacta y conversación expandida por voz o texto
+- Reconocimiento local con Android on-device y fallback Vosk
+- Respuestas con voces TTS embebidas, sin API keys de voz
+
 ### 💻 Terminal integrado
 - Los agentes pueden ejecutar comandos del sistema (opcional)
 - Sistema de aprobación de comandos con niveles de riesgo
