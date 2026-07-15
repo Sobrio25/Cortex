@@ -149,6 +149,7 @@ fun AIAgentsTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = true,
     expressive: Boolean = true,
+    transparentSystemBars: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
@@ -164,8 +165,16 @@ fun AIAgentsTheme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            window.statusBarColor = colorScheme.surface.toArgb()
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
+            window.statusBarColor = if (transparentSystemBars) {
+                android.graphics.Color.TRANSPARENT
+            } else {
+                colorScheme.surface.toArgb()
+            }
+            if (transparentSystemBars) {
+                window.navigationBarColor = android.graphics.Color.TRANSPARENT
+            }
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars =
+                !darkTheme && !transparentSystemBars
         }
     }
 

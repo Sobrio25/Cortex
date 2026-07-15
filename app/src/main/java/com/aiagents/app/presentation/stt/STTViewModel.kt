@@ -79,6 +79,27 @@ class STTViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Prepares the hidden global workspace for a private, API-keyless assistant session.
+     * AUTO uses Android's on-device recognizer when available and Vosk otherwise.
+     */
+    fun prepareOfflineAssistant(workspaceId: Long, language: String) {
+        viewModelScope.launch {
+            val existing = sttSettingsDao.getSettingsForWorkspace(workspaceId.toInt())
+            val settings = (existing ?: STTSettingsEntity(workspaceId = workspaceId.toInt())).copy(
+                enabled = true,
+                mode = STTMode.LOCAL.name,
+                localEngine = com.aiagents.app.data.model.LocalSTTEngine.AUTO.name,
+                apiKey = "",
+                language = language,
+                updatedAt = System.currentTimeMillis()
+            )
+            sttSettingsDao.insertSettings(settings)
+            _currentSettings.value = settings
+            sttManager.initializeFromSettings(settings)
+        }
+    }
+
     fun toggleSTTEnabled(workspaceId: Long, enabled: Boolean) {
         viewModelScope.launch {
             val current = _currentSettings.value
@@ -165,6 +186,7 @@ class STTViewModel @Inject constructor(
 
         listeningJob?.cancel()
         listeningJob = viewModelScope.launch {
+            var liveTranscriptionJob: Job? = null
             try {
                 _isListening.value = true
                 _transcription.value = ""
@@ -175,6 +197,14 @@ class STTViewModel @Inject constructor(
                     _error.value = "Servicio STT no inicializado"
                     _isListening.value = false
                     return@launch
+                }
+
+                liveTranscriptionJob = launch {
+                    service.transcription.collect { partial ->
+                        if (partial.isNotBlank() && !partial.startsWith("Error:", ignoreCase = true)) {
+                            _transcription.value = partial
+                        }
+                    }
                 }
 
                 service.startListening(_currentSettings.value?.language ?: "es")
@@ -213,6 +243,7 @@ class STTViewModel @Inject constructor(
                 Log.e("STTViewModel", "Error in STT", e)
                 _error.value = "Error: ${e.message}"
             } finally {
+                liveTranscriptionJob?.cancel()
                 _isListening.value = false
             }
         }
@@ -245,6 +276,9 @@ class STTViewModel @Inject constructor(
     fun dismissError() {
         _error.value = null
     }
+
+    fun isOnDeviceRecognitionAvailable(): Boolean =
+        sttManager.isOnDeviceRecognitionAvailable()
 
     fun downloadModel() {
         downloadModel("vosk-small-es")
