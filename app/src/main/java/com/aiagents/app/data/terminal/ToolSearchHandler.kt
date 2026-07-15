@@ -1,7 +1,5 @@
 package com.aiagents.app.data.terminal
 
-import android.util.Log
-import com.google.gson.JsonParser
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -9,7 +7,6 @@ import javax.inject.Singleton
 class ToolSearchHandler @Inject constructor() {
 
     companion object {
-        private const val TAG = "ToolSearchHandler"
         const val TOOL_NAME = "search_tools"
 
         /** Minimum number of total tools before deferred mode activates */
@@ -44,7 +41,7 @@ class ToolSearchHandler @Inject constructor() {
                 "type" to "function",
                 "function" to mapOf(
                     "name" to TOOL_NAME,
-                    "description" to "Search for available tools by keyword. IMPORTANT: You MUST use this tool before using any capability not already in your tool list. Do NOT attempt to call tools you haven't discovered yet. Google Workspace actions are the exception: delegate them with spawn_subagents and a scoped google_* capability. Use this search for presentations/pptx, web search, maps, reminders, github, obsidian, notion, canva, slack, device control, and more. Returns matching tools that become available for use.",
+                    "description" to "Search for available tools by keyword. IMPORTANT: You MUST use this tool before using any capability not already in your tool list. Do NOT attempt to call tools you haven't discovered yet. Google Workspace actions are the exception: delegate them with spawn_subagents and a scoped google_* capability. Use this search for personal finance, presentations/pptx, web search, maps, reminders, github, obsidian, notion, canva, slack, device control, and more. Returns matching tools that become available for use.",
                     "parameters" to mapOf(
                         "type" to "object",
                         "properties" to mapOf(
@@ -227,7 +224,8 @@ class ToolSearchHandler @Inject constructor() {
         ToolEntry("gdrive_create_doc", "google_drive", "Create a new Google Doc", setOf("drive", "google", "doc", "create", "new", "document", "crear", "documento")),
 
         // Finance
-        ToolEntry("finance_add_transaction", "finance", "Record a financial transaction (expense, income, investment)", setOf("finance", "expense", "income", "investment", "money", "spend", "earn", "gasto", "ingreso", "inversion", "dinero", "registrar", "transaccion")),
+        ToolEntry("finance_add_transaction", "finance", "Record a financial transaction (expense, income, investment)", setOf("finance", "finanzas", "financiero", "financiera", "expense", "income", "investment", "money", "spend", "earn", "gasto", "gastos", "gasté", "gaste", "pago", "pagué", "pague", "compra", "compré", "compre", "ingreso", "ingresos", "gané", "gane", "cobro", "cobré", "cobre", "salario", "sueldo", "inversion", "inversión", "dinero", "registrar", "registro", "anotar", "apuntar", "guardar", "transaccion", "transacción")),
+        ToolEntry("finance_update_transaction", "finance", "Edit a financial transaction amount, description, type, category, currency, or date", setOf("finance", "finanzas", "edit", "update", "change", "correct", "modify", "amount", "description", "category", "transaction", "editar", "actualizar", "cambiar", "corregir", "modificar", "monto", "cantidad", "descripcion", "descripción", "categoria", "categoría", "transaccion", "transacción", "movimiento")),
         ToolEntry("finance_list_transactions", "finance", "List recent financial transactions", setOf("finance", "transactions", "list", "recent", "history", "transacciones", "listar", "historial", "movimientos")),
         ToolEntry("finance_get_summary", "finance", "Get financial summary with totals by type", setOf("finance", "summary", "totals", "report", "overview", "resumen", "reporte", "totales")),
         ToolEntry("finance_search_transactions", "finance", "Search transactions by keyword", setOf("finance", "search", "find", "query", "buscar", "encontrar", "transaccion")),
@@ -315,8 +313,6 @@ class ToolSearchHandler @Inject constructor() {
             appendLine()
             appendLine("These tools are now available. Call them directly.")
         }
-
-        Log.d(TAG, "Search '$query' found ${toolNames.size} tools in categories: $matchedCategories")
 
         return ToolSearchResult(
             found = true,

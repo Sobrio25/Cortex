@@ -36,6 +36,23 @@ class RuntimeContextProviderTest {
     }
 
     @Test
+    fun renderExplicitlyAnnouncesFinanceOnlyWhenItIsEnabled() {
+        val enabled = RuntimeContextProvider.render(runtimeSnapshot(
+            exposedTools = listOf("finance_add_transaction", "finance_update_transaction"),
+            discoverableTools = listOf("finance_add_transaction", "finance_update_transaction")
+        ))
+        val disabled = RuntimeContextProvider.render(runtimeSnapshot(
+            exposedTools = listOf("search_tools"),
+            discoverableTools = listOf("search_tools")
+        ))
+
+        assertTrue(enabled.contains("Personal finance is enabled"))
+        assertTrue(enabled.contains("search_tools"))
+        assertTrue(enabled.contains("'finanzas'"))
+        assertFalse(disabled.contains("Personal finance is enabled"))
+    }
+
+    @Test
     fun renderMemoryIncludesUsageAndCurrentMarkdownContent() {
         val text = RuntimeContextProvider.renderMemory(
             CortexMemorySnapshot(
@@ -111,5 +128,23 @@ class RuntimeContextProviderTest {
         usagePercent = 1,
         revision = "revision",
         storageError = null
+    )
+
+    private fun runtimeSnapshot(
+        exposedTools: List<String>,
+        discoverableTools: List<String>
+    ) = RuntimeSnapshot(
+        isoDateTime = "2026-07-14T19:55:00-06:00",
+        localizedDateTime = "martes, 14 de julio de 2026, 19:55:00",
+        timeZone = "America/Mexico_City",
+        localeTag = "es-MX",
+        agentName = "Clawdy",
+        agentRole = "Agent Orchestrator",
+        androidRelease = "16",
+        androidApi = 36,
+        deviceManufacturer = "Google",
+        deviceModel = "Pixel 6a",
+        exposedTools = exposedTools,
+        discoverableTools = discoverableTools
     )
 }

@@ -64,6 +64,9 @@ class RuntimeContextProvider @Inject constructor(
             if (snapshot.discoverableTools != snapshot.exposedTools) {
                 appendLine("- If a needed available tool is not currently exposed, use search_tools to activate it.")
             }
+            if (snapshot.discoverableTools.any { it.startsWith("finance_") }) {
+                appendLine("- Personal finance is enabled with isolated storage. Before a financial action, call search_tools with query 'personal finance' or 'finanzas' to load the required finance_* tools.")
+            }
             append("Only claim an action or integration after its tool is exposed and succeeds.")
         }
 

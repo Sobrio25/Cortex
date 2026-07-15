@@ -2725,7 +2725,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         toolName in MemoryToolHandler.ALL_TOOL_NAMES -> "Accediendo a memoria..."
         toolName in CodeExecutionHandler.ALL_TOOL_NAMES -> "Ejecutando código..."
         toolName in PresentationToolHandler.ALL_TOOL_NAMES -> "Creando presentación..."
-        toolName in FinanceToolHandler.ALL_TOOL_NAMES -> "Registrando finanzas..."
+        toolName in FinanceToolHandler.ALL_TOOL_NAMES -> "Gestionando finanzas..."
         toolName in AcademicSearchToolHandler.ALL_TOOL_NAMES -> "Buscando en fuentes académicas..."
         toolName in WeatherToolHandler.ALL_TOOL_NAMES -> "Consultando el clima..."
         toolName in ImageGenerationToolHandler.ALL_TOOL_NAMES -> "Generando imagen con IA..."
