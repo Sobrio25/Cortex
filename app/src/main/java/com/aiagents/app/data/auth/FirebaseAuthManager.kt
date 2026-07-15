@@ -5,7 +5,7 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import com.aiagents.app.R
-import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.gms.tasks.Task
 import com.google.firebase.auth.FirebaseAuth
@@ -30,10 +30,9 @@ class FirebaseAuthManager @Inject constructor(
 
     suspend fun signInWithGoogle(activity: Activity) {
         if (isGoogleSignedIn) return
-        val googleIdOption = GetGoogleIdOption.Builder()
-            .setFilterByAuthorizedAccounts(false)
-            .setServerClientId(activity.getString(R.string.default_web_client_id))
-            .setAutoSelectEnabled(false)
+        val googleIdOption = GetSignInWithGoogleOption.Builder(
+            activity.getString(R.string.default_web_client_id)
+        )
             .build()
         val request = GetCredentialRequest.Builder()
             .addCredentialOption(googleIdOption)
