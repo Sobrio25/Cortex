@@ -1,10 +1,12 @@
 package com.aiagents.app.presentation.onboarding
 
+import android.app.Activity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aiagents.app.data.auth.FirebaseAuthManager
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.memory.CortexProfileStore
 import com.aiagents.app.data.repository.AgentRepository
@@ -23,7 +25,8 @@ class OnboardingViewModel @Inject constructor(
     private val savedStateHandle: SavedStateHandle,
     private val securePreferences: SecurePreferences,
     private val agentRepository: AgentRepository,
-    private val cortexProfileStore: CortexProfileStore
+    private val cortexProfileStore: CortexProfileStore,
+    private val firebaseAuthManager: FirebaseAuthManager
 ) : ViewModel() {
 
     val currentStep = savedStateHandle.getStateFlow("currentStep", 0)
@@ -46,6 +49,12 @@ class OnboardingViewModel @Inject constructor(
         "managedPrivacyAccepted",
         securePreferences.isManagedPrivacyAccepted()
     )
+    private val _googleSignedIn = MutableStateFlow(firebaseAuthManager.isGoogleSignedIn)
+    val googleSignedIn: StateFlow<Boolean> = _googleSignedIn.asStateFlow()
+    private val _googleSignInLoading = MutableStateFlow(false)
+    val googleSignInLoading: StateFlow<Boolean> = _googleSignInLoading.asStateFlow()
+    private val _googleSignInError = MutableStateFlow<String?>(null)
+    val googleSignInError: StateFlow<String?> = _googleSignInError.asStateFlow()
 
     val isOnboardingDone: Boolean
         get() = securePreferences.isOnboardingCompleted()
@@ -77,6 +86,20 @@ class OnboardingViewModel @Inject constructor(
         securePreferences.setManagedPrivacyAccepted(accepted)
     }
 
+    fun signInWithGoogle(activity: Activity) {
+        if (_googleSignInLoading.value) return
+        viewModelScope.launch {
+            _googleSignInLoading.value = true
+            _googleSignInError.value = null
+            runCatching { firebaseAuthManager.signInWithGoogle(activity) }
+                .onSuccess { _googleSignedIn.value = firebaseAuthManager.isGoogleSignedIn }
+                .onFailure {
+                    _googleSignInError.value = it.message ?: "No se pudo iniciar sesión con Google"
+                }
+            _googleSignInLoading.value = false
+        }
+    }
+
     fun nextStep() {
         savedStateHandle["currentStep"] = (currentStep.value + 1).coerceAtMost(TOTAL_ONBOARDING_STEPS - 1)
     }
@@ -88,7 +111,7 @@ class OnboardingViewModel @Inject constructor(
     private var completing = false
 
     fun completeOnboarding() {
-        if (completing) return
+        if (completing || !managedPrivacyAccepted.value || !_googleSignedIn.value) return
         completing = true
         viewModelScope.launch {
             val name = userName.value.trim()

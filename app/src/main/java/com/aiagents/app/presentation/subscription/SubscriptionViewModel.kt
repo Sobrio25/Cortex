@@ -3,6 +3,7 @@ package com.aiagents.app.presentation.subscription
 import android.app.Activity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aiagents.app.data.auth.FirebaseAuthManager
 import com.aiagents.app.data.billing.PlayBillingManager
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.repository.SubscriptionRepository
@@ -27,7 +28,8 @@ data class SubscriptionUiState(
 class SubscriptionViewModel @Inject constructor(
     private val repository: SubscriptionRepository,
     private val billing: PlayBillingManager,
-    private val securePreferences: SecurePreferences
+    private val securePreferences: SecurePreferences,
+    private val firebaseAuthManager: FirebaseAuthManager
 ) : ViewModel() {
     val usage: StateFlow<UsageSnapshot> = repository.usage
     val products = billing.products.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
@@ -36,6 +38,8 @@ class SubscriptionViewModel @Inject constructor(
     val uiState = _uiState.asStateFlow()
     private val _privacyAccepted = MutableStateFlow(securePreferences.isManagedPrivacyAccepted())
     val privacyAccepted = _privacyAccepted.asStateFlow()
+    private val _googleSignedIn = MutableStateFlow(firebaseAuthManager.isGoogleSignedIn)
+    val googleSignedIn = _googleSignedIn.asStateFlow()
 
     init {
         billing.connect()
@@ -64,10 +68,27 @@ class SubscriptionViewModel @Inject constructor(
         billing.restorePurchases()
     }
 
-    fun acceptPrivacyAndEnableFreePlan() {
-        securePreferences.enableManagedFreePlan()
-        _privacyAccepted.value = true
-        viewModelScope.launch { repository.refresh() }
+    fun signInWithGoogleAndEnableFreePlan(activity: Activity) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(loading = true, message = null)
+            runCatching { firebaseAuthManager.signInWithGoogle(activity) }
+                .onSuccess {
+                    _googleSignedIn.value = firebaseAuthManager.isGoogleSignedIn
+                    securePreferences.enableManagedFreePlan()
+                    _privacyAccepted.value = true
+                    repository.refresh().onFailure { error ->
+                        _uiState.value = SubscriptionUiState(false, error.message)
+                    }.onSuccess {
+                        _uiState.value = SubscriptionUiState(false)
+                    }
+                }
+                .onFailure {
+                    _uiState.value = SubscriptionUiState(
+                        loading = false,
+                        message = it.message ?: "No se pudo iniciar sesión con Google"
+                    )
+                }
+        }
     }
 
     fun localizedPrice(plan: SubscriptionPlan): String? = billing.localizedPrice(plan)

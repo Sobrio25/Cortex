@@ -3,8 +3,8 @@ import { MODELS, PLANS, PlanId, ModelDefinition, resolveModel } from "./catalog"
 
 export interface AccountState {
   plan: PlanId;
-  freeMessagesUsed: number;
-  freeMessagesLimit: number;
+  freeTokensUsed: number;
+  freeTokensLimit: number;
   freePeriod: string;
   spentMicros: number;
   budgetMicros: number;
@@ -24,8 +24,14 @@ export class EntitlementError extends Error {
   }
 }
 
+export function requireGoogleSignInForFree(plan: PlanId, signInProvider?: string): void {
+  if (plan === "FREE" && signInProvider !== "google.com") {
+    throw new EntitlementError(403, "Inicia sesión con Google para usar el plan Gratis");
+  }
+}
+
 const db = () => getFirestore();
-export const FREE_MESSAGES_LIMIT = 100;
+export const FREE_TOKENS_LIMIT = 2_000_000;
 
 /** ISO-8601 week in UTC. Weeks start on Monday and belong to the year of Thursday. */
 export function quotaPeriodKey(now: Date = new Date()): string {
@@ -44,10 +50,12 @@ function normalize(raw: FirebaseFirestore.DocumentData | undefined): AccountStat
   const periodEndEpochMillis = raw?.periodEndEpochMillis ? Number(raw.periodEndEpochMillis) : undefined;
   if (plan !== "FREE" && periodEndEpochMillis && periodEndEpochMillis <= now) plan = "FREE";
   const currentPeriod = quotaPeriodKey();
+  const storedFreeTokens = Number(raw?.freeTokensUsed ?? 0);
   return {
     plan,
-    freeMessagesUsed: raw?.freePeriod === currentPeriod ? Number(raw?.freeMessagesUsed ?? 0) : 0,
-    freeMessagesLimit: FREE_MESSAGES_LIMIT,
+    freeTokensUsed: raw?.freePeriod === currentPeriod && Number.isFinite(storedFreeTokens)
+      ? Math.max(0, storedFreeTokens) : 0,
+    freeTokensLimit: FREE_TOKENS_LIMIT,
     freePeriod: currentPeriod,
     spentMicros: plan === "FREE" ? 0 : Number(raw?.spentMicros ?? 0),
     budgetMicros: PLANS[plan].budgetMicros,
@@ -71,6 +79,7 @@ export async function authorizeOperation(
   turnId: string,
   requestedModel: string,
   requestBody: unknown,
+  signInProvider?: string,
 ): Promise<OperationAuthorization> {
   if (!/^[a-f0-9]{16,64}$/i.test(turnId)) throw new EntitlementError(400, "Identificador de turno inválido");
   const accountRef = db().collection("accounts").doc(uid);
@@ -85,6 +94,7 @@ export async function authorizeOperation(
     if (operations >= 25) throw new EntitlementError(429, "Este mensaje alcanzó el máximo de operaciones de IA");
 
     const useFree = account.plan === "FREE" || account.spentMicros >= account.budgetMicros;
+    if (account.plan === "FREE") requireGoogleSignInForFree(account.plan, signInProvider);
     const model = useFree ? undefined : resolveModel(account.plan, requestedModel, requestBody);
     if (!useFree && !model) throw new EntitlementError(403, "Este modelo no está incluido en tu plan");
 
@@ -98,25 +108,51 @@ export async function authorizeOperation(
   });
 }
 
-export async function claimFreeTurn(uid: string, turnId: string): Promise<void> {
+export interface FreeTokenReservation {
+  tokens: number;
+  period: string;
+}
+
+export async function reserveFreeTokens(uid: string, requestedTokens: number): Promise<FreeTokenReservation> {
+  const tokens = Math.max(1, Math.ceil(requestedTokens));
+  if (!Number.isFinite(tokens) || tokens > FREE_TOKENS_LIMIT) {
+    throw new EntitlementError(429, "Esta solicitud supera la cuota gratuita disponible");
+  }
   const accountRef = db().collection("accounts").doc(uid);
-  const turnRef = accountRef.collection("turns").doc(turnId);
-  await db().runTransaction(async (transaction) => {
-    const [accountSnapshot, turnSnapshot] = await Promise.all([
-      transaction.get(accountRef),
-      transaction.get(turnRef),
-    ]);
-    if (turnSnapshot.data()?.freeClaimed === true) return;
+  return db().runTransaction(async (transaction) => {
+    const accountSnapshot = await transaction.get(accountRef);
     const account = normalize(accountSnapshot.data());
-    if (account.freeMessagesUsed >= account.freeMessagesLimit) {
-      throw new EntitlementError(429, "Alcanzaste tus 100 mensajes gratuitos de esta semana");
+    if (account.freeTokensUsed + tokens > account.freeTokensLimit) {
+      throw new EntitlementError(429, "Alcanzaste tus 2 millones de tokens gratuitos de esta semana");
     }
     transaction.set(accountRef, {
       ...account,
-      freeMessagesUsed: account.freeMessagesUsed + 1,
+      freeTokensUsed: account.freeTokensUsed + tokens,
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
-    transaction.set(turnRef, { freeClaimed: true, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    return { tokens, period: account.freePeriod };
+  });
+}
+
+export async function settleFreeTokens(
+  uid: string,
+  reservation: FreeTokenReservation,
+  actualTokens: number,
+): Promise<void> {
+  const roundedActual = Math.ceil(actualTokens);
+  const actual = Number.isFinite(roundedActual) ? Math.max(0, roundedActual) : reservation.tokens;
+  const accountRef = db().collection("accounts").doc(uid);
+  await db().runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(accountRef);
+    const raw = snapshot.data();
+    // A request that crosses the weekly boundary stays charged to the week in which it began.
+    if (raw?.freePeriod !== reservation.period) return;
+    const storedUsed = Number(raw?.freeTokensUsed ?? reservation.tokens);
+    const used = Number.isFinite(storedUsed) ? Math.max(0, storedUsed) : reservation.tokens;
+    transaction.set(accountRef, {
+      freeTokensUsed: Math.max(0, used - reservation.tokens + actual),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
   });
 }
 

@@ -4,8 +4,15 @@ The Android client and Firebase backend are linked to project `cortex-agents-ai`
 End users only see plan and model names. Gateway/provider identities are internal and
 must never be copied into onboarding, subscription UI, public API errors, or fallback notices.
 
-The free allowance is 100 user messages per ISO week (Monday 00:00 UTC). Tool-call
-loops for the same user message reuse one allowance entry.
+The free allowance is 2,000,000 combined input and output tokens per ISO week
+(Monday 00:00 UTC). Every inference operation is metered from upstream usage. A
+conservative reservation prevents concurrent requests from exceeding the allowance
+and is settled to actual usage when the response completes.
+
+Free inference requires a Firebase session whose current sign-in provider is Google.
+Anonymous sessions are used only to bootstrap account and purchase screens; the API
+rejects them on the free route. This keeps the weekly allowance attached to the same
+Google-backed Firebase UID after app data is cleared or the app is reinstalled.
 
 ## Routing invariant
 
@@ -20,8 +27,8 @@ loops for the same user message reuse one allowance entry.
 ## Cloud setup completed
 
 - Firebase project `cortex-agents-ai` and Android app `com.aiagents.app` are registered.
-- Billing is linked, Firestore rules/indexes are deployed, and anonymous Authentication
-  is enabled and verified.
+- Billing is linked, Firestore rules/indexes are deployed, and Authentication is
+  configured for anonymous bootstrap plus required Google sign-in for free usage.
 - Pub/Sub topic `projects/cortex-agents-ai/topics/play-billing-rtdn` exists and Google
   Play has the required publisher role.
 - All four inference secrets have an enabled version and the `api` and
@@ -48,15 +55,18 @@ loops for the same user message reuse one allowance entry.
 4. Configure Real-time Developer Notifications in Play Console with the Pub/Sub topic
    `projects/cortex-agents-ai/topics/play-billing-rtdn`. The backend consumes the
    topic with an authenticated Firebase event trigger; there is no public RTDN endpoint.
+5. Add the Play App Signing SHA-1 and SHA-256 fingerprints to the Firebase Android app
+   before the production release. The local debug fingerprints are already registered.
 
 ## Deploy and verify
 
 ```bash
 cd functions && npm test && cd ..
-firebase deploy --only firestore,functions --project cortex-agents-ai
+firebase deploy --only auth,firestore,functions --project cortex-agents-ai
 JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew test assembleDebug
 ```
 
-After deployment, verify an anonymous sign-in, account fetch, one free turn, privacy
-blocking without quota consumption, all five purchase/restore flows, renewal reset,
-upgrade spend carry-over, budget exhaustion and paid-to-free fallback.
+After deployment, verify that anonymous free inference is rejected, Google sign-in
+persists the same quota across reinstall, token usage is settled from upstream usage,
+privacy blocking consumes no quota, and all five purchase/restore flows, renewal reset,
+upgrade spend carry-over, budget exhaustion and paid-to-free fallback still work.

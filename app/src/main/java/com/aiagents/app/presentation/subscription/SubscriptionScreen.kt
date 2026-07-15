@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.aiagents.app.R
 import com.aiagents.app.domain.model.SubscriptionPlan
+import java.text.NumberFormat
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,7 +57,9 @@ fun SubscriptionScreen(
     val uiState by viewModel.uiState.collectAsState()
     val products by viewModel.products.collectAsState()
     val privacyAccepted by viewModel.privacyAccepted.collectAsState()
+    val googleSignedIn by viewModel.googleSignedIn.collectAsState()
     val activity = LocalContext.current.findActivity()
+    val managedReady = privacyAccepted && googleSignedIn
 
     Scaffold(
         topBar = {
@@ -82,8 +85,8 @@ fun SubscriptionScreen(
                     detail = if (usage.plan == SubscriptionPlan.FREE) {
                         stringResource(
                             R.string.subscription_free_usage,
-                            usage.freeMessagesUsed,
-                            usage.freeMessagesLimit
+                            NumberFormat.getIntegerInstance().format(usage.freeTokensUsed),
+                            NumberFormat.getIntegerInstance().format(usage.freeTokensLimit)
                         )
                     } else {
                         stringResource(R.string.subscription_budget_remaining, usage.remainingPercentage)
@@ -102,9 +105,12 @@ fun SubscriptionScreen(
                             text = stringResource(R.string.managed_privacy_notice),
                             style = MaterialTheme.typography.bodySmall
                         )
-                        if (!privacyAccepted) {
+                        if (!managedReady) {
                             Button(
-                                onClick = viewModel::acceptPrivacyAndEnableFreePlan,
+                                onClick = {
+                                    activity?.let(viewModel::signInWithGoogleAndEnableFreePlan)
+                                },
+                                enabled = activity != null && !uiState.loading,
                                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
                             ) {
                                 Text(stringResource(R.string.subscription_accept_privacy))
@@ -119,8 +125,8 @@ fun SubscriptionScreen(
                     plan = plan,
                     current = plan == usage.plan,
                     localizedPrice = viewModel.localizedPrice(plan),
-                    storeReady = privacyAccepted && (plan == SubscriptionPlan.FREE || products.containsKey(plan.productId)),
-                    onPurchase = { if (privacyAccepted && activity != null) viewModel.purchase(activity, plan) }
+                    storeReady = managedReady && (plan == SubscriptionPlan.FREE || products.containsKey(plan.productId)),
+                    onPurchase = { if (managedReady && activity != null) viewModel.purchase(activity, plan) }
                 )
             }
 

@@ -34,6 +34,20 @@ function toOpenAiMessages(body: any): any[] {
   return messages;
 }
 
+/**
+ * Reserves a conservative upper bound before contacting a free upstream. UTF-8
+ * payload bytes dominate tokenizer input tokens, while maxTokens bounds output.
+ */
+export function estimateFreeTokenReservation(body: any): number {
+  const inputPayload = {
+    messages: toOpenAiMessages(body ?? {}),
+    tools: Array.isArray(body?.tools) && body.tools.length ? body.tools : undefined,
+  };
+  const inputUpperBound = Buffer.byteLength(JSON.stringify(inputPayload), "utf8") + 512;
+  const outputUpperBound = Math.min(Math.max(Number(body?.maxTokens ?? 4096), 1), 65_536);
+  return Math.ceil(inputUpperBound + outputUpperBound);
+}
+
 async function callCompatible(
   url: string,
   apiKey: string,

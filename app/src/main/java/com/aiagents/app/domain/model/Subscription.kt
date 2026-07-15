@@ -33,15 +33,16 @@ data class ManagedModel(
 
 data class UsageSnapshot(
     val plan: SubscriptionPlan = SubscriptionPlan.FREE,
-    val freeMessagesUsed: Int = 0,
-    val freeMessagesLimit: Int = 100,
+    val freeTokensUsed: Long = 0,
+    val freeTokensLimit: Long = 2_000_000,
     val spentMicros: Long = 0,
     val budgetMicros: Long = 0,
     val periodEndEpochMillis: Long? = null
 ) {
     val remainingPercentage: Int
         get() = if (budgetMicros <= 0) {
-            ((freeMessagesLimit - freeMessagesUsed).coerceAtLeast(0) * 100 / freeMessagesLimit)
+            if (freeTokensLimit <= 0) 0 else
+                (((freeTokensLimit - freeTokensUsed).coerceAtLeast(0) * 100) / freeTokensLimit).toInt()
         } else {
             (((budgetMicros - spentMicros).coerceAtLeast(0) * 100) / budgetMicros).toInt()
         }

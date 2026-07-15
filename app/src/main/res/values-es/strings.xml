@@ -53,9 +53,12 @@
     <string name="onboarding_providers_desc">Conecta tus servicios de IA como OpenAI, Anthropic, Google AI, y más. Necesitas al menos un proveedor para empezar a chatear con tus agentes.</string>
     <string name="onboarding_configure_providers">Configurar Proveedores</string>
     <string name="onboarding_free_plan_title">Listo desde el primer mensaje</string>
-    <string name="onboarding_free_plan_desc">Tu plan Gratis ya está activo. Cortex elige automáticamente un modelo disponible, sin API keys ni configuración técnica.</string>
-    <string name="onboarding_free_plan_messages">100 mensajes gratis por semana</string>
+    <string name="onboarding_free_plan_desc">Inicia sesión con Google para activar el plan Gratis. Cortex elige automáticamente un modelo disponible, sin API keys ni configuración técnica.</string>
+    <string name="onboarding_free_plan_messages">2 millones de tokens de entrada y salida gratis por semana</string>
     <string name="onboarding_free_plan_no_config">Descarga, abre y empieza a usarlo. Después podrás agregar tus propios proveedores desde los ajustes avanzados.</string>
+    <string name="google_sign_in_button">Continuar con Google</string>
+    <string name="google_sign_in_required">El inicio con Google conserva tu consumo semanal en tu cuenta, incluso si reinstalas la app o borras sus datos.</string>
+    <string name="google_sign_in_complete">Cuenta de Google vinculada</string>
 
     <string name="onboarding_mcp_title">Servidores de Herramientas (MCP)</string>
     <string name="onboarding_mcp_desc">Extiende las capacidades de tus agentes con herramientas como búsqueda web, gestión de archivos, GitHub, Notion, y más a través de servidores MCP.</string>
@@ -105,15 +108,15 @@
     <string name="settings_subscription_title">Plan y consumo</string>
     <string name="settings_subscription_subtitle">Suscripción, modelos y uso mensual</string>
     <string name="subscription_title">Plan y consumo</string>
-    <string name="subscription_free_usage">%1$d de %2$d mensajes usados esta semana</string>
+    <string name="subscription_free_usage">%1$s de %2$s tokens usados esta semana</string>
     <string name="subscription_budget_remaining">Queda %1$d%% del presupuesto de inferencia del periodo</string>
     <string name="managed_privacy_notice">Las solicitudes de IA pueden procesarse mediante proveedores externos. Algunos proveedores pueden almacenar las entradas y respuestas o utilizarlas para mejorar sus servicios. No envíes información personal, confidencial o sensible.</string>
     <string name="subscription_restore">Restaurar compras</string>
-    <string name="subscription_accept_privacy">Aceptar y activar el plan Gratis</string>
+    <string name="subscription_accept_privacy">Aceptar y continuar con Google</string>
     <string name="subscription_current_plan">Plan actual</string>
     <string name="subscription_choose_plan">Elegir plan</string>
     <string name="subscription_store_pending">Pendiente en Google Play</string>
-    <string name="plan_free_feature">100 mensajes por semana con selección automática del modelo</string>
+    <string name="plan_free_feature">2 millones de tokens de entrada y salida por semana con selección automática del modelo</string>
     <string name="plan_fallback_feature">Continuidad automática con modelos gratuitos al agotar el presupuesto</string>
     <string name="plan_auto_manual_feature">Modo Auto y selección manual de modelo</string>
     <string name="plan_everything_previous">Todo lo incluido en el plan anterior</string>

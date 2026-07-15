@@ -23,16 +23,16 @@ private const val MANAGED_BASE_URL = "https://us-central1-cortex-agents-ai.cloud
 
 data class ManagedAccountResponse(
     val plan: String = "FREE",
-    val freeMessagesUsed: Int = 0,
-    val freeMessagesLimit: Int = 100,
+    val freeTokensUsed: Long = 0,
+    val freeTokensLimit: Long = 2_000_000,
     val spentMicros: Long = 0,
     val budgetMicros: Long = 0,
     val periodEndEpochMillis: Long? = null
 ) {
     fun toDomain() = UsageSnapshot(
         plan = SubscriptionPlan.fromId(plan),
-        freeMessagesUsed = freeMessagesUsed,
-        freeMessagesLimit = freeMessagesLimit,
+        freeTokensUsed = freeTokensUsed,
+        freeTokensLimit = freeTokensLimit,
         spentMicros = spentMicros,
         budgetMicros = budgetMicros,
         periodEndEpochMillis = periodEndEpochMillis

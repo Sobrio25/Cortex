@@ -8,17 +8,18 @@ import { onMessagePublished } from "firebase-functions/v2/pubsub";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { verifyAndGrantPurchase, tokenHash } from "./billing";
 import { paidFallbacks } from "./catalog";
-import { calculateCost, callFree, callPaid } from "./upstream";
+import { calculateCost, callFree, callPaid, estimateFreeTokenReservation } from "./upstream";
 import { sanitizeForFree, validateFreeRequest } from "./privacy";
 import {
   EntitlementError,
   authorizeOperation,
-  claimFreeTurn,
   findPurchaseBinding,
   getAccount,
   publicModels,
   recordCost,
+  reserveFreeTokens,
   revokePlan,
+  settleFreeTokens,
 } from "./store";
 
 initializeApp();
@@ -30,7 +31,10 @@ const openRouterKey = defineSecret("OPENROUTER_API_KEY");
 const kiloKey = defineSecret("KILO_GATEWAY_API_KEY");
 const openCodeKey = defineSecret("OPENCODE_API_KEY");
 
-interface AuthenticatedRequest extends Request { uid: string }
+interface AuthenticatedRequest extends Request {
+  uid: string;
+  signInProvider?: string;
+}
 const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "12mb" }));
@@ -46,7 +50,9 @@ app.use((req, _res, next) => {
   }
   getAuth().verifyIdToken(authorization.slice(7), true)
     .then((decoded) => {
-      (req as AuthenticatedRequest).uid = decoded.uid;
+      const authenticated = req as AuthenticatedRequest;
+      authenticated.uid = decoded.uid;
+      authenticated.signInProvider = decoded.firebase?.sign_in_provider;
       next();
     })
     .catch(next);
@@ -63,14 +69,20 @@ app.get("/v1/models", asyncRoute(async (req, res) => {
 
 app.post("/v1/turns/start", asyncRoute(async (req, res) => {
   const account = await getAccount((req as AuthenticatedRequest).uid);
-  res.json({ accepted: true, plan: account.plan, freeMessagesUsed: account.freeMessagesUsed });
+  res.json({ accepted: true, plan: account.plan, freeTokensUsed: account.freeTokensUsed });
 }));
 
 app.post("/v1/inference/chat", asyncRoute(async (req, res) => {
   const uid = (req as AuthenticatedRequest).uid;
   const turnId = String(req.body?.turnId ?? "");
   const logicalModel = String(req.body?.logicalModel ?? "auto");
-  const authorization = await authorizeOperation(uid, turnId, logicalModel, req.body);
+  const authorization = await authorizeOperation(
+    uid,
+    turnId,
+    logicalModel,
+    req.body,
+    (req as AuthenticatedRequest).signInProvider,
+  );
 
   const freeSecrets = {
     openRouter: openRouterKey.value() || undefined,
@@ -81,14 +93,29 @@ app.post("/v1/inference/chat", asyncRoute(async (req, res) => {
   const runFree = async () => {
     const privacy = validateFreeRequest(req.body);
     if (!privacy.safe) throw new EntitlementError(422, privacy.reason ?? "Esta solicitud no puede usar la ruta gratuita");
-    await claimFreeTurn(uid, turnId);
     const safeBody = sanitizeForFree(req.body);
-    return callFree(safeBody, freeSecrets, authorization.account.plan === "PLUS");
+    const reservation = await reserveFreeTokens(uid, estimateFreeTokenReservation(safeBody));
+    let upstreamCompleted = false;
+    try {
+      const result = await callFree(safeBody, freeSecrets, authorization.account.plan === "PLUS");
+      upstreamCompleted = true;
+      await settleFreeTokens(
+        uid,
+        reservation,
+        result.usage.promptTokens + result.usage.completionTokens,
+      );
+      return result;
+    } catch (error) {
+      if (!upstreamCompleted) {
+        await settleFreeTokens(uid, reservation, 0).catch(() => undefined);
+      }
+      throw error;
+    }
   };
 
   if (authorization.useFree || !authorization.model) {
     const result = await runFree();
-    res.json({ response: result.response, usage: { free: true } });
+    res.json({ response: result.response, usage: { ...result.usage, free: true } });
     return;
   }
 
@@ -113,7 +140,7 @@ app.post("/v1/inference/chat", asyncRoute(async (req, res) => {
       }
     }
     const freeResult = await runFree();
-    res.json({ response: freeResult.response, usage: { free: true, fallback: true } });
+    res.json({ response: freeResult.response, usage: { ...freeResult.usage, free: true, fallback: true } });
   }
 }));
 

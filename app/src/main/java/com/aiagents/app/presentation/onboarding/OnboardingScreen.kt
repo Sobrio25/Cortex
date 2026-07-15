@@ -1,5 +1,8 @@
 package com.aiagents.app.presentation.onboarding
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -25,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -53,6 +57,10 @@ fun OnboardingScreen(
     val empathy by viewModel.empathyLevel.collectAsState()
     val technical by viewModel.technicalPrecision.collectAsState()
     val managedPrivacyAccepted by viewModel.managedPrivacyAccepted.collectAsState()
+    val googleSignedIn by viewModel.googleSignedIn.collectAsState()
+    val googleSignInLoading by viewModel.googleSignInLoading.collectAsState()
+    val googleSignInError by viewModel.googleSignInError.collectAsState()
+    val activity = LocalContext.current.findActivity()
     val lastStep = TOTAL_ONBOARDING_STEPS - 1
 
     Scaffold(
@@ -125,7 +133,11 @@ fun OnboardingScreen(
                     )
                     2 -> ManagedFreePlanStep(
                         privacyAccepted = managedPrivacyAccepted,
-                        onPrivacyAcceptedChange = viewModel::setManagedPrivacyAccepted
+                        googleSignedIn = googleSignedIn,
+                        signInLoading = googleSignInLoading,
+                        signInError = googleSignInError,
+                        onPrivacyAcceptedChange = viewModel::setManagedPrivacyAccepted,
+                        onGoogleSignIn = { activity?.let(viewModel::signInWithGoogle) }
                     )
                     3 -> FeatureStep(
                         icon = Icons.Default.Extension,
@@ -157,7 +169,7 @@ fun OnboardingScreen(
                 lastStep = lastStep,
                 isNextEnabled = when (currentStep) {
                     0 -> userName.isNotBlank()
-                    2 -> managedPrivacyAccepted
+                    2 -> managedPrivacyAccepted && googleSignedIn
                     else -> true
                 },
                 onBack = { viewModel.previousStep() },
@@ -177,7 +189,11 @@ fun OnboardingScreen(
 @Composable
 private fun ManagedFreePlanStep(
     privacyAccepted: Boolean,
-    onPrivacyAcceptedChange: (Boolean) -> Unit
+    googleSignedIn: Boolean,
+    signInLoading: Boolean,
+    signInError: String?,
+    onPrivacyAcceptedChange: (Boolean) -> Unit,
+    onGoogleSignIn: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -224,6 +240,59 @@ private fun ManagedFreePlanStep(
             }
         }
         Spacer(Modifier.height(16.dp))
+        if (googleSignedIn) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
+            ) {
+                Row(
+                    Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.CheckCircle, null)
+                    Text(
+                        stringResource(R.string.google_sign_in_complete),
+                        Modifier.padding(start = 10.dp),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        } else {
+            Button(
+                onClick = onGoogleSignIn,
+                enabled = !signInLoading,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (signInLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(Icons.Default.AccountCircle, null)
+                }
+                Text(
+                    stringResource(R.string.google_sign_in_button),
+                    Modifier.padding(start = 8.dp)
+                )
+            }
+            Text(
+                stringResource(R.string.google_sign_in_required),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+            )
+            signInError?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
         Card(
             modifier = Modifier.fillMaxWidth().clickable {
                 onPrivacyAcceptedChange(!privacyAccepted)
@@ -248,6 +317,12 @@ private fun ManagedFreePlanStep(
             }
         }
     }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 @Composable
