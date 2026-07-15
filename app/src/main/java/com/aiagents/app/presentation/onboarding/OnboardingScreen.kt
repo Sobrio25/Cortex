@@ -55,7 +55,7 @@ fun OnboardingScreen(
     val lastStep = TOTAL_ONBOARDING_STEPS - 1
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.surface
+        containerColor = androidx.compose.ui.graphics.Color.Transparent
     ) { padding ->
         Column(
             modifier = Modifier

@@ -87,6 +87,7 @@ import com.aiagents.app.domain.model.SubagentWorkspacePolicy
 import com.aiagents.app.domain.model.ToolCall
 import com.aiagents.app.domain.model.ToolResult
 import com.aiagents.app.domain.model.Workspace
+import com.aiagents.app.presentation.assistant.CortexAssistantPrompt
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -232,6 +233,9 @@ class WorkspaceDetailViewModel @Inject constructor(
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
+
+    @Volatile
+    private var assistantModeEnabled = false
 
     // workspaceId: from nav arg first, then from active workspace preference
     private val workspaceId: Long = (savedStateHandle.get<Long>("workspaceId") ?: 0L).let { navId ->
@@ -1124,6 +1128,10 @@ Rules:
     private suspend fun buildAgentWithFileContext(agent: Agent): Agent {
         val extraSections = mutableListOf<String>()
 
+        if (assistantModeEnabled) {
+            extraSections.add(CortexAssistantPrompt.SYSTEM_INSTRUCTIONS.trimIndent())
+        }
+
         // Contexto de archivos del workspace
         val workspaceFiles = files.value
         if (workspaceFiles.isNotEmpty()) {
@@ -1140,6 +1148,11 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             else agent.copy(systemPrompt = agent.systemPrompt + "\n\n" + extraSections.joinToString("\n\n"))
 
         return enrichedAgent
+    }
+
+    /** Applies compact response rules only to the system-assistant activity's ViewModel. */
+    fun setAssistantMode(enabled: Boolean) {
+        assistantModeEnabled = enabled
     }
 
     fun sendMessage() {

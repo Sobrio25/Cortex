@@ -72,10 +72,11 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.aiagents.app.R
+import com.aiagents.app.ui.theme.CortexColors
 
-private val AssistantPurple = Color(0xFF8E70FF)
-private val AssistantCyan = Color(0xFF4FD5FF)
-private val AssistantMint = Color(0xFF54E6C1)
+private val AssistantPurple = CortexColors.Violet
+private val AssistantCyan = CortexColors.Blue
+private val AssistantMint = CortexColors.Mint
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

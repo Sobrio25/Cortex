@@ -29,6 +29,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -98,6 +99,10 @@ import com.aiagents.app.domain.model.Message
 import com.aiagents.app.domain.model.MessageRole
 import com.aiagents.app.domain.model.Workspace
 import com.aiagents.app.ui.theme.ShapeTokens
+import com.aiagents.app.ui.theme.CortexColors
+import com.aiagents.app.ui.theme.CortexMark
+import com.aiagents.app.ui.theme.CortexTheme
+import com.aiagents.app.ui.theme.cortexGlass
 import java.io.File
 import android.Manifest
 import android.content.pm.PackageManager
@@ -364,6 +369,7 @@ fun WorkspaceDetailScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 title = {
@@ -479,7 +485,14 @@ fun WorkspaceDetailScreen(
         ) {
             TabRow(
                 selectedTabIndex = uiState.activeTab.ordinal,
-                containerColor = MaterialTheme.colorScheme.surface
+                modifier = Modifier
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .cortexGlass(
+                        shape = RoundedCornerShape(22.dp),
+                        tint = CortexTheme.colors.glass
+                    ),
+                containerColor = Color.Transparent,
+                divider = {}
             ) {
                 Tab(
                     selected = uiState.activeTab == WorkspaceTab.Chat,
@@ -1000,8 +1013,8 @@ fun ChatContent(
     }
 
     // Animated glow border when agents are working
-    val agentColors = remember(workingAgents) {
-        workingAgents.map { agentColor(it) }
+    val agentColors = remember(isLoading, workingAgents) {
+        workingAgentGlowColors(isLoading = isLoading, workingAgents = workingAgents)
     }
     val glowTransition = rememberInfiniteTransition(label = "glowBorder")
     val glowAlpha by glowTransition.animateFloat(
@@ -1014,23 +1027,36 @@ fun ChatContent(
         label = "glowAlpha"
     )
 
-    val inputGlowModifier = if (workingAgents.isNotEmpty()) {
+    val inputGlowModifier = if (agentColors.isNotEmpty()) {
         Modifier.drawWithContent {
             drawContent()
-            val borderWidth = 2.dp.toPx()
-            val cornerRadius = 12.dp.toPx()
-            val colors = agentColors.flatMap { color ->
-                listOf(color.copy(alpha = glowAlpha), color.copy(alpha = glowAlpha))
-            }
-            val brush = if (colors.size >= 2) {
-                Brush.sweepGradient(colors = colors)
+            val cornerRadius = 24.dp.toPx()
+            val colors = if (agentColors.size == 1) {
+                val color = agentColors.first()
+                listOf(
+                    color.copy(alpha = glowAlpha * 0.42f),
+                    color.copy(alpha = glowAlpha),
+                    CortexColors.Blue.copy(alpha = glowAlpha * 0.72f),
+                    color.copy(alpha = glowAlpha * 0.42f)
+                )
             } else {
-                Brush.sweepGradient(colors = colors + colors)
+                agentColors.flatMap { color ->
+                    listOf(
+                        color.copy(alpha = glowAlpha * 0.52f),
+                        color.copy(alpha = glowAlpha)
+                    )
+                } + agentColors.first().copy(alpha = glowAlpha * 0.52f)
             }
+            val brush = Brush.sweepGradient(colors = colors)
             drawRoundRect(
                 brush = brush,
                 cornerRadius = CornerRadius(cornerRadius),
-                style = Stroke(width = borderWidth)
+                style = Stroke(width = 7.dp.toPx())
+            )
+            drawRoundRect(
+                brush = brush,
+                cornerRadius = CornerRadius(cornerRadius),
+                style = Stroke(width = 2.dp.toPx())
             )
         }
     } else {
@@ -1539,17 +1565,25 @@ fun MessageBubble(
             !hasWeatherWidget
 
         if (shouldShowMessage) {
-            Card(
-                shape = shape,
-                colors = CardDefaults.cardColors(
-                    containerColor = when {
-                        isUser -> MaterialTheme.colorScheme.primaryContainer
-                        isTool -> Color(0xFF1E1E1E)
-                        else -> MaterialTheme.colorScheme.surfaceVariant
-                    }
-                ),
+            val messageSurface = when {
+                isUser -> Modifier
+                    .clip(shape)
+                    .background(CortexColors.UserMessageBrush)
+                    .border(1.dp, Color.White.copy(alpha = 0.20f), shape)
+                isTool -> Modifier.cortexGlass(
+                    shape = shape,
+                    tint = Color(0xD9111016),
+                    borderAlpha = 0.65f
+                )
+                else -> Modifier.cortexGlass(
+                    shape = shape,
+                    tint = CortexTheme.colors.glassSoft
+                )
+            }
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.90f)
+                    .fillMaxWidth(0.92f)
+                    .then(messageSurface)
                     .then(
                         if (!isUser) {
                             Modifier.combinedClickable(
@@ -1574,7 +1608,7 @@ fun MessageBubble(
                                 contentDescription = null,
                                 modifier = Modifier.size(14.dp),
                                 tint = if (isUser)
-                                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                                    Color.White.copy(alpha = 0.78f)
                                 else
                                     MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             )
@@ -1582,7 +1616,7 @@ fun MessageBubble(
                                 text = message.attachedFiles.joinToString(", "),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (isUser)
-                                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                                    Color.White.copy(alpha = 0.78f)
                                 else
                                     MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             )
@@ -1630,7 +1664,7 @@ fun MessageBubble(
                         text = formatTime(message.timestamp),
                         style = MaterialTheme.typography.labelSmall,
                         color = if (isUser)
-                            MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                            Color.White.copy(alpha = 0.72f)
                         else if (isTool)
                             Color(0xFF00FF00).copy(alpha = 0.5f)
                         else
@@ -2293,7 +2327,7 @@ fun MessageContent(
             when (segment.type) {
                 SegmentType.TEXT -> {
                     val textColor = when {
-                        isUser -> MaterialTheme.colorScheme.onPrimaryContainer
+                        isUser -> Color.White
                         isTool -> Color(0xFF00FF00)
                         else -> MaterialTheme.colorScheme.onSurfaceVariant
                     }
@@ -2313,7 +2347,7 @@ fun MessageContent(
                 }
                 SegmentType.TABLE -> {
                     val tableTextColor = when {
-                        isUser -> MaterialTheme.colorScheme.onPrimaryContainer
+                        isUser -> Color.White
                         isTool -> Color(0xFF00FF00)
                         else -> MaterialTheme.colorScheme.onSurfaceVariant
                     }
@@ -2575,23 +2609,19 @@ fun EmptyChatState(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.Center,
         modifier = modifier.padding(32.dp)
     ) {
-        Icon(
-            imageVector = Icons.Default.Chat,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(64.dp)
-        )
-        Spacer(modifier = Modifier.height(16.dp))
+        CortexMark(Modifier.size(82.dp))
+        Spacer(modifier = Modifier.height(20.dp))
         Text(
-            text = "Inicia una conversación",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            text = "Cortex está listo",
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "Selecciona un agente y modelo, luego escribe tu mensaje",
+            text = "Escribe, habla o reúne a tus agentes para comenzar",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
         )
     }
 }
@@ -2612,9 +2642,13 @@ fun ChatInput(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        tonalElevation = 2.dp,
+        color = Color.Transparent,
+        tonalElevation = 0.dp,
         shape = ShapeTokens.TextField,
-        modifier = modifier
+        modifier = modifier.cortexGlass(
+            shape = ShapeTokens.TextField,
+            tint = CortexTheme.colors.glassStrong
+        )
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -3253,7 +3287,7 @@ fun formatTime(timestamp: Long): String {
 }
 
 private val agentColorPalette = listOf(
-    Color(0xFF6C63FF), // Purple  – Cortex
+    CortexColors.Violet, // Cortex
     Color(0xFF00BCD4), // Cyan
     Color(0xFF4CAF50), // Green
     Color(0xFFFFC107), // Amber
@@ -3267,8 +3301,20 @@ private val agentColorPalette = listOf(
 
 fun agentColor(name: String): Color {
     if (name.equals("Cortex", ignoreCase = true)) return agentColorPalette[0]
-    val index = (kotlin.math.abs(name.hashCode()) % (agentColorPalette.size - 1)) + 1
+    val stableHash = name.lowercase(Locale.ROOT).hashCode() and Int.MAX_VALUE
+    val index = (stableHash % (agentColorPalette.size - 1)) + 1
     return agentColorPalette[index]
+}
+
+fun workingAgentGlowColors(
+    isLoading: Boolean,
+    workingAgents: List<String>
+): List<Color> = when {
+    workingAgents.isNotEmpty() -> workingAgents
+        .distinctBy { it.lowercase(Locale.ROOT) }
+        .map(::agentColor)
+    isLoading -> listOf(CortexColors.Violet)
+    else -> emptyList()
 }
 
 @Composable

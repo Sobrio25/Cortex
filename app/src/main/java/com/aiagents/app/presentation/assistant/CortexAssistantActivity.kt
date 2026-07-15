@@ -44,7 +44,8 @@ class CortexAssistantActivity : AppCompatActivity() {
             AIAgentsTheme(
                 darkTheme = true,
                 dynamicColor = false,
-                transparentSystemBars = true
+                transparentSystemBars = true,
+                applyBackdrop = false
             ) {
                 if (workspaceId > 0L) {
                     CortexAssistantScreen(

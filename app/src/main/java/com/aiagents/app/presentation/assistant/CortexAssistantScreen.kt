@@ -60,6 +60,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -91,16 +92,12 @@ import com.aiagents.app.domain.model.Message
 import com.aiagents.app.domain.model.MessageRole
 import com.aiagents.app.presentation.stt.STTViewModel
 import com.aiagents.app.presentation.workspace_detail.WorkspaceDetailViewModel
+import com.aiagents.app.presentation.workspace_detail.LinkableText
+import com.aiagents.app.ui.theme.CortexColors
+import com.aiagents.app.ui.theme.CortexTheme
+import com.aiagents.app.ui.theme.cortexGlass
 import kotlinx.coroutines.delay
 import java.util.Locale
-
-private val GlassBackground = Color(0xD61A1821)
-private val GlassHighlight = Color(0x34FFFFFF)
-private val GlassOutline = Color(0x4DFFFFFF)
-private val CortexViolet = Color(0xFF9C7CFF)
-private val CortexBlue = Color(0xFF56C7FF)
-private val CortexPink = Color(0xFFFF72C6)
-private val CortexMint = Color(0xFF62F5D2)
 
 private enum class AssistantStage {
     READY,
@@ -145,6 +142,11 @@ fun CortexAssistantScreen(
         )
     }
     var lastSpokenKey by remember { mutableStateOf("") }
+
+    DisposableEffect(cortexViewModel) {
+        cortexViewModel.setAssistantMode(true)
+        onDispose { cortexViewModel.setAssistantMode(false) }
+    }
 
     val visibleMessages = remember(messages) {
         ContextCompactionPolicy.visibleHistory(messages).filter {
@@ -326,19 +328,20 @@ private fun CompactAssistantBubble(
                         response.isNotBlank() -> response
                         else -> "Habla o toca para escribir"
                     }
-                    Text(
+                    LinkableText(
                         text = detail,
-                        color = Color.White.copy(alpha = 0.72f),
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = if (response.isBlank()) 1 else 3,
-                        overflow = TextOverflow.Ellipsis
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = Color.White.copy(alpha = 0.72f)
+                        ),
+                        linkColor = CortexColors.Blue,
+                        maxLines = if (response.isBlank()) 1 else 3
                     )
                 }
                 IconButton(onClick = onMic, modifier = Modifier.size(42.dp)) {
                     Icon(
                         imageVector = if (isListening) Icons.Default.Stop else Icons.Default.Mic,
                         contentDescription = if (isListening) "Dejar de escuchar" else "Hablar",
-                        tint = if (isListening) CortexPink else Color.White
+                        tint = if (isListening) CortexColors.Pink else Color.White
                     )
                 }
                 IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
@@ -364,7 +367,7 @@ private fun CompactAssistantBubble(
                     Icon(
                         Icons.Default.OpenInFull,
                         contentDescription = null,
-                        tint = CortexBlue,
+                        tint = CortexColors.Blue,
                         modifier = Modifier.size(16.dp)
                     )
                     Text(
@@ -434,7 +437,7 @@ private fun ExpandedAssistantPanel(
                     )
                     Text(
                         stageLabel(stage, cortexName),
-                        color = CortexMint.copy(alpha = 0.88f),
+                        color = CortexColors.Mint.copy(alpha = 0.88f),
                         style = MaterialTheme.typography.labelSmall
                     )
                 }
@@ -455,7 +458,7 @@ private fun ExpandedAssistantPanel(
                 Modifier
                     .fillMaxWidth()
                     .height(1.dp)
-                    .background(GlassOutline)
+                    .background(CortexTheme.colors.outline)
             )
 
             LazyColumn(
@@ -492,7 +495,7 @@ private fun ExpandedAssistantPanel(
                         ) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(18.dp),
-                                color = CortexMint,
+                                color = CortexColors.Mint,
                                 strokeWidth = 2.dp
                             )
                             Text("Pensando…", color = Color.White.copy(alpha = 0.68f))
@@ -509,7 +512,7 @@ private fun ExpandedAssistantPanel(
                 }
                 Text(
                     text = notice,
-                    color = if (error != null) Color(0xFFFFB4AB) else CortexMint,
+                    color = if (error != null) Color(0xFFFFB4AB) else CortexColors.Mint,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -529,7 +532,7 @@ private fun ExpandedAssistantPanel(
                     modifier = Modifier
                         .size(48.dp)
                         .background(
-                            if (isListening) CortexPink.copy(alpha = 0.22f)
+                            if (isListening) CortexColors.Pink.copy(alpha = 0.22f)
                             else Color.White.copy(alpha = 0.08f),
                             CircleShape
                         )
@@ -537,7 +540,7 @@ private fun ExpandedAssistantPanel(
                     Icon(
                         if (isListening) Icons.Default.Stop else Icons.Default.Mic,
                         contentDescription = if (isListening) "Dejar de escuchar" else "Hablar",
-                        tint = if (isListening) CortexPink else Color.White
+                        tint = if (isListening) CortexColors.Pink else Color.White
                     )
                 }
                 TextField(
@@ -554,7 +557,7 @@ private fun ExpandedAssistantPanel(
                         unfocusedTextColor = Color.White,
                         focusedIndicatorColor = Color.Transparent,
                         unfocusedIndicatorColor = Color.Transparent,
-                        cursorColor = CortexMint
+                        cursorColor = CortexColors.Mint
                     ),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = {
@@ -571,7 +574,7 @@ private fun ExpandedAssistantPanel(
                     modifier = Modifier
                         .size(48.dp)
                         .background(
-                            if (inputText.isNotBlank() && !isLoading) CortexViolet
+                            if (inputText.isNotBlank() && !isLoading) CortexColors.Violet
                             else Color.White.copy(alpha = 0.06f),
                             CircleShape
                         )
@@ -608,19 +611,30 @@ private fun AssistantMessage(message: Message) {
                 )
                 .background(
                     if (isUser) Brush.linearGradient(
-                        listOf(CortexViolet.copy(0.86f), CortexBlue.copy(0.66f))
+                        listOf(CortexColors.Violet.copy(0.86f), CortexColors.Blue.copy(0.66f))
                     ) else Brush.linearGradient(
                         listOf(Color.White.copy(0.10f), Color.White.copy(0.055f))
                     )
                 )
                 .padding(horizontal = 15.dp, vertical = 12.dp)
         ) {
-            Text(
-                text = message.content,
-                color = Color.White.copy(alpha = if (isUser) 0.98f else 0.88f),
-                style = MaterialTheme.typography.bodyLarge,
-                lineHeight = 23.sp
-            )
+            if (isUser) {
+                Text(
+                    text = message.content,
+                    color = Color.White.copy(alpha = 0.98f),
+                    style = MaterialTheme.typography.bodyLarge,
+                    lineHeight = 23.sp
+                )
+            } else {
+                LinkableText(
+                    text = message.content,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        color = Color.White.copy(alpha = 0.88f),
+                        lineHeight = 23.sp
+                    ),
+                    linkColor = CortexColors.Blue
+                )
+            }
         }
     }
 }
@@ -684,7 +698,13 @@ private fun CortexOrb(stage: AssistantStage, modifier: Modifier = Modifier) {
             val radius = size.minDimension / 2f
             drawCircle(
                 brush = Brush.sweepGradient(
-                    listOf(CortexViolet, CortexBlue, CortexMint, CortexPink, CortexViolet),
+                    listOf(
+                        CortexColors.Violet,
+                        CortexColors.Blue,
+                        CortexColors.Mint,
+                        CortexColors.Pink,
+                        CortexColors.Violet
+                    ),
                     center = center
                 ),
                 radius = radius
@@ -731,22 +751,7 @@ private fun GlassPanel(
 ) {
     Box(
         modifier = modifier
-            .clip(shape)
-            .background(GlassBackground)
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(GlassHighlight, Color.Transparent, CortexViolet.copy(0.08f)),
-                    start = Offset.Zero,
-                    end = Offset.Infinite
-                )
-            )
-            .border(
-                width = 1.dp,
-                brush = Brush.linearGradient(
-                    listOf(Color.White.copy(0.42f), CortexBlue.copy(0.28f), Color.White.copy(0.10f))
-                ),
-                shape = shape
-            )
+            .cortexGlass(shape = shape, tint = CortexTheme.colors.glassStrong)
     ) {
         content()
     }

@@ -20,6 +20,30 @@ class SpokenTextFormatterTest {
     }
 
     @Test
+    fun `clean removes emphasis markers before speech`() {
+        val spoken = SpokenTextFormatter.clean(
+            "**Respuesta:** usa *modo local*, __sin cuotas__ y ~~nunca~~ comparte la API key."
+        )
+
+        assertEquals(
+            "Respuesta: usa modo local, sin cuotas y nunca comparte la API key.",
+            spoken
+        )
+        assertFalse(spoken.any { it == '*' || it == '_' || it == '~' })
+    }
+
+    @Test
+    fun `clean keeps list meaning without speaking markdown punctuation`() {
+        val spoken = SpokenTextFormatter.clean(
+            "# Pasos\n- **Abre** Cortex\n- Toca [Ajustes](https://example.com)\n1. Confirma"
+        )
+
+        assertEquals("Pasos\nAbre Cortex\nToca Ajustes\n1. Confirma", spoken)
+        assertFalse(spoken.contains("#"))
+        assertFalse(spoken.contains("https://"))
+    }
+
+    @Test
     fun `chunk keeps every chunk within the engine limit`() {
         val input = "Primera oración. Segunda oración bastante larga. Tercera oración final."
         val chunks = SpokenTextFormatter.chunk(input, maxLength = 32)

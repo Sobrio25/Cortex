@@ -15,12 +15,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aiagents.app.domain.model.Conversation
 import com.aiagents.app.domain.model.Workspace
+import com.aiagents.app.ui.theme.CortexMark
+import com.aiagents.app.ui.theme.CortexTheme
+import com.aiagents.app.ui.theme.cortexGlass
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
@@ -47,22 +51,37 @@ fun AppDrawerContent(
     var showOptionsFor by remember { mutableStateOf<Conversation?>(null) }
     val haptic = LocalHapticFeedback.current
 
-    ModalDrawerSheet(modifier = modifier) {
+    val drawerShape = RoundedCornerShape(topEnd = 34.dp, bottomEnd = 34.dp)
+    ModalDrawerSheet(
+        modifier = modifier.cortexGlass(
+            shape = drawerShape,
+            tint = CortexTheme.colors.glassStrong
+        ),
+        drawerShape = drawerShape,
+        drawerContainerColor = Color.Transparent
+    ) {
         // Header
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 24.dp)
+                .padding(horizontal = 18.dp, vertical = 24.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                text = if (isGlobalMode) "Cortex" else activeWorkspace?.name ?: "Cortex",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            if (!isGlobalMode && activeWorkspace?.description?.isNotBlank() == true) {
+            CortexMark(Modifier.size(44.dp))
+            Column(Modifier.weight(1f)) {
                 Text(
-                    text = activeWorkspace.description,
+                    text = if (isGlobalMode) "Cortex" else activeWorkspace?.name ?: "Cortex",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = if (!isGlobalMode && activeWorkspace?.description?.isNotBlank() == true) {
+                        activeWorkspace.description
+                    } else {
+                        "Centro de conversaciones"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

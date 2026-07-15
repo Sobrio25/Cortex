@@ -25,10 +25,10 @@ object ShapeTokens {
     val MediumBottom = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp)
     
     val Pill = RoundedCornerShape(50)
-    val Card = RoundedCornerShape(20.dp)
-    val Button = RoundedCornerShape(12.dp)
-    val Chip = RoundedCornerShape(8.dp)
-    val TextField = RoundedCornerShape(12.dp)
+    val Card = RoundedCornerShape(24.dp)
+    val Button = RoundedCornerShape(16.dp)
+    val Chip = RoundedCornerShape(12.dp)
+    val TextField = RoundedCornerShape(24.dp)
     val Dialog = RoundedCornerShape(28.dp)
     val FloatingActionButton = RoundedCornerShape(16.dp)
     val BottomSheet = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
@@ -50,8 +50,9 @@ object ShapeTokens {
 }
 
 val ExpressiveShapes = Shapes(
-    small = ShapeTokens.CornerMedium,
-    medium = ShapeTokens.CornerLarge,
-    large = ShapeTokens.CornerExtraLarge,
-    extraLarge = RoundedCornerShape(28.dp)
+    extraSmall = RoundedCornerShape(10.dp),
+    small = RoundedCornerShape(14.dp),
+    medium = RoundedCornerShape(22.dp),
+    large = RoundedCornerShape(30.dp),
+    extraLarge = RoundedCornerShape(34.dp)
 )

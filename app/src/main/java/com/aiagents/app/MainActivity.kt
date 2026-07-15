@@ -17,6 +17,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import com.aiagents.app.presentation.MainScreen
 import com.aiagents.app.data.auth.GoogleWorkspaceOAuthManager
 import com.aiagents.app.data.local.SecurePreferences
@@ -51,9 +52,10 @@ class MainActivity : AppCompatActivity() {
         requestNotificationPermissionIfNeeded()
         scheduledTaskDestination = consumeScheduledTaskDestination(intent)
         setContent {
-            AIAgentsTheme {
+            AIAgentsTheme(transparentSystemBars = true) {
                 Surface(
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    color = Color.Transparent
                 ) {
                     MainScreen(
                         scheduledTaskWorkspaceId = scheduledTaskDestination?.workspaceId,
