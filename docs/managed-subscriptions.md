@@ -24,20 +24,17 @@ the same user message reuse one allowance entry.
   is enabled and verified.
 - Pub/Sub topic `projects/cortex-agents-ai/topics/play-billing-rtdn` exists and Google
   Play has the required publisher role.
+- All four inference secrets have an enabled version and the `api` and
+  `googlePlayRtdn` Functions are deployed in `us-central1`.
+- The public API, anonymous authentication, free inference and both free fallbacks
+  passed production smoke tests.
 
 ## Remaining production setup
 
-1. Store real keys without writing them to the repository:
-
-   ```bash
-   firebase functions:secrets:set VERCEL_AI_GATEWAY_KEY
-   firebase functions:secrets:set OPENROUTER_API_KEY
-   firebase functions:secrets:set KILO_GATEWAY_API_KEY
-   firebase functions:secrets:set OPENCODE_API_KEY
-   ```
-
-2. Link the Functions runtime service account to the Play Console developer account
-   with permission to read and acknowledge subscriptions.
+1. Add a valid payment card to the Vercel team that owns the AI Gateway key. Vercel
+   currently recognizes the key but rejects paid inference until a card is on file.
+2. Link `255797346887-compute@developer.gserviceaccount.com` to the Play Console
+   developer account with permission to read and acknowledge subscriptions.
 3. Create these monthly Google Play subscription products and active base plans:
 
    | Product | Reference price |
