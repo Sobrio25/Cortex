@@ -28,3 +28,4 @@ keystore.properties
 # Misc
 nohup.out
 .kotlin/
+.claude/

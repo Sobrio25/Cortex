@@ -16,6 +16,7 @@ enum class SkillOrigin {
 enum class SkillReviewStatus {
     PENDING,
     DRAFT_CREATED,
+    CHANGES_APPLIED,
     SKIPPED,
     FAILED
 }

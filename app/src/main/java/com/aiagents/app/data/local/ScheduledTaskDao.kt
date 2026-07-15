@@ -3,6 +3,7 @@ package com.aiagents.app.data.local
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
+import androidx.room.Update
 import com.aiagents.app.data.model.ScheduledTaskEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -11,6 +12,9 @@ interface ScheduledTaskDao {
 
     @Insert
     suspend fun insert(task: ScheduledTaskEntity): Long
+
+    @Update
+    suspend fun update(task: ScheduledTaskEntity)
 
     @Query("SELECT * FROM scheduled_tasks ORDER BY nextRunAt ASC")
     suspend fun getAll(): List<ScheduledTaskEntity>
@@ -26,6 +30,9 @@ interface ScheduledTaskDao {
 
     @Query("UPDATE scheduled_tasks SET enabled = :enabled WHERE id = :id")
     suspend fun setEnabled(id: Long, enabled: Boolean)
+
+    @Query("UPDATE scheduled_tasks SET conversationId = :conversationId WHERE id = :id")
+    suspend fun setConversationId(id: Long, conversationId: Long)
 
     @Query("UPDATE scheduled_tasks SET lastRunAt = :time, lastResult = :result, runCount = runCount + 1, nextRunAt = :nextRun WHERE id = :id")
     suspend fun markExecuted(id: Long, time: Long, result: String?, nextRun: Long)

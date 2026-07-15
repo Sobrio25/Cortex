@@ -208,6 +208,7 @@ DISPLAY:
             ProviderType.entries.forEach { provider ->
                 val configured = when (provider) {
                     ProviderType.OLLAMA -> true // no key needed
+                    ProviderType.LM_STUDIO -> true // no key needed
                     ProviderType.LOCAL -> true   // local models
                     else -> securePreferences.hasApiKey(provider)
                 }

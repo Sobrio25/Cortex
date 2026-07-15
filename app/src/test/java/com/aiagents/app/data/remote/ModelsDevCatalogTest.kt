@@ -53,5 +53,6 @@ class ModelsDevCatalogTest {
         assertEquals("kilo", modelsDevProviderId(ProviderType.KILO, null))
         assertNull(modelsDevProviderId(ProviderType.OPENAI, "https://llm.example/v1/"))
         assertNull(modelsDevProviderId(ProviderType.OLLAMA, "http://localhost:11434"))
+        assertNull(modelsDevProviderId(ProviderType.LM_STUDIO, "http://localhost:1234/v1"))
     }
 }

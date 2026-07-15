@@ -22,6 +22,9 @@ import com.aiagents.app.domain.model.ToolCall
 import com.aiagents.app.domain.model.ToolResult
 import com.aiagents.app.domain.model.ProviderType
 import com.aiagents.app.data.terminal.ToolExecutionProfiles
+import com.aiagents.app.data.model.ScheduledTaskEntity
+import com.aiagents.app.domain.model.Conversation
+import com.aiagents.app.domain.model.Agent
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 
@@ -43,9 +46,16 @@ class ScheduledTaskWorker @AssistedInject constructor(
     companion object {
         private const val TAG = "ScheduledTaskWorker"
         const val KEY_TASK_ID = "task_id"
+        const val EXTRA_CONVERSATION_ID = "scheduled_task_conversation_id"
+        const val EXTRA_WORKSPACE_ID = "scheduled_task_workspace_id"
         private const val CHANNEL_ID = "scheduled_tasks"
         private const val MAX_TOOL_ITERATIONS = 10
     }
+
+    private data class AgentExecutionResult(
+        val content: String,
+        val agentId: Long
+    )
 
     override suspend fun doWork(): Result {
         val taskId = inputData.getLong(KEY_TASK_ID, -1L)
@@ -60,7 +70,10 @@ class ScheduledTaskWorker @AssistedInject constructor(
         Log.d(TAG, "Executing scheduled task $taskId: '${task.label}'")
 
         return try {
-            val resultText = executeAgentTask(task.agentName, task.prompt, task.workspaceId)
+            val conversationId = ensureConversation(task)
+            val execution = executeAgentTask(task.agentName, task.prompt, task.workspaceId)
+            val resultText = execution.content
+            persistExecution(task, conversationId, execution)
             val summary = resultText.take(500)
 
             // Schedule next run if recurring
@@ -77,7 +90,7 @@ class ScheduledTaskWorker @AssistedInject constructor(
                 scheduledTaskDao.setEnabled(taskId, false)
             }
 
-            sendNotification(task.label.ifBlank { "Scheduled Task" }, summary)
+            sendNotification(task, conversationId, summary)
             Log.d(TAG, "Task $taskId completed successfully")
             Result.success()
         } catch (e: Exception) {
@@ -97,7 +110,11 @@ class ScheduledTaskWorker @AssistedInject constructor(
     /**
      * Execute an agent's prompt with tool support. Simplified loop for background execution.
      */
-    private suspend fun executeAgentTask(agentName: String?, prompt: String, workspaceId: Long): String {
+    private suspend fun executeAgentTask(
+        agentName: String?,
+        prompt: String,
+        workspaceId: Long
+    ): AgentExecutionResult {
         val agent = if (agentName != null) {
             repository.getAgentByName(agentName) ?: repository.getOrchestratorAgent()
         } else {
@@ -134,7 +151,7 @@ class ScheduledTaskWorker @AssistedInject constructor(
 
             val toolCalls = response.toolCalls
             if (toolCalls.isNullOrEmpty()) {
-                return finalContent // Done — no more tool calls
+                return AgentExecutionResult(finalContent, agent.id)
             }
 
             // Add assistant message with tool calls
@@ -151,14 +168,54 @@ class ScheduledTaskWorker @AssistedInject constructor(
             }
         }
 
-        return finalContent
+        return AgentExecutionResult(finalContent, agent.id)
+    }
+
+    private suspend fun ensureConversation(task: ScheduledTaskEntity): Long {
+        val existing = task.conversationId
+            ?.let { repository.getConversationById(it) }
+            ?.takeIf { it.workspaceId == task.workspaceId }
+        if (existing != null) return existing.id
+
+        val title = "Cron: ${task.label.ifBlank { "Tarea programada" }}".take(80)
+        val conversationId = repository.createConversation(
+            Conversation(workspaceId = task.workspaceId, title = title)
+        )
+        scheduledTaskDao.setConversationId(task.id, conversationId)
+        return conversationId
+    }
+
+    private suspend fun persistExecution(
+        task: ScheduledTaskEntity,
+        conversationId: Long,
+        execution: AgentExecutionResult
+    ) {
+        val runMessage = buildString {
+            append("⏰ Ejecución programada")
+            task.label.takeIf(String::isNotBlank)?.let { append(": $it") }
+            append("\n\n")
+            append(task.prompt)
+        }
+        repository.addMessage(
+            task.workspaceId,
+            conversationId,
+            Message(role = MessageRole.USER, content = runMessage),
+            execution.agentId
+        )
+        repository.addMessage(
+            task.workspaceId,
+            conversationId,
+            Message(role = MessageRole.ASSISTANT, content = execution.content),
+            execution.agentId
+        )
+        repository.touchConversation(conversationId)
     }
 
     /**
      * Execute a tool call in background context. Only supports non-interactive tools.
      */
     private suspend fun executeToolInBackground(
-        agent: com.aiagents.app.domain.model.Agent,
+        agent: Agent,
         toolCall: ToolCall,
         workspaceId: Long
     ): ToolResult {
@@ -231,7 +288,7 @@ class ScheduledTaskWorker @AssistedInject constructor(
         }
     }
 
-    private fun sendNotification(title: String, body: String) {
+    private fun sendNotification(task: ScheduledTaskEntity, conversationId: Long, body: String) {
         val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         // Ensure channel exists
@@ -242,14 +299,19 @@ class ScheduledTaskWorker @AssistedInject constructor(
         nm.createNotificationChannel(channel)
 
         val openIntent = PendingIntent.getActivity(
-            applicationContext, 0,
-            Intent(applicationContext, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
+            applicationContext,
+            task.id.toInt(),
+            Intent(applicationContext, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra(EXTRA_CONVERSATION_ID, conversationId)
+                putExtra(EXTRA_WORKSPACE_ID, task.workspaceId)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(title)
+            .setContentTitle(task.label.ifBlank { "Scheduled Task" })
             .setContentText(body.take(200))
             .setStyle(NotificationCompat.BigTextStyle().bigText(body.take(500)))
             .setContentIntent(openIntent)

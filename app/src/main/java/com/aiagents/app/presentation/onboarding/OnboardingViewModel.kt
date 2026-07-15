@@ -5,10 +5,8 @@ import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.aiagents.app.data.local.MemoryDao
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.memory.CortexProfileStore
-import com.aiagents.app.data.model.MemoryEntity
 import com.aiagents.app.data.repository.AgentRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,7 +22,6 @@ const val TOTAL_ONBOARDING_STEPS = 6
 class OnboardingViewModel @Inject constructor(
     private val savedStateHandle: SavedStateHandle,
     private val securePreferences: SecurePreferences,
-    private val memoryDao: MemoryDao,
     private val agentRepository: AgentRepository,
     private val cortexProfileStore: CortexProfileStore
 ) : ViewModel() {
@@ -91,27 +88,6 @@ class OnboardingViewModel @Inject constructor(
             val now = System.currentTimeMillis()
 
             securePreferences.saveUserIdentity(name, nickname)
-
-            // Delete any previous onboarding identity memories, then insert fresh
-            memoryDao.deleteByCategorySubcategorySource("fact", "user_identity", "onboarding")
-
-            if (name.isNotBlank()) {
-                memoryDao.insert(MemoryEntity(
-                    content = "name: $name",
-                    category = "fact", subcategory = "user_identity",
-                    importance = 10, confidence = 1.0f, source = "onboarding",
-                    createdAt = now, updatedAt = now, lastAccessedAt = now
-                ))
-            }
-
-            if (nickname.isNotBlank() && nickname != name) {
-                memoryDao.insert(MemoryEntity(
-                    content = "preferred_name: $nickname",
-                    category = "fact", subcategory = "user_identity",
-                    importance = 10, confidence = 1.0f, source = "onboarding",
-                    createdAt = now, updatedAt = now, lastAccessedAt = now
-                ))
-            }
 
             // Update Cortex name, personality and prompt
             val chosenCortexName = cortexName.value.trim().ifBlank { "Cortex" }

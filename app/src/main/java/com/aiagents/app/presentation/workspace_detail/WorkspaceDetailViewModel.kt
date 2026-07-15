@@ -7,6 +7,8 @@ import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aiagents.app.data.background.CortexTaskCoordinator
+import com.aiagents.app.data.events.AgentChangeNotifier
 import com.aiagents.app.data.local.LocalLLMClient
 import com.aiagents.app.data.local.LocalModelRepository
 import com.aiagents.app.data.model.PermissionLevel
@@ -20,6 +22,7 @@ import com.aiagents.app.data.orchestration.SubagentRequestParser
 import com.aiagents.app.data.orchestration.SubagentResultFormatter
 import com.aiagents.app.data.orchestration.SubagentRuntime
 import com.aiagents.app.data.orchestration.ParallelDelegationEntry
+import com.aiagents.app.data.orchestration.ToolCompletionPolicy
 import com.aiagents.app.data.remote.ChatMessage
 import com.aiagents.app.data.remote.ChatResponseWithTools
 import com.aiagents.app.data.local.SecurePreferences
@@ -90,6 +93,8 @@ import com.google.gson.JsonParser
 import com.aiagents.app.data.terminal.SystemAppToolHandler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -100,9 +105,11 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
@@ -110,6 +117,7 @@ import java.io.File
 import javax.inject.Inject
 
 private const val LEGACY_SUBTASK_TOOL_NAME = "execute_subtask"
+private const val MEMORY_EXTRACTION_IDLE_DELAY_MS = 20_000L
 
 data class OptionSelectionRequest(
     val title: String,
@@ -214,7 +222,9 @@ class WorkspaceDetailViewModel @Inject constructor(
     private val localModelRepository: LocalModelRepository,
     private val securePreferences: SecurePreferences,
     private val memoryExtractor: MemoryExtractor,
+    private val agentChangeNotifier: AgentChangeNotifier,
     private val taskCompletionNotifier: TaskCompletionNotifier,
+    private val cortexTaskCoordinator: CortexTaskCoordinator,
     private val isolatedAgentExecutor: IsolatedAgentExecutor,
     private val subagentRuntime: SubagentRuntime,
     private val codeExecutionHandler: CodeExecutionHandler,
@@ -229,6 +239,8 @@ class WorkspaceDetailViewModel @Inject constructor(
     }
 
     private val gson = Gson()
+    private val executionJob = SupervisorJob()
+    private val executionScope = CoroutineScope(executionJob + Dispatchers.Main.immediate)
 
     // conversationId: from nav arg (chat/{conversationId} route)
     private val _conversationId = MutableStateFlow<Long?>(savedStateHandle.get<Long>("conversationId"))
@@ -247,7 +259,7 @@ class WorkspaceDetailViewModel @Inject constructor(
     private var contextWindowRefreshModel: String? = null
 
     val agents: StateFlow<List<Agent>> = repository.getAllAgents()
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+        .stateIn(executionScope, SharingStarted.Lazily, emptyList())
 
     val messages: StateFlow<List<Message>> = _conversationId.flatMapLatest { convId ->
         if (convId != null && convId > 0) {
@@ -256,7 +268,7 @@ class WorkspaceDetailViewModel @Inject constructor(
             // No conversation selected: show empty (new chat state)
             flowOf(emptyList())
         }
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    }.stateIn(executionScope, SharingStarted.Lazily, emptyList())
 
     val subagentExecutions: StateFlow<List<SubagentExecutionEntity>> =
         _conversationId.flatMapLatest { conversationId ->
@@ -265,10 +277,11 @@ class WorkspaceDetailViewModel @Inject constructor(
             } else {
                 flowOf(emptyList())
             }
-        }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+        }.stateIn(executionScope, SharingStarted.Lazily, emptyList())
 
     private val _uiState = MutableStateFlow(WorkspaceDetailState())
     val uiState: StateFlow<WorkspaceDetailState> = _uiState.asStateFlow()
+    val agentChangeEvents = agentChangeNotifier.events
 
     // Observe todos for the active conversation, update UI state reactively
     init {
@@ -289,7 +302,7 @@ class WorkspaceDetailViewModel @Inject constructor(
 
     // Archivos de la base de datos
     private val dbFiles: StateFlow<List<AgentFile>> = repository.getFilesForWorkspace(workspaceId)
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+        .stateIn(executionScope, SharingStarted.Lazily, emptyList())
 
     // Archivos escaneados del directorio en tiempo real
     private val _scannedFiles = MutableStateFlow<List<AgentFile>>(emptyList())
@@ -312,7 +325,7 @@ class WorkspaceDetailViewModel @Inject constructor(
         }
 
         merged.values.toList().sortedByDescending { it.uploadedAt }
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    }.stateIn(executionScope, SharingStarted.Lazily, emptyList())
 
     private val _workingAgents = MutableStateFlow<List<String>>(emptyList())
     val workingAgents: StateFlow<List<String>> = _workingAgents.asStateFlow()
@@ -350,14 +363,19 @@ class WorkspaceDetailViewModel @Inject constructor(
         return others.joinToString("\n") { "- ${it.agentName}: ${it.message}" }
     }
 
-    /** Timestamp when the current task started (for notification threshold) */
+    /** Timestamp when the current task started, used in its completion notification. */
     private var taskStartTimeMs: Long = 0L
+    private var taskCompletionPreview: String? = null
 
     /** Job for debounced draft auto-save */
     private var draftSaveJob: kotlinx.coroutines.Job? = null
 
     /** Current agent processing job — cancel to stop the agent */
     private var currentAgentJob: kotlinx.coroutines.Job? = null
+
+    /** Deferred maintenance job; it must never compete with a foreground model turn. */
+    private var pendingMemoryExtractionJob: kotlinx.coroutines.Job? = null
+    private var conversationResumeExtractionJob: kotlinx.coroutines.Job? = null
 
     /** Pending agent names for sequential delegation pipeline */
     private val _pendingSequentialAgents = MutableStateFlow<MutableList<String>>(mutableListOf())
@@ -396,7 +414,7 @@ class WorkspaceDetailViewModel @Inject constructor(
             compactionWarningTokens = budget.warningTokens,
             compactionCriticalTokens = budget.criticalTokens
         )
-    }.stateIn(viewModelScope, SharingStarted.Lazily, ContextInfo(0, 32_768, 0f, 32_768, false, false))
+    }.stateIn(executionScope, SharingStarted.Lazily, ContextInfo(0, 32_768, 0f, 32_768, false, false))
 
     init {
         loadWorkspace()
@@ -406,6 +424,14 @@ class WorkspaceDetailViewModel @Inject constructor(
         loadShowReasoningPreference()
         loadShowCommandsPreference()
         restoreDraft()
+        viewModelScope.launch {
+            cortexTaskCoordinator.activeTasks.collect { tasks ->
+                val isRunningInBackground = workspaceId in tasks
+                if (_uiState.value.isLoading != isRunningInBackground) {
+                    _uiState.value = _uiState.value.copy(isLoading = isRunningInBackground)
+                }
+            }
+        }
         viewModelScope.launch {
             contextInfo.collect { checkContextWindowUsage(it) }
         }
@@ -446,13 +472,49 @@ class WorkspaceDetailViewModel @Inject constructor(
         return repository.getShowCommands()
     }
 
-    /** Notify user if the task took longer than the configured threshold */
-    private fun notifyTaskCompletedIfLong(responsePreview: String) {
+    private fun rememberTaskCompletionPreview(responsePreview: String) {
+        taskCompletionPreview = responsePreview.trim().take(200)
+    }
+
+    private fun notifyTaskFinished(agentName: String) {
         if (taskStartTimeMs <= 0L) return
         val duration = System.currentTimeMillis() - taskStartTimeMs
-        val agentName = _activeAgent.value?.name ?: "Agente"
-        taskCompletionNotifier.notifyTaskCompleted(agentName, duration, responsePreview)
+        val state = _uiState.value
+        val needsRuntimePermission = state.pendingCalendarPermission ||
+            state.pendingCameraPermission ||
+            state.pendingLocationPermission
+        val preview = taskCompletionPreview
+            ?: state.error
+            ?: messages.value.lastOrNull { it.role == MessageRole.ASSISTANT }?.content?.take(200)
+            ?: "Tarea finalizada"
+        val permissionRequest = state.pendingPermissionRequest
+        if (permissionRequest != null && state.pendingToolExecution != null) {
+            taskCompletionNotifier.notifyPermissionRequired(
+                workspaceId = workspaceId,
+                agentName = agentName,
+                durationMs = duration,
+                request = permissionRequest,
+                onApprove = { grantPermissionAndExecute(PermissionLevel.ALLOWED_ONCE) },
+                onDeny = { clearPendingCommandPermission() }
+            )
+        } else if (needsRuntimePermission) {
+            taskCompletionNotifier.notifyAppAttentionRequired(
+                workspaceId = workspaceId,
+                agentName = agentName,
+                durationMs = duration,
+                message = "Abre la app para conceder el permiso del sistema y continuar."
+            )
+        } else {
+            taskCompletionNotifier.notifyTaskCompleted(
+                workspaceId = workspaceId,
+                agentName = agentName,
+                durationMs = duration,
+                preview = preview,
+                failed = state.error != null
+            )
+        }
         taskStartTimeMs = 0L
+        taskCompletionPreview = null
     }
     
     private fun startFileScanning() {
@@ -1062,13 +1124,6 @@ Rules:
     private suspend fun buildAgentWithFileContext(agent: Agent): Agent {
         val extraSections = mutableListOf<String>()
 
-        // Inject current date so all agents know today's date
-        val currentDate = java.time.LocalDate.now().format(
-            java.time.format.DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.LONG)
-                .withLocale(java.util.Locale("es", "MX"))
-        )
-        extraSections.add("## TIME AWARENESS\nCurrent date: $currentDate")
-
         // Contexto de archivos del workspace
         val workspaceFiles = files.value
         if (workspaceFiles.isNotEmpty()) {
@@ -1081,26 +1136,8 @@ $fileList
 Directorio de trabajo: $workspacePath""".trimIndent())
         }
 
-        // Instrucciones para opciones interactivas
-        extraSections.add("""
-FORMATO DE OPCIONES INTERACTIVAS:
-Cuando necesites que el usuario elija entre varias opciones, usa EXACTAMENTE este formato XML:
-
-<ask_options titulo="Tu pregunta aquí">
-- Opción 1
-- Opción 2
-- Opción 3
-</ask_options>
-
-Reglas:
-- Usa entre 2 y 10 opciones por bloque.
-- Puedes incluir MÚLTIPLES bloques <ask_options> en una respuesta si necesitas hacer varias preguntas. Se mostrarán una por una al usuario.
-- Puedes incluir texto antes o después de los bloques.""".trimIndent())
-
-        // Also replace {CURRENT_DATE} placeholder if present in the agent's own prompt
-        val basePrompt = agent.systemPrompt.replace("{CURRENT_DATE}", currentDate)
-        val enrichedAgent = if (extraSections.isEmpty()) agent.copy(systemPrompt = basePrompt)
-            else agent.copy(systemPrompt = basePrompt + "\n\n" + extraSections.joinToString("\n\n"))
+        val enrichedAgent = if (extraSections.isEmpty()) agent
+            else agent.copy(systemPrompt = agent.systemPrompt + "\n\n" + extraSections.joinToString("\n\n"))
 
         return enrichedAgent
     }
@@ -1122,6 +1159,11 @@ Reglas:
             _uiState.value = _uiState.value.copy(error = "Selecciona un modelo primero")
             return
         }
+
+        pendingMemoryExtractionJob?.cancel()
+        pendingMemoryExtractionJob = null
+        conversationResumeExtractionJob?.cancel()
+        conversationResumeExtractionJob = null
 
         // If agent is already working, just add message to context (don't start new processing)
         if (_uiState.value.isLoading) {
@@ -1147,63 +1189,87 @@ Reglas:
             return
         }
 
-        currentAgentJob = viewModelScope.launch {
+        memoryExtractor.beginForegroundRequest()
+        currentAgentJob = cortexTaskCoordinator.launch(
+            workspaceId = workspaceId,
+            agentName = agent.name,
+            scope = executionScope
+        ) {
+            taskCompletionNotifier.notifyTaskStarted(workspaceId)
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             taskStartTimeMs = System.currentTimeMillis()
-            securePreferences.clearDraft(workspaceId)
-            repository.resetActivatedTools(
-                agent,
-                fileRepository.getWorkspaceFolderPath(workspaceId)
-            )
-            autoContinueCount = 0
-            clearAllAgentStatuses()
-            Log.d("WorkspaceDetailVM", "Sending message with agent: ${agent.name}, model: $modelToUse, attachedFiles: ${attachedFiles.size}")
-
-            // Procesar archivos adjuntos: copiarlos al workspace y extraer contenido
-            val processedFiles = processAttachedFiles(attachedFiles)
-
-            // Construir el mensaje del usuario con referencias a los archivos
-            val contentParts = buildString {
-                if (processedFiles.isNotEmpty()) {
-                    append(processedFiles.joinToString("\n") { "[Archivo adjunto: ${it.name}]" })
-                    append("\n\n")
-                }
-                append(text)
-            }
-
-            // Crear mensaje del usuario
-            val userMessage = Message(
-                role = MessageRole.USER,
-                content = contentParts,
-                attachedFiles = processedFiles.map { it.name }
-            )
-
-            // Auto-create conversation if none exists
-            val convId = ensureConversation(text)
-
+            taskCompletionPreview = null
+            var cancelled = false
             try {
-                repository.addMessage(workspaceId, convId, userMessage, agent.id)
-            } catch (e: android.database.sqlite.SQLiteConstraintException) {
-                Log.e("WorkspaceDetailVM", "FK constraint inserting message, resetting conversation", e)
-                _conversationId.value = null
-                val newConvId = ensureConversation(text)
-                repository.addMessage(workspaceId, newConvId, userMessage, agent.id)
+                securePreferences.clearDraft(workspaceId)
+                repository.resetActivatedTools(
+                    agent,
+                    fileRepository.getWorkspaceFolderPath(workspaceId)
+                )
+                autoContinueCount = 0
+                clearAllAgentStatuses()
+                Log.d("WorkspaceDetailVM", "Sending message with agent: ${agent.name}, model: $modelToUse, attachedFiles: ${attachedFiles.size}")
+
+                // Procesar archivos adjuntos: copiarlos al workspace y extraer contenido
+                val processedFiles = processAttachedFiles(attachedFiles)
+
+                // Construir el mensaje del usuario con referencias a los archivos
+                val contentParts = buildString {
+                    if (processedFiles.isNotEmpty()) {
+                        append(processedFiles.joinToString("\n") { "[Archivo adjunto: ${it.name}]" })
+                        append("\n\n")
+                    }
+                    append(text)
+                }
+
+                // Crear mensaje del usuario
+                val userMessage = Message(
+                    role = MessageRole.USER,
+                    content = contentParts,
+                    attachedFiles = processedFiles.map { it.name }
+                )
+
+                // Auto-create conversation if none exists
+                val convId = ensureConversation(text)
+
+                try {
+                    repository.addMessage(workspaceId, convId, userMessage, agent.id)
+                } catch (e: android.database.sqlite.SQLiteConstraintException) {
+                    Log.e("WorkspaceDetailVM", "FK constraint inserting message, resetting conversation", e)
+                    _conversationId.value = null
+                    val newConvId = ensureConversation(text)
+                    repository.addMessage(workspaceId, newConvId, userMessage, agent.id)
+                }
+                _uiState.value = _uiState.value.copy(inputText = "", attachedFiles = emptyList())
+
+                // Procesar imágenes para enviarlas al modelo como vision
+                processImagesWithAssistant(agent, userMessage, processedFiles)
+            } catch (error: CancellationException) {
+                cancelled = true
+                throw error
+            } catch (error: Throwable) {
+                handleError(error)
+            } finally {
+                memoryExtractor.endForegroundRequest()
+                if (cancelled) {
+                    taskStartTimeMs = 0L
+                    taskCompletionPreview = null
+                } else {
+                    notifyTaskFinished(agent.name)
+                    triggerInactiveConversationsExtraction()
+                }
+                currentAgentJob = null
             }
-            _uiState.value = _uiState.value.copy(inputText = "", attachedFiles = emptyList())
-
-            // Trigger memory extraction from inactive conversations
-            // This runs in background and doesn't block the user experience
-            triggerInactiveConversationsExtraction()
-
-            // Procesar imágenes para enviarlas al modelo como vision
-            processImagesWithAssistant(agent, userMessage, processedFiles)
         }
     }
 
     fun stopAgent() {
         _conversationId.value?.let { subagentRuntime.cancelForConversation(it) }
+        cortexTaskCoordinator.cancel(workspaceId)
         currentAgentJob?.cancel()
         currentAgentJob = null
+        taskStartTimeMs = 0L
+        taskCompletionPreview = null
         _uiState.value = _uiState.value.copy(
             isLoading = false,
             executingCommand = null,
@@ -1349,7 +1415,6 @@ Reglas:
 
                 when {
                     parallelDelegation != null -> {
-                        handleDelegationPreMessage(content, orchestrator)
                         Log.d("WorkspaceDetailVM", "Orchestrator parallel delegation (images, text fallback): $parallelDelegation")
                         val resolvedEntries = parallelDelegation.mapNotNull { entry ->
                             val agent = findAgentFuzzy(entry.agentName)
@@ -1377,7 +1442,6 @@ Reglas:
                     }
 
                     sequentialDelegation != null -> {
-                        handleDelegationPreMessage(content, orchestrator)
                         Log.d("WorkspaceDetailVM", "Orchestrator sequential delegation (images, text fallback): $sequentialDelegation")
                         _pendingSequentialAgents.value = sequentialDelegation.toMutableList()
                         processNextSequentialAgent(userMessage)
@@ -1385,7 +1449,6 @@ Reglas:
                     }
 
                     singleDelegation != null -> {
-                        handleDelegationPreMessage(content, orchestrator)
                         val targetAgent = findAgentFuzzy(singleDelegation)
                         if (targetAgent != null) {
                             Log.d("WorkspaceDetailVM", "Orchestrator delegating (images, text fallback) to: ${targetAgent.name}")
@@ -1430,7 +1493,7 @@ Reglas:
             _activeAgent.value = orchestrator
             repository.setActiveAgent(workspaceId, orchestrator.id)
             _uiState.value = _uiState.value.copy(isLoading = false, currentReasoning = null)
-            notifyTaskCompletedIfLong(messages.value.lastOrNull { it.role == MessageRole.ASSISTANT }?.content?.take(200) ?: "Tarea completada")
+            rememberTaskCompletionPreview(messages.value.lastOrNull { it.role == MessageRole.ASSISTANT }?.content?.take(200) ?: "Tarea completada")
             checkContextWindowUsage()
         }
     }
@@ -1495,10 +1558,53 @@ Reglas:
         // Solo desactivar isLoading si el procesamiento está completo
         if (processingComplete) {
             _uiState.value = _uiState.value.copy(isLoading = false, currentReasoning = null)
-            notifyTaskCompletedIfLong(messages.value.lastOrNull { it.role == MessageRole.ASSISTANT }?.content?.take(200) ?: "Tarea completada")
+            rememberTaskCompletionPreview(messages.value.lastOrNull { it.role == MessageRole.ASSISTANT }?.content?.take(200) ?: "Tarea completada")
         }
 
         return processingComplete
+    }
+
+    /** Retry a blank local-model turn once without tool schemas. */
+    private suspend fun recoverEmptyLocalCompletion(
+        agent: Agent,
+        messagesForApi: List<Message>,
+        fullKey: String
+    ): String? {
+        val provider = extractProvider(fullKey)
+        if (provider != ProviderType.LM_STUDIO && provider != ProviderType.OLLAMA) {
+            handleError(IllegalStateException("El modelo terminó sin devolver una respuesta visible"))
+            return null
+        }
+
+        Log.w("WorkspaceDetailVM", "Empty $provider completion; retrying once without tools")
+        updateAgentStatus(agent.name, "Recuperando respuesta...")
+        val retryAgent = agent.copy(
+            systemPrompt = agent.systemPrompt +
+                "\n\n## RETRY REQUIREMENT\nThe previous completion produced no user-visible content. " +
+                "Answer the user's request now in the normal assistant content field. " +
+                "Do not emit only hidden reasoning and do not request tools in this retry."
+        )
+        val result = repository.chat(
+            agent = retryAgent,
+            messages = messagesForApi,
+            overrideModel = extractModelId(fullKey),
+            overrideProvider = provider,
+            memorySessionKey = currentMemorySessionKey()
+        )
+        val response = result.getOrElse {
+            handleError(it)
+            return null
+        }
+        val visible = (com.aiagents.app.data.remote.removeThinkingTags(response) ?: response).trim()
+        if (visible.isBlank()) {
+            handleError(
+                IllegalStateException(
+                    "LM Studio devolvió una respuesta vacía incluso después del reintento"
+                )
+            )
+            return null
+        }
+        return visible
     }
 
     private suspend fun processAssistantResponse(agent: Agent, lastUserMessage: Message) {
@@ -1514,6 +1620,7 @@ Reglas:
 
     /** Finds an agent by exact name first, then case-insensitive, then partial match. */
     private suspend fun findAgentFuzzy(name: String): Agent? {
+        if (name.isBlank()) return null
         repository.getAgentByName(name)?.let { return it }
         val all = repository.getAllAgentsOnce()
         return all.find { it.name.equals(name, ignoreCase = true) }
@@ -1521,19 +1628,56 @@ Reglas:
     }
 
     /**
+     * Creates a task-scoped worker without inserting another Agent row. Reusing the
+     * orchestrator id keeps existing message foreign keys valid while name, role and
+     * prompt remain isolated to this execution.
+     */
+    private fun createEphemeralWorker(
+        parent: Agent,
+        goal: String,
+        capabilities: Set<String> = emptySet()
+    ): Agent {
+        val normalized = goal.lowercase()
+        val specialty = when {
+            capabilities.isNotEmpty() -> "Integration Worker"
+            listOf("code", "program", "kotlin", "java", "python", "bug", "test", "archivo", "file")
+                .any(normalized::contains) -> "Code Worker"
+            listOf("research", "investiga", "buscar", "fuentes", "sources", "web")
+                .any(normalized::contains) -> "Research Worker"
+            listOf("analiza", "analyze", "datos", "data", "csv", "excel")
+                .any(normalized::contains) -> "Analysis Worker"
+            else -> "Task Worker"
+        }
+        return parent.copy(
+            name = specialty,
+            role = "Temporary Task Worker",
+            systemPrompt = """
+                You are a temporary worker created for one bounded task.
+                Complete the supplied goal directly with the allowed tools. Inspect before changing, keep work within scope, verify important results, and return a concise handoff with completed work, checks, and blockers. Do not create persistent agents or modify user memory.
+                Respond in the same language as the user's task.
+            """.trimIndent(),
+            whenToUse = "",
+            useLocalRouting = false,
+            isSystemAgent = true
+        )
+    }
+
+    private suspend fun resolveSubagent(
+        parent: Agent,
+        requestedName: String,
+        goal: String,
+        capabilities: Set<String>
+    ): Agent? = if (requestedName.isBlank()) {
+        createEphemeralWorker(parent, goal, capabilities)
+    } else {
+        findAgentFuzzy(requestedName)
+    }
+
+    /**
      * Processes the next agent in a sequential delegation pipeline.
      * Each agent sees the full conversation (including previous agents' outputs).
      * Waits for each agent to fully complete (including tool calls) before moving to the next.
      */
-    /** Extracts and saves any pre-delegation text from Cortex's response. */
-    private suspend fun handleDelegationPreMessage(content: String, orchestrator: Agent) {
-        val preMsg = agentOrchestrator.extractPreDelegationMessage(content)
-        if (preMsg != null) {
-            val processedPreMsg = checkAndSetOptions(preMsg)
-            repository.addMessage(workspaceId, _conversationId.value, Message(role = MessageRole.ASSISTANT, content = processedPreMsg), orchestrator.id)
-        }
-    }
-
     private suspend fun processNextSequentialAgent(userMessage: Message) {
         _sequentialUserMessage.value = userMessage
         val pending = _pendingSequentialAgents.value
@@ -1772,11 +1916,16 @@ Reglas:
                 }
                 ScheduledTaskToolHandler.TOOL_NAME -> {
                     val handler = repository.getScheduledTaskToolHandler()
-                    val result = handler.executeTool(toolCall.id, toolCall.function.arguments, wsId)
+                    val result = handler.executeTool(
+                        toolCall.id,
+                        toolCall.function.arguments,
+                        wsId,
+                        _conversationId.value
+                    )
                     ToolResult(toolCall.id, ScheduledTaskToolHandler.TOOL_NAME, result.content)
                 }
                 in DelegationToolHandler.ALL_TOOL_NAMES -> {
-                    executeNestedSubagentCall(task, toolCall, subConversationId)
+                    executeNestedSubagentCall(agent, task, toolCall, subConversationId)
                 }
                 else -> {
                     ToolResult(toolCall.id, toolCall.function.name, "Herramienta '${toolCall.function.name}' no disponible en modo sub-agente aislado")
@@ -2018,6 +2167,7 @@ Reglas:
     }
 
     private suspend fun executeNestedSubagentCall(
+        parentAgent: Agent,
         parentTask: SubagentTaskEnvelope,
         toolCall: ToolCall,
         parentSubConversationId: Long
@@ -2040,7 +2190,12 @@ Reglas:
             return ToolResult(toolCall.id, toolCall.function.name, "Error: ${error.message}")
         }
         val resolved = batch.tasks.mapNotNull { parsed ->
-            val childAgent = findAgentFuzzy(parsed.agentName) ?: return@mapNotNull null
+            val childAgent = resolveSubagent(
+                parent = parentAgent,
+                requestedName = parsed.agentName,
+                goal = parsed.goal,
+                capabilities = parsed.capabilities
+            ) ?: return@mapNotNull null
             val childContext = buildString {
                 appendLine("Parent subagent goal: ${parentTask.goal}")
                 if (parsed.context.isNotBlank()) {
@@ -2188,13 +2343,15 @@ Reglas:
         val agentWithEnhancedPrompt = orchestrator.copy(systemPrompt = enhancedPrompt)
         val workspacePath = fileRepository.getWorkspaceFolderPath(workspaceId)
 
-        // Use streaming so the user sees Cortex's response in real-time
+        // Stream from the provider, but publish only after Cortex reaches a final turn.
         val contentBuilder = StringBuilder()
         val reasoningBuilder = StringBuilder()
         var toolCalls: List<ToolCall>? = null
         var hasErrors = false
 
-        _uiState.value = _uiState.value.copy(streamingContent = "", streamingReasoning = null)
+        // Cortex's streamed text is provisional until we know whether it contains tool calls.
+        // Buffer it internally so the chat only receives the consolidated final response.
+        _uiState.value = _uiState.value.copy(streamingContent = null, streamingReasoning = null)
         updateAgentStatus(orchestrator.name, "Pensando...")
 
         val streamFlow = repository.chatWithToolsStreaming(
@@ -2215,7 +2372,6 @@ Reglas:
             }
             chunk.content?.let { delta ->
                 contentBuilder.append(delta)
-                _uiState.value = _uiState.value.copy(streamingContent = contentBuilder.toString())
             }
             chunk.reasoning?.let { delta ->
                 reasoningBuilder.append(delta)
@@ -2245,8 +2401,22 @@ Reglas:
 
         // Handle <think> tags
         val thinkingFromTags = com.aiagents.app.data.remote.extractThinkingFromContent(fullContent)
-        val content = com.aiagents.app.data.remote.removeThinkingTags(fullContent) ?: fullContent
+        var content = com.aiagents.app.data.remote.removeThinkingTags(fullContent) ?: fullContent
         val finalReasoning = fullReasoning ?: thinkingFromTags
+
+        if (content.isBlank() && toolCalls.isNullOrEmpty()) {
+            val recovered = recoverEmptyLocalCompletion(
+                agent = agentWithEnhancedPrompt,
+                messagesForApi = currentMessages,
+                fullKey = fullKey
+            )
+            if (recovered == null) {
+                _workingAgents.value = emptyList()
+                _uiState.value = _uiState.value.copy(isLoading = false, currentReasoning = null)
+                return
+            }
+            content = recovered
+        }
 
         var shouldRestoreCortex = true
 
@@ -2280,7 +2450,6 @@ Reglas:
 
             when {
                 parallelDelegation != null -> {
-                    handleDelegationPreMessage(content, orchestrator)
                     Log.d("WorkspaceDetailVM", "Orchestrator parallel delegation (text fallback): $parallelDelegation")
                     val resolvedEntries = parallelDelegation.mapNotNull { entry ->
                         val agent = findAgentFuzzy(entry.agentName)
@@ -2313,7 +2482,6 @@ Reglas:
                 }
 
                 sequentialDelegation != null -> {
-                    handleDelegationPreMessage(content, orchestrator)
                     Log.d("WorkspaceDetailVM", "Orchestrator sequential delegation (text fallback): $sequentialDelegation")
                     _uiState.value = _uiState.value.copy(isLoading = true)
 
@@ -2334,7 +2502,6 @@ Reglas:
                 }
 
                 singleDelegation != null -> {
-                    handleDelegationPreMessage(content, orchestrator)
                     val targetAgent = findAgentFuzzy(singleDelegation)
                     if (targetAgent != null) {
                         Log.d("WorkspaceDetailVM", "Orchestrator delegating (text fallback) to: ${targetAgent.name}")
@@ -2469,8 +2636,23 @@ Reglas:
 
         // Handle <think> tags that may appear in streamed content
         val thinkingFromTags = com.aiagents.app.data.remote.extractThinkingFromContent(fullContent)
-        val cleanedContent = com.aiagents.app.data.remote.removeThinkingTags(fullContent) ?: fullContent
+        var cleanedContent = com.aiagents.app.data.remote.removeThinkingTags(fullContent) ?: fullContent
         val finalReasoning = fullReasoning ?: thinkingFromTags
+
+        if (cleanedContent.isBlank() && toolCalls.isNullOrEmpty()) {
+            val recovered = recoverEmptyLocalCompletion(
+                agent = agentForApi,
+                messagesForApi = currentMessages,
+                fullKey = fullKey
+            )
+            if (recovered == null) {
+                clearAgentStatus(agent.name)
+                _workingAgents.value = emptyList()
+                _uiState.value = _uiState.value.copy(isLoading = false, currentReasoning = null)
+                return true
+            }
+            cleanedContent = recovered
+        }
 
         var processingComplete = true
 
@@ -2628,6 +2810,7 @@ Reglas:
             else -> "Error: ${error.message ?: "Desconocido"}"
         }
         _uiState.value = _uiState.value.copy(error = errorMessage, isLoading = false, currentReasoning = null)
+        rememberTaskCompletionPreview(errorMessage)
     }
 
     private val FILE_TOOL_NAMES = setOf(
@@ -2656,7 +2839,7 @@ Reglas:
             )
             repository.addMessage(workspaceId, _conversationId.value, limitMsg, agent.id)
             _uiState.value = _uiState.value.copy(isLoading = false, currentReasoning = null)
-            notifyTaskCompletedIfLong("Límite de iteraciones alcanzado")
+            rememberTaskCompletionPreview("Límite de iteraciones alcanzado")
             return
         }
 
@@ -2688,6 +2871,25 @@ Reglas:
                         val request = toolHandler.parseToolCall(toolCall)
                         if (request == null) {
                             Log.e("WorkspaceDetailVM", "Failed to parse tool call: ${toolCall.function.arguments}")
+                            val errorContent =
+                                "Error: the application could not parse the execute_command arguments. " +
+                                    "Call the tool again with a JSON object containing a string field named command."
+                            repository.addMessage(
+                                workspaceId,
+                                _conversationId.value,
+                                Message(
+                                    role = MessageRole.TOOL,
+                                    content = errorContent,
+                                    toolResults = listOf(
+                                        ToolResult(
+                                            toolCallId = toolCall.id,
+                                            name = toolCall.function.name,
+                                            content = errorContent
+                                        )
+                                    )
+                                ),
+                                agent.id
+                            )
                             continue
                         }
 
@@ -2978,7 +3180,7 @@ Reglas:
             .ifEmpty { SubagentCapabilityPolicy.inferCapabilities(delegationContext) }
         if (capabilities.isEmpty()) return false
 
-        val worker = selectIntegrationWorker(capabilities) ?: return false
+        val worker = createEphemeralWorker(orchestrator, userMessage.content, capabilities)
         val workerWithContext = buildAgentWithFileContext(worker)
         val task = buildSubagentEnvelope(
             agent = worker,
@@ -3030,29 +3232,9 @@ Reglas:
             streamingReasoning = null,
             error = null
         )
-        notifyTaskCompletedIfLong(receipt.take(200))
+        rememberTaskCompletionPreview(receipt.take(200))
         checkContextWindowUsage()
         return true
-    }
-
-    private suspend fun selectIntegrationWorker(capabilities: Set<String>): Agent? {
-        val preferredNames = when {
-            SubagentCapabilityPolicy.GOOGLE_SHEETS in capabilities ->
-                listOf("Data Analyst", "Researcher", "Writer")
-            SubagentCapabilityPolicy.GOOGLE_DOCS in capabilities ||
-                SubagentCapabilityPolicy.GOOGLE_SLIDES in capabilities ||
-                SubagentCapabilityPolicy.GOOGLE_GMAIL in capabilities ->
-                listOf("Writer", "Creative Writer", "Researcher")
-            else -> listOf("Researcher", "Data Analyst", "Writer")
-        }
-        val candidates = repository.getAllAgentsOnce().filterNot { it.isOrchestrator }
-        return preferredNames.firstNotNullOfOrNull { preferred ->
-            candidates.firstOrNull { candidate ->
-                candidate.name.equals(preferred, ignoreCase = true) ||
-                    candidate.name.contains(preferred, ignoreCase = true) ||
-                    preferred.contains(candidate.name, ignoreCase = true)
-            }
-        } ?: candidates.firstOrNull()
     }
 
     /**
@@ -3166,10 +3348,15 @@ Reglas:
             }
             val batch = parsedBatch.getOrThrow()
             for (parsed in batch.tasks) {
-                val targetAgent = findAgentFuzzy(parsed.agentName)
+                val targetAgent = resolveSubagent(
+                    parent = orchestrator,
+                    requestedName = parsed.agentName,
+                    goal = parsed.goal,
+                    capabilities = parsed.capabilities
+                )
                 if (targetAgent == null) {
                     callErrors.getOrPut(toolCall.id) { mutableListOf() } +=
-                        "Agent '${parsed.agentName}' was not found."
+                        "Custom agent '${parsed.agentName}' was not found. Omit agent_name to use a temporary worker."
                     continue
                 }
                 val relevantContext = buildString {
@@ -3287,7 +3474,7 @@ Reglas:
             streamingReasoning = null,
             error = null
         )
-        notifyTaskCompletedIfLong(finalContent.take(200))
+        rememberTaskCompletionPreview(finalContent.take(200))
         checkContextWindowUsage()
     }
 
@@ -3424,13 +3611,24 @@ Reglas:
         val request = _uiState.value.pendingToolExecution ?: return
         val rawAgent = _activeAgent.value ?: return
 
-        viewModelScope.launch {
+        memoryExtractor.beginForegroundRequest()
+        currentAgentJob = cortexTaskCoordinator.launch(
+            workspaceId = workspaceId,
+            agentName = rawAgent.name,
+            scope = executionScope
+        ) {
+            taskCompletionNotifier.notifyTaskStarted(workspaceId)
+            taskStartTimeMs = System.currentTimeMillis()
+            taskCompletionPreview = null
+            var cancelled = false
             try {
                 val agent = buildAgentWithFileContext(rawAgent)
                 _uiState.value = _uiState.value.copy(
                     pendingPermissionRequest = null,
                     pendingToolExecution = null,
-                    executingCommand = request.command
+                    executingCommand = request.command,
+                    isLoading = true,
+                    error = null
                 )
 
                 val toolHandler = repository.getToolHandler()
@@ -3454,17 +3652,37 @@ Reglas:
                 // Pequeño delay para asegurar que el mensaje se haya guardado
                 kotlinx.coroutines.delay(100)
                 continueConversationAfterTools(agent)
+            } catch (error: CancellationException) {
+                cancelled = true
+                throw error
             } catch (e: Exception) {
                 Log.e("WorkspaceDetailVM", "Error in grantPermissionAndExecute", e)
                 _uiState.value = _uiState.value.copy(
                     executingCommand = null,
-                    error = "Error al ejecutar comando: ${e.message}"
+                    error = "Error al ejecutar comando: ${e.message}",
+                    isLoading = false
                 )
+            } finally {
+                memoryExtractor.endForegroundRequest()
+                if (cancelled) {
+                    taskStartTimeMs = 0L
+                    taskCompletionPreview = null
+                } else {
+                    notifyTaskFinished(rawAgent.name)
+                    triggerInactiveConversationsExtraction()
+                }
+                currentAgentJob = null
             }
         }
     }
 
     fun denyPermission() {
+        val agentName = _activeAgent.value?.name ?: "Cortex"
+        clearPendingCommandPermission()
+        taskCompletionNotifier.notifyPermissionDenied(workspaceId, agentName)
+    }
+
+    private fun clearPendingCommandPermission() {
         _uiState.value = _uiState.value.copy(
             pendingPermissionRequest = null,
             pendingToolExecution = null
@@ -3490,7 +3708,12 @@ Reglas:
         Log.d("WorkspaceDetailVM", "Tool result saved with messageId: $messageId")
     }
 
-    private suspend fun continueConversationAfterTools(agent: Agent, depth: Int = 0) {
+    private suspend fun continueConversationAfterTools(
+        agent: Agent,
+        depth: Int = 0,
+        completionRecoveryUsed: Boolean = false,
+        ephemeralInstruction: String? = null
+    ) {
         if (depth >= 10) {
             Log.w("WorkspaceDetailVM", "Max depth reached in continueConversationAfterTools")
             _uiState.value = _uiState.value.copy(isLoading = false, currentReasoning = null)
@@ -3509,10 +3732,19 @@ Reglas:
 
         _uiState.value = _uiState.value.copy(isLoading = true)
 
+        var delegatedToRecovery = false
         try {
+            val apiMessages = if (ephemeralInstruction == null) {
+                messages.value
+            } else {
+                messages.value + Message(
+                    role = MessageRole.USER,
+                    content = ephemeralInstruction
+                )
+            }
             val result = repository.chatWithTools(
                 agent = agent,
-                messages = messages.value,
+                messages = apiMessages,
                 overrideModel = extractModelId(fullKey),
                 overrideProvider = extractProvider(fullKey),
                 enableTerminal = agent.enableTerminal,
@@ -3530,6 +3762,22 @@ Reglas:
                         return@onSuccess
                     }
                     val cleanContent = checkAndSetOptions(response.content ?: "")
+                    val recoveryInstruction = if (completionRecoveryUsed) null else
+                        ToolCompletionPolicy.recoveryInstruction(messages.value, cleanContent)
+                    if (recoveryInstruction != null) {
+                        delegatedToRecovery = true
+                        Log.w(
+                            "WorkspaceDetailVM",
+                            "Rejecting incomplete/internal tool response and requesting one completion recovery"
+                        )
+                        continueConversationAfterTools(
+                            agent = agent,
+                            depth = depth,
+                            completionRecoveryUsed = true,
+                            ephemeralInstruction = recoveryInstruction
+                        )
+                        return@onSuccess
+                    }
                     val assistantMessage = Message(
                         role = MessageRole.ASSISTANT,
                         content = cleanContent,
@@ -3538,7 +3786,7 @@ Reglas:
                     repository.addMessage(workspaceId, _conversationId.value, assistantMessage, agent.id)
                     // Solo desactivar isLoading si no hay más tool calls
                     _uiState.value = _uiState.value.copy(isLoading = false, currentReasoning = null)
-                    notifyTaskCompletedIfLong(cleanContent.take(200))
+                    rememberTaskCompletionPreview(cleanContent.take(200))
                 } else {
                     val assistantMessage = Message(
                         role = MessageRole.ASSISTANT,
@@ -3566,6 +3814,8 @@ Reglas:
                 currentReasoning = null
             )
         }
+
+        if (delegatedToRecovery) return
         
         // If there are pending sequential agents, process the next one
         if (!agent.isOrchestrator && _pendingSequentialAgents.value.isNotEmpty()) {
@@ -4091,11 +4341,25 @@ Reglas:
 
     private suspend fun handleAgentCreatorToolCall(agent: Agent, toolCall: ToolCall) {
         val result = repository.getAgentCreatorToolHandler().executeTool(
-            toolCallId = toolCall.id, toolName = toolCall.function.name, arguments = toolCall.function.arguments
+            toolCallId = toolCall.id,
+            toolName = toolCall.function.name,
+            arguments = toolCall.function.arguments,
+            allowUserRequestedCreation = userExplicitlyRequestedAgentCreation()
         )
         val toolMessage = Message(role = MessageRole.TOOL, content = result.content,
             toolResults = listOf(ToolResult(result.toolCallId, toolCall.function.name, result.content)))
         repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
+    }
+
+    private fun userExplicitlyRequestedAgentCreation(): Boolean {
+        val request = messages.value.lastOrNull { it.role == MessageRole.USER }
+            ?.content?.lowercase().orEmpty()
+        val mentionsAgent = "agente" in request || "agent" in request
+        val asksCreation = listOf(
+            "crea", "crear", "créame", "genera", "generar", "construye", "nuevo agente",
+            "new agent", "create", "build", "make"
+        ).any(request::contains)
+        return mentionsAgent && asksCreation
     }
 
     private suspend fun handleGitHubToolCall(agent: Agent, toolCall: ToolCall) {
@@ -4201,7 +4465,7 @@ Reglas:
 
     private suspend fun handleMemoryToolCall(agent: Agent, toolCall: ToolCall) {
         if (toolCall.function.name !in MemoryToolHandler.READ_TOOL_NAMES) {
-            val content = "Legacy semantic-memory writes are disabled. Cortex must use the bounded 'memory' tool for durable information."
+            val content = "Direct SQLite writes are disabled. Cortex must use the unified 'memory' tool to choose active Markdown or secondary archive storage."
             val toolMessage = Message(
                 role = MessageRole.TOOL,
                 content = content,
@@ -4460,7 +4724,12 @@ Reglas:
 
     private suspend fun handleScheduledTaskToolCall(agent: Agent, toolCall: ToolCall) {
         val handler = repository.getScheduledTaskToolHandler()
-        val result = handler.executeTool(toolCall.id, toolCall.function.arguments, workspaceId)
+        val result = handler.executeTool(
+            toolCall.id,
+            toolCall.function.arguments,
+            workspaceId,
+            _conversationId.value
+        )
         val toolMessage = Message(
             role = MessageRole.TOOL,
             content = result.content,
@@ -4634,11 +4903,19 @@ Reglas:
         val provider = extractProvider(fullKey) ?: return
         val activeConversationId = _conversationId.value
 
-        memoryExtractor.triggerExtraction(
-            excludeConversationId = activeConversationId,
-            modelId = modelId,
-            provider = provider
-        )
+        pendingMemoryExtractionJob?.cancel()
+        pendingMemoryExtractionJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(MEMORY_EXTRACTION_IDLE_DELAY_MS)
+            if (_uiState.value.isLoading || currentAgentJob?.isActive == true) {
+                Log.d("WorkspaceDetailVM", "Memory extraction deferred: foreground task active")
+                return@launch
+            }
+            memoryExtractor.triggerExtraction(
+                excludeConversationId = activeConversationId,
+                modelId = modelId,
+                provider = provider
+            )
+        }
     }
 
     /**
@@ -4654,7 +4931,11 @@ Reglas:
         val modelId = extractModelId(fullKey).ifBlank { return }
         val provider = extractProvider(fullKey) ?: return
 
-        viewModelScope.launch(Dispatchers.IO) {
+        conversationResumeExtractionJob?.cancel()
+        conversationResumeExtractionJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(MEMORY_EXTRACTION_IDLE_DELAY_MS)
+            if (_uiState.value.isLoading || currentAgentJob?.isActive == true) return@launch
+
             // Check if this conversation needs re-extraction
             val didExtract = memoryExtractor.checkConversationOnResume(
                 conversationId = conversationId,
@@ -4678,6 +4959,19 @@ Reglas:
     fun onNewConversationStarted() {
         _conversationId.value = null
         triggerInactiveConversationsExtraction()
+    }
+
+    override fun onCleared() {
+        pendingMemoryExtractionJob?.cancel()
+        conversationResumeExtractionJob?.cancel()
+        val runningTask = currentAgentJob
+        if (runningTask?.isActive == true) {
+            // Keep Room flows and the execution coroutine alive until the foreground task ends.
+            runningTask.invokeOnCompletion { executionJob.cancel() }
+        } else {
+            executionJob.cancel()
+        }
+        super.onCleared()
     }
 
 }

@@ -3,6 +3,7 @@ package com.aiagents.app.data.skills
 import android.content.Context
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
@@ -28,8 +29,7 @@ data class SkillReviewSettings(
 )
 
 /**
- * Event-driven WorkManager bridge. The chat layer can call [recordMessage] after
- * persisting a user message; this module deliberately does not depend on it.
+ * Event-driven WorkManager bridge inspired by Hermes' post-turn background review.
  * Only a bounded, redacted transcript is ever stored or passed to the worker.
  */
 @Singleton
@@ -58,46 +58,60 @@ class SkillReviewScheduler @Inject constructor(
     }
 
     /**
-     * Returns true only when this call queued a review. System/tool messages are
-     * never counted or persisted, and only user messages advance the interval.
+     * Called only after Cortex persisted its final assistant response. Memory advances once per
+     * completed user turn; skill learning advances once per model iteration in that turn.
      */
-    suspend fun recordMessage(
+    suspend fun recordCompletedTurn(
         scopeId: Long?,
-        message: Message,
-        recentTranscript: List<Message> = emptyList()
-    ): Boolean = recordMessage(
+        recentTranscript: List<Message>,
+        modelKey: String
+    ): Boolean = recordCompletedTranscript(
         scopeId = scopeId,
-        message = message.toSkillTranscriptMessage(),
-        recentTranscript = recentTranscript.map { it.toSkillTranscriptMessage() }
+        recentTranscript = recentTranscript.map { it.toSkillTranscriptMessage() },
+        modelKey = modelKey
     )
 
-    suspend fun recordMessage(
+    private suspend fun recordCompletedTranscript(
         scopeId: Long?,
-        message: SkillTranscriptMessage,
-        recentTranscript: List<SkillTranscriptMessage> = emptyList()
+        recentTranscript: List<SkillTranscriptMessage>,
+        modelKey: String
     ): Boolean = mutex.withLock {
-        if (!_settings.value.enabled || message.role != SkillTranscriptRole.USER) return@withLock false
+        if (!_settings.value.enabled) return@withLock false
+
+        val lastUserIndex = recentTranscript.indexOfLast { it.role == SkillTranscriptRole.USER }
+        if (lastUserIndex < 0) return@withLock false
+        val completedTurnIterations = recentTranscript
+            .drop(lastUserIndex + 1)
+            .count { it.role == SkillTranscriptRole.ASSISTANT }
+        if (completedTurnIterations <= 0) return@withLock false
 
         val scopeKey = scopeId?.let { "workspace:$it" } ?: "global"
         val scopeHash = sha256("$installationSalt:$scopeKey").take(16)
-        val counterKey = "$COUNTER_PREFIX$scopeHash"
-        val nextCount = preferences.getInt(counterKey, 0) + 1
+        val memoryCounterKey = "$MEMORY_COUNTER_PREFIX$scopeHash"
+        val skillCounterKey = "$SKILL_COUNTER_PREFIX$scopeHash"
         val interval = _settings.value.messageInterval
-        if (nextCount < interval) {
-            preferences.edit().putInt(counterKey, nextCount).apply()
+        val cadence = SelfImprovementCadence.advance(
+            current = SelfImprovementCadenceState(
+                memoryTurns = preferences.getInt(memoryCounterKey, 0),
+                skillIterations = preferences.getInt(skillCounterKey, 0)
+            ),
+            completedTurnIterations = completedTurnIterations,
+            interval = interval
+        )
+        preferences.edit()
+            .putInt(memoryCounterKey, cadence.state.memoryTurns)
+            .putInt(skillCounterKey, cadence.state.skillIterations)
+            .apply()
+        if (!cadence.reviewMemory && !cadence.reviewSkills) {
             return@withLock false
         }
-        preferences.edit().putInt(counterKey, 0).apply()
 
-        val boundedMessages = (recentTranscript + message)
-            .fold(mutableListOf<SkillTranscriptMessage>()) { result, entry ->
-                if (result.lastOrNull() != entry) result += entry
-                result
-            }
-        val redacted = SkillTranscriptRedactor.redact(boundedMessages)
+        val redacted = SkillTranscriptRedactor.redact(recentTranscript)
         if (redacted.isBlank()) return@withLock false
 
-        val fingerprint = sha256("$scopeHash\n$redacted")
+        val fingerprint = sha256(
+            "$scopeHash:${cadence.reviewMemory}:${cadence.reviewSkills}\n$redacted"
+        )
         val reviewId = reviewDao.insert(
             SkillReviewEntity(
                 scopeHash = scopeHash,
@@ -110,13 +124,24 @@ class SkillReviewScheduler @Inject constructor(
         )
         if (reviewId <= 0) return@withLock false
 
+        val constraints = Constraints.Builder()
+            .setRequiresBatteryNotLow(true)
+            .apply {
+                if (modelKey.isNotBlank() && !modelKey.startsWith("LOCAL|", ignoreCase = true)) {
+                    setRequiredNetworkType(NetworkType.CONNECTED)
+                }
+            }
+            .build()
         val request = OneTimeWorkRequestBuilder<SkillReviewWorker>()
-            .setInputData(workDataOf(SkillReviewWorker.KEY_REVIEW_ID to reviewId))
-            .setConstraints(
-                Constraints.Builder()
-                    .setRequiresBatteryNotLow(true)
-                    .build()
+            .setInputData(
+                workDataOf(
+                    SkillReviewWorker.KEY_REVIEW_ID to reviewId,
+                    SkillReviewWorker.KEY_REVIEW_MEMORY to cadence.reviewMemory,
+                    SkillReviewWorker.KEY_REVIEW_SKILLS to cadence.reviewSkills,
+                    SkillReviewWorker.KEY_MODEL_KEY to modelKey
+                )
             )
+            .setConstraints(constraints)
             .addTag(WORK_TAG)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
@@ -142,7 +167,7 @@ class SkillReviewScheduler @Inject constructor(
         .joinToString("") { "%02x".format(it) }
 
     companion object {
-        const val DEFAULT_MESSAGE_INTERVAL = 20
+        const val DEFAULT_MESSAGE_INTERVAL = 10
         val ALLOWED_INTERVALS = setOf(10, 20, 40)
         const val WORK_TAG = "skill_review"
         private const val UNIQUE_WORK_PREFIX = "skill_review_"
@@ -150,7 +175,8 @@ class SkillReviewScheduler @Inject constructor(
         private const val KEY_ENABLED = "enabled"
         private const val KEY_INTERVAL = "message_interval"
         private const val KEY_INSTALLATION_SALT = "installation_salt"
-        private const val COUNTER_PREFIX = "message_count_"
+        private const val MEMORY_COUNTER_PREFIX = "memory_turn_count_"
+        private const val SKILL_COUNTER_PREFIX = "skill_iteration_count_"
     }
 }
 

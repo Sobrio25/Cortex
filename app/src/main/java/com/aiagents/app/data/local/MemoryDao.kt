@@ -22,6 +22,12 @@ interface MemoryDao {
     @Query("DELETE FROM cortex_memories WHERE id = :id")
     suspend fun deleteById(id: Long)
 
+    @Query("DELETE FROM cortex_memories WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
+
+    @Query("DELETE FROM cortex_memories")
+    suspend fun deleteAll()
+
     @Query("""
         SELECT m.* FROM cortex_memories m
         JOIN cortex_memory_fts fts ON m.rowid = fts.rowid
@@ -90,6 +96,9 @@ interface MemoryDao {
 
     @Query("SELECT COUNT(*) FROM cortex_memories")
     suspend fun count(): Int
+
+    @Query("UPDATE cortex_memories SET importance = :maxImportance WHERE importance > :maxImportance")
+    suspend fun capImportance(maxImportance: Int): Int
 
     @Query("""
         DELETE FROM cortex_memories WHERE id IN (

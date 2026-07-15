@@ -28,7 +28,7 @@ class ToolSearchHandler @Inject constructor() {
             // Memory
             "memory", "memory_search", "memory_list",
             // Skill creation requested by the user
-            "skill_create", "skill_list",
+            "skill_create", "skill_list", "skill_view",
             // Agent selection & delegation (Cortex routing)
             "select_agent", DelegationToolHandler.TOOL_NAME,
             // Terminal
@@ -79,13 +79,14 @@ class ToolSearchHandler @Inject constructor() {
         ToolEntry("schedule_task", "scheduling", "Create, list, delete, toggle scheduled agent tasks (cron jobs). Execute prompts at specific times: once, daily, weekly, interval", setOf("schedule", "cron", "timer", "alarm", "recurring", "daily", "weekly", "interval", "automatic", "programar", "programado", "automatico", "diario", "semanal", "repetir", "horario", "tarea")),
 
         // Memory
-        ToolEntry("memory", "memory", "Curate Cortex's bounded 2,200-character MEMORY.md with atomic add, replace, remove, or batch operations", setOf("memory", "remember", "forget", "replace", "preference", "durable", "memoria", "recordar", "olvidar", "preferencia", "permanente")),
-        ToolEntry("memory_search", "memory_archive", "Search the legacy semantic memory archive on demand", setOf("memory", "archive", "search", "history", "past", "memoria", "archivo", "buscar", "historial")),
-        ToolEntry("memory_list", "memory_archive", "List entries from the legacy semantic memory archive", setOf("memory", "archive", "list", "history", "memoria", "archivo", "listar", "historial")),
+        ToolEntry("memory", "memory", "Curate active Markdown and lower-priority or demoted SQLite memory", setOf("memory", "remember", "forget", "replace", "preference", "durable", "archive", "secondary", "memoria", "recordar", "olvidar", "preferencia", "permanente", "archivo", "secundaria")),
+        ToolEntry("memory_search", "memory_archive", "Search lower-priority or demoted secondary memory in SQLite", setOf("memory", "archive", "secondary", "search", "history", "past", "memoria", "archivo", "secundaria", "buscar", "historial")),
+        ToolEntry("memory_list", "memory_archive", "List lower-priority or demoted secondary memory", setOf("memory", "archive", "secondary", "list", "history", "memoria", "archivo", "secundaria", "listar", "historial")),
 
         // Skills
         ToolEntry("skill_create", "skills", "Create a reusable skill as a draft for user review", setOf("skill", "create", "workflow", "reusable", "habilidad", "crear", "automatizar", "flujo")),
         ToolEntry("skill_list", "skills", "List installed skills and their states", setOf("skill", "list", "installed", "draft", "active", "habilidades", "listar", "borrador")),
+        ToolEntry("skill_view", "skills", "Read the complete instructions for one installed skill", setOf("skill", "view", "read", "instructions", "workflow", "habilidad", "ver", "leer", "instrucciones")),
 
         // Agent Creator
         ToolEntry("create_agent", "agents", "Create a new AI agent with custom prompt and personality", setOf("agent", "create", "new", "design", "build", "agente", "crear", "nuevo", "diseñar")),
@@ -107,8 +108,8 @@ class ToolSearchHandler @Inject constructor() {
         // Device control
         ToolEntry("device_control", "device", "Control device: open/list/inspect/uninstall apps, camera, volume, brightness, flashlight, Spotify. Also get_app_info (detailed app capabilities) and query_capable_apps (find apps by intent/mime type)", setOf("app", "open", "list", "uninstall", "remove", "camera", "photo", "volume", "brightness", "flashlight", "spotify", "music", "settings", "device", "abrir", "aplicacion", "desinstalar", "eliminar", "lista", "foto", "volumen", "linterna", "musica", "info", "capabilities", "intents", "inspect", "details", "capacidades", "detalles", "query", "pdf", "share", "compartir")),
 
-        // Unified web search (SerpAPI or OpenAI; independent from DuckDuckGo/Brave)
-        ToolEntry("web_search", "web_search", "Search the current web through SerpAPI or OpenAI with source URLs", setOf("search", "web", "internet", "google", "find", "lookup", "news", "information", "buscar", "precio", "noticias", "actual")),
+        // Unified web search. Native HTML search is the default; API engines are opt-in.
+        ToolEntry("web_search", "web_search", "Search the current web with the user-selected engine; native HTML search requires no API key", setOf("search", "web", "internet", "google", "find", "lookup", "news", "information", "buscar", "precio", "noticias", "actual")),
         ToolEntry("web_fetch", "web_search", "Read and extract text from a public web page safely", setOf("web", "fetch", "open", "page", "url", "read", "website", "leer", "pagina", "sitio", "enlace")),
 
         // Legacy optional search providers

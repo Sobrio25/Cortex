@@ -31,7 +31,7 @@ class AgentCreatorToolHandler @Inject constructor(
                 "type" to "function",
                 "function" to mapOf(
                     "name" to TOOL_CREATE,
-                    "description" to "Create a new AI agent with a custom system prompt, personality, and configuration. The agent will appear in the user's agent list and be available for Cortex delegation.",
+                    "description" to "Create a persistent custom AI agent only when the user explicitly asks to create one. Ordinary task delegation uses temporary subagents instead.",
                     "parameters" to mapOf(
                         "type" to "object",
                         "properties" to mapOf(
@@ -69,11 +69,24 @@ class AgentCreatorToolHandler @Inject constructor(
         )
     }
 
-    suspend fun executeTool(toolCallId: String, toolName: String, arguments: String): AgentCreatorResult {
+    suspend fun executeTool(
+        toolCallId: String,
+        toolName: String,
+        arguments: String,
+        allowUserRequestedCreation: Boolean = false
+    ): AgentCreatorResult {
         return try {
             val args = JsonParser.parseString(arguments).asJsonObject
             when (toolName) {
-                TOOL_CREATE -> createAgent(toolCallId, args)
+                TOOL_CREATE -> if (allowUserRequestedCreation) {
+                    createAgent(toolCallId, args)
+                } else {
+                    AgentCreatorResult(
+                        toolCallId,
+                        false,
+                        "La creación de agentes persistentes requiere una solicitud explícita del usuario. Usa spawn_subagents sin agent_name para trabajo temporal."
+                    )
+                }
                 TOOL_DELETE -> deleteAgent(toolCallId, args)
                 else -> AgentCreatorResult(toolCallId, false, "Tool desconocido: $toolName")
             }

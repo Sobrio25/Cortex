@@ -1,6 +1,5 @@
 package com.aiagents.app.data.runtime
 
-import android.content.Context
 import android.os.Build
 import com.aiagents.app.data.local.MemoryDao
 import com.aiagents.app.data.local.SecurePreferences
@@ -9,7 +8,6 @@ import com.aiagents.app.data.memory.CortexMemorySnapshot
 import com.aiagents.app.data.memory.CortexProfileStore
 import com.aiagents.app.data.skills.SkillRuntimeProvider
 import com.aiagents.app.domain.model.AgentRoles
-import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -20,13 +18,12 @@ import javax.inject.Singleton
 /**
  * Adds volatile, device-specific facts to every agent request.
  *
- * Agent prompts stored in Room intentionally remain stable. Date, identity, device and tool
+ * Agent prompts stored in Room intentionally remain stable. Date, device and tool
  * availability are computed at request time so background jobs and delegated agents receive the
  * same truthful context as the foreground chat.
  */
 @Singleton
 class RuntimeContextProvider @Inject constructor(
-    @ApplicationContext private val context: Context,
     private val securePreferences: SecurePreferences,
     private val memoryDao: MemoryDao,
     private val skillRuntimeProvider: SkillRuntimeProvider,
@@ -63,24 +60,11 @@ class RuntimeContextProvider @Inject constructor(
             appendLine("- Locale: ${snapshot.localeTag}")
             appendLine("- Current agent: ${snapshot.agentName} (${snapshot.agentRole})")
             appendLine("- Runtime: Android ${snapshot.androidRelease} / API ${snapshot.androidApi} on ${snapshot.deviceManufacturer} ${snapshot.deviceModel}")
-            appendLine("- App package: ${snapshot.appPackage}")
-            if (!snapshot.preferredUserName.isNullOrBlank()) {
-                val legalName = snapshot.userName?.takeIf { it != snapshot.preferredUserName }
-                append("- You are speaking with: ${snapshot.preferredUserName}")
-                if (legalName != null) append(" (name: $legalName)")
-                appendLine()
-            } else if (!snapshot.userName.isNullOrBlank()) {
-                appendLine("- You are speaking with: ${snapshot.userName}")
-            } else {
-                appendLine("- User identity: not provided; do not guess it.")
-            }
-            appendLine("- Tools currently exposed in this request (${snapshot.exposedTools.size}): ${snapshot.exposedTools.ifEmpty { listOf("none") }.joinToString(", ")}")
+            appendLine("- Tool availability: ${snapshot.exposedTools.size} exposed; ${snapshot.discoverableTools.size} discoverable")
             if (snapshot.discoverableTools != snapshot.exposedTools) {
-                appendLine("- All tools available to this agent (${snapshot.discoverableTools.size}): ${snapshot.discoverableTools.ifEmpty { listOf("none") }.joinToString(", ")}")
                 appendLine("- If a needed available tool is not currently exposed, use search_tools to activate it.")
             }
-            appendLine("- Active skills (${snapshot.activeSkillNames.size}): ${snapshot.activeSkillNames.ifEmpty { listOf("none") }.joinToString(", ")}")
-            append("Only claim an action or integration is available when it appears in the lists above.")
+            append("Only claim an action or integration after its tool is exposed and succeeds.")
         }
 
         fun renderMemory(snapshot: CortexMemorySnapshot): String = buildString {
@@ -94,12 +78,12 @@ class RuntimeContextProvider @Inject constructor(
                 }
                 snapshot.entries.isEmpty() -> {
                     appendLine("(empty)")
-                    append("Use the memory tool only for durable, high-value information that will be hard to rediscover.")
+                    append("Use the memory tool only for durable, high-value information.")
                 }
                 else -> {
                     appendLine(snapshot.content)
                     appendLine()
-                    append("Use memory add/replace/remove to curate this file. Skip temporary progress, raw dumps, secrets, easy-to-find facts, runtime facts above, and procedures better stored as skills. At 80% or more, consolidate before adding.")
+                    append("Use the memory tool for changes. Keep procedures in skills and never store secrets or temporary progress.")
                 }
             }
         }
@@ -107,9 +91,8 @@ class RuntimeContextProvider @Inject constructor(
         fun renderSoul(snapshot: CortexMemorySnapshot, fallbackAgentName: String): String = buildString {
             appendLine(SOUL_MARKER)
             appendLine("SOUL.md (primary identity; frozen for this conversation)")
-            appendLine("- Configured agent name (authoritative): $fallbackAgentName")
             if (snapshot.storageError != null || snapshot.content.isBlank()) {
-                appendLine("You are $fallbackAgentName, a personal AI and central agent orchestrator running on the user's Android device.")
+                appendLine("You are $fallbackAgentName, a capable personal AI running on the user's Android device.")
                 append("[SOUL FALLBACK: ${snapshot.storageError ?: "SOUL.md is empty."}]")
             } else {
                 append(snapshot.content)
@@ -207,16 +190,12 @@ class RuntimeContextProvider @Inject constructor(
             localeTag = locale.toLanguageTag(),
             agentName = agentName,
             agentRole = agentRole,
-            userName = userName,
-            preferredUserName = preferredUserName,
             androidRelease = Build.VERSION.RELEASE,
             androidApi = Build.VERSION.SDK_INT,
             deviceManufacturer = Build.MANUFACTURER,
             deviceModel = Build.MODEL,
-            appPackage = context.packageName,
             exposedTools = exposedToolNames.filter { it.isNotBlank() }.distinct().sorted(),
-            discoverableTools = allAvailableToolNames.filter { it.isNotBlank() }.distinct().sorted(),
-            activeSkillNames = skillRuntimeProvider.names()
+            discoverableTools = allAvailableToolNames.filter { it.isNotBlank() }.distinct().sorted()
         )
         val skills = skillRuntimeProvider.render()
         val contextFiles = if (!isOrchestrator) {
@@ -269,14 +248,10 @@ data class RuntimeSnapshot(
     val localeTag: String,
     val agentName: String,
     val agentRole: String,
-    val userName: String?,
-    val preferredUserName: String?,
     val androidRelease: String,
     val androidApi: Int,
     val deviceManufacturer: String,
     val deviceModel: String,
-    val appPackage: String,
     val exposedTools: List<String>,
-    val discoverableTools: List<String>,
-    val activeSkillNames: List<String> = emptyList()
+    val discoverableTools: List<String>
 )

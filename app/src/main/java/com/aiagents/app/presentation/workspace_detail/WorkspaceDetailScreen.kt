@@ -10,6 +10,10 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.animateContentSize
@@ -82,6 +86,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.aiagents.app.data.model.PermissionLevel
+import com.aiagents.app.data.events.AgentChangeEvent
+import com.aiagents.app.data.events.AgentChangeKind
 import com.aiagents.app.data.model.SubagentExecutionEntity
 import com.aiagents.app.data.repository.ContextCompactionPolicy
 import com.aiagents.app.data.terminal.CommandRiskLevel
@@ -126,6 +132,7 @@ import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.google.gson.JsonParser
@@ -173,8 +180,18 @@ fun WorkspaceDetailScreen(
 
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showSTTSettingsDialog by remember { mutableStateOf(false) }
+    var visibleAgentChange by remember { mutableStateOf<AgentChangeEvent?>(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(viewModel) {
+        viewModel.agentChangeEvents.collect { event ->
+            visibleAgentChange = event
+            delay(3_200)
+            if (visibleAgentChange == event) visibleAgentChange = null
+            delay(180)
+        }
+    }
 
     val chatFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -345,6 +362,7 @@ fun WorkspaceDetailScreen(
         }
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -480,7 +498,10 @@ fun WorkspaceDetailScreen(
             when (uiState.activeTab) {
                 WorkspaceTab.Chat -> {
                     ChatContent(
-                        messages = ContextCompactionPolicy.visibleHistory(messages),
+                        messages = ContextCompactionPolicy.visibleHistory(
+                            messages,
+                            includeInternalActions = uiState.showCommands
+                        ),
                         inputText = uiState.inputText,
                         isLoading = uiState.isLoading,
                         attachedFiles = uiState.attachedFiles,
@@ -548,6 +569,21 @@ fun WorkspaceDetailScreen(
                         modifier = Modifier.weight(1f)
                     )
                 }
+            }
+        }
+    }
+
+        AnimatedVisibility(
+            visible = visibleAgentChange != null,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 72.dp, start = 16.dp, end = 16.dp),
+            enter = slideInVertically(initialOffsetY = { -it / 2 }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { -it / 2 }) + fadeOut()
+        ) {
+            visibleAgentChange?.let { event ->
+                AgentChangeIndicator(event)
             }
         }
     }
@@ -711,6 +747,72 @@ fun WorkspaceDetailScreen(
             title = uiState.webPreviewTitle,
             onDismiss = { viewModel.dismissWebPreview() }
         )
+    }
+}
+
+@Composable
+private fun AgentChangeIndicator(event: AgentChangeEvent) {
+    val (containerColor, contentColor) = when (event.kind) {
+        AgentChangeKind.MEMORY_SAVED -> {
+            MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
+        }
+        AgentChangeKind.SKILL_CREATED -> {
+            MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+        }
+        AgentChangeKind.SKILL_UPDATED -> {
+            MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
+        }
+    }
+    val icon = when (event.kind) {
+        AgentChangeKind.MEMORY_SAVED -> Icons.Default.Memory
+        AgentChangeKind.SKILL_CREATED -> Icons.Default.AutoAwesome
+        AgentChangeKind.SKILL_UPDATED -> Icons.Default.EditNote
+    }
+
+    Surface(
+        color = containerColor,
+        contentColor = contentColor,
+        shape = RoundedCornerShape(20.dp),
+        tonalElevation = 6.dp,
+        shadowElevation = 8.dp,
+        modifier = Modifier
+            .widthIn(max = 420.dp)
+            .animateContentSize()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(contentColor.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, contentDescription = null, modifier = Modifier.size(19.dp))
+            }
+            Column(modifier = Modifier.weight(1f, fill = false)) {
+                Text(
+                    text = event.title,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = event.detail,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = contentColor.copy(alpha = 0.78f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                imageVector = Icons.Default.CheckCircle,
+                contentDescription = "Cambio guardado",
+                modifier = Modifier.size(18.dp)
+            )
+        }
     }
 }
 
@@ -1012,7 +1114,7 @@ fun ChatContent(
                                         executions = subagentExecutions,
                                         onCancel = onCancelSubagent
                                     )
-                                } else if (executingCommand != null) {
+                                } else if (showCommands && executingCommand != null) {
                                     TerminalBlock(
                                         command = executingCommand,
                                         isExecuting = true

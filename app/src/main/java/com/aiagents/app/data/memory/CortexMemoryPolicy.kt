@@ -106,6 +106,41 @@ object CortexMemoryPolicy {
             .let { result -> if (result.success) result else result.copy(entries = currentEntries, changed = false) }
     }
 
+    /**
+     * Returns the previous entries that a successful batch explicitly marked for demotion into
+     * secondary memory. An ordinary remove/replace is a true forget/correction and is not archived.
+     */
+    fun entriesMarkedForArchive(
+        currentEntries: List<String>,
+        operations: List<CortexMemoryOperation>
+    ): List<String> {
+        val working = currentEntries.toMutableList()
+        val archived = mutableListOf<String>()
+        operations.forEach { operation ->
+            when (operation.action) {
+                CortexMemoryAction.ADD -> {
+                    normalizeEntry(operation.content)?.let { content ->
+                        if (content !in working) working += content
+                    }
+                }
+                CortexMemoryAction.REPLACE -> {
+                    val oldText = normalizeMatch(operation.oldText) ?: return@forEach
+                    val content = normalizeEntry(operation.content) ?: return@forEach
+                    val index = matchingIndexes(working, oldText).singleOrNull() ?: return@forEach
+                    if (operation.preserveInArchive) archived += working[index]
+                    working[index] = content
+                }
+                CortexMemoryAction.REMOVE -> {
+                    val oldText = normalizeMatch(operation.oldText) ?: return@forEach
+                    val index = matchingIndexes(working, oldText).singleOrNull() ?: return@forEach
+                    if (operation.preserveInArchive) archived += working[index]
+                    working.removeAt(index)
+                }
+            }
+        }
+        return archived.distinct()
+    }
+
     /** Returns null when safe; otherwise a non-sensitive rejection reason. */
     fun securityIssue(text: String): String? {
         var offset = 0
@@ -236,7 +271,8 @@ enum class CortexMemoryAction {
 data class CortexMemoryOperation(
     val action: CortexMemoryAction,
     val content: String? = null,
-    val oldText: String? = null
+    val oldText: String? = null,
+    val preserveInArchive: Boolean = false
 )
 
 data class CortexMemoryPolicyResult(

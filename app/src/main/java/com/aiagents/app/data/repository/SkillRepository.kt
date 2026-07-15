@@ -2,6 +2,7 @@ package com.aiagents.app.data.repository
 
 import com.aiagents.app.data.local.SkillDao
 import com.aiagents.app.data.local.SkillReviewDao
+import com.aiagents.app.data.memory.CortexMemoryPolicy
 import com.aiagents.app.data.model.SkillEntity
 import com.aiagents.app.data.model.SkillReviewEntity
 import com.aiagents.app.domain.model.Skill
@@ -34,6 +35,9 @@ class SkillRepository @Inject constructor(
         reviewDao.observeRecent(limit).map { rows -> rows.map(SkillReviewEntity::toDomain) }
 
     suspend fun getSkill(id: Long): Skill? = skillDao.getById(id)?.toDomain()
+
+    suspend fun getSkillBySlug(slug: String): Skill? =
+        skillDao.getBySlug(slug.trim().lowercase(Locale.ROOT))?.toDomain()
 
     suspend fun getSkillsOnce(): List<Skill> = skillDao.getAllOnce().map(SkillEntity::toDomain)
 
@@ -98,6 +102,72 @@ class SkillRepository @Inject constructor(
         )
     }
 
+    /** Creates an immediately usable skill, matching Hermes' background skill manager. */
+    suspend fun createAutomaticActive(input: SkillDraftInput): Result<Long> = runCatching {
+        val normalized = validateAutomatic(input)
+        val baseSlug = slugify(normalized.name)
+        val existing = skillDao.getAutomaticByName(normalized.name) ?: skillDao.getBySlug(baseSlug)
+        if (existing != null) {
+            check(existing.origin == SkillOrigin.AUTO.name) {
+                "Ya existe una skill no automática con ese nombre"
+            }
+            check(existing.status != SkillStatus.ARCHIVED.name) {
+                "La skill automática equivalente está archivada"
+            }
+            val now = System.currentTimeMillis()
+            check(
+                skillDao.updateAutomatic(
+                    id = existing.id,
+                    name = normalized.name,
+                    description = normalized.description,
+                    whenToUse = normalized.whenToUse,
+                    instructions = normalized.instructions,
+                    updatedAt = now
+                ) == 1
+            ) { "No se pudo activar la skill automática" }
+            return@runCatching existing.id
+        }
+
+        val now = System.currentTimeMillis()
+        skillDao.insert(
+            SkillEntity(
+                slug = nextAvailableSlug(normalized.name),
+                name = normalized.name,
+                description = normalized.description,
+                whenToUse = normalized.whenToUse,
+                instructions = normalized.instructions,
+                status = SkillStatus.ACTIVE.name,
+                origin = SkillOrigin.AUTO.name,
+                createdAt = now,
+                updatedAt = now,
+                activatedAt = now
+            )
+        )
+    }
+
+    /** Background learning may only patch mutable, non-archived AUTO skills. */
+    suspend fun updateAutomatic(id: Long, input: SkillDraftInput): Result<Long> = runCatching {
+        val normalized = validateAutomatic(input)
+        val existing = skillDao.getById(id) ?: error("La skill ya no existe")
+        check(existing.origin == SkillOrigin.AUTO.name && !existing.isImmutable) {
+            "El aprendizaje automático no puede modificar esta skill"
+        }
+        check(existing.status != SkillStatus.ARCHIVED.name) {
+            "Una skill archivada no puede reactivarse automáticamente"
+        }
+        check(
+            skillDao.updateAutomatic(
+                id = id,
+                name = normalized.name,
+                description = normalized.description,
+                whenToUse = normalized.whenToUse,
+                instructions = normalized.instructions,
+                updatedAt = System.currentTimeMillis()
+            ) == 1
+        ) { "No se pudo actualizar la skill automática" }
+        id
+    }
+
     suspend fun activate(id: Long): Result<Unit> = updateStatus(id, SkillStatus.ACTIVE)
 
     suspend fun archive(id: Long): Result<Unit> = updateStatus(id, SkillStatus.ARCHIVED)
@@ -155,6 +225,20 @@ class SkillRepository @Inject constructor(
             }
             require(normalized.instructions.length in 30..20_000) {
                 "Las instrucciones deben tener entre 30 y 20,000 caracteres"
+            }
+            return normalized
+        }
+
+        fun validateAutomatic(input: SkillDraftInput): SkillDraftInput {
+            val normalized = validate(input)
+            val combined = listOf(
+                normalized.name,
+                normalized.description,
+                normalized.whenToUse,
+                normalized.instructions
+            ).joinToString("\n")
+            CortexMemoryPolicy.securityIssue(combined)?.let { issue ->
+                throw IllegalArgumentException("La skill automática fue rechazada: $issue")
             }
             return normalized
         }

@@ -1,5 +1,6 @@
 package com.aiagents.app.data.terminal
 
+import com.aiagents.app.data.events.AgentChangeNotifier
 import com.aiagents.app.data.repository.SkillRepository
 import com.aiagents.app.domain.model.SkillDraftInput
 import com.aiagents.app.domain.model.SkillStatus
@@ -17,14 +18,16 @@ data class SkillToolResult(
 
 @Singleton
 class SkillToolHandler @Inject constructor(
-    private val repository: SkillRepository
+    private val repository: SkillRepository,
+    private val changeNotifier: AgentChangeNotifier
 ) {
     companion object {
         const val TOOL_CREATE = "skill_create"
         const val TOOL_LIST = "skill_list"
+        const val TOOL_VIEW = "skill_view"
         const val TOOL_ACTIVATE = "skill_activate"
         const val TOOL_ARCHIVE = "skill_archive"
-        val ALL_TOOL_NAMES = setOf(TOOL_CREATE, TOOL_LIST)
+        val ALL_TOOL_NAMES = setOf(TOOL_CREATE, TOOL_LIST, TOOL_VIEW)
 
         fun getToolDefinitionsJson(): List<Map<String, Any>> = listOf(
             function(
@@ -40,9 +43,19 @@ class SkillToolHandler @Inject constructor(
             ),
             function(
                 TOOL_LIST,
-                "Lista skills y sus estados para que el usuario pueda revisarlas.",
-                mapOf("status" to mapOf("type" to "string", "enum" to listOf("DRAFT", "ACTIVE", "ARCHIVED", "ALL"))),
+                "Busca skills instaladas y devuelve solo metadatos. Usa skill_view antes de aplicar una skill.",
+                mapOf(
+                    "query" to string("Texto opcional para buscar por nombre, descripción o señales de uso"),
+                    "status" to mapOf("type" to "string", "enum" to listOf("DRAFT", "ACTIVE", "ARCHIVED", "ALL")),
+                    "limit" to mapOf("type" to "integer", "minimum" to 1, "maximum" to 50)
+                ),
                 emptyList()
+            ),
+            function(
+                TOOL_VIEW,
+                "Carga las instrucciones completas de una skill por ID o slug. Las skills no activas son solo para inspección.",
+                mapOf("id_or_slug" to string("ID numérico o slug exacto de la skill")),
+                listOf("id_or_slug")
             )
         )
 
@@ -88,6 +101,7 @@ class SkillToolHandler @Inject constructor(
                 )
             }
             TOOL_LIST -> list(toolCallId, args)
+            TOOL_VIEW -> view(toolCallId, args)
             TOOL_ACTIVATE, TOOL_ARCHIVE -> SkillToolResult(
                 toolCallId,
                 toolName,
@@ -108,6 +122,7 @@ class SkillToolHandler @Inject constructor(
         )
         return repository.saveUserSkill(null, input).fold(
             onSuccess = { id ->
+                changeNotifier.skillCreated(input.name)
                 SkillToolResult(
                     toolCallId,
                     TOOL_CREATE,
@@ -125,15 +140,53 @@ class SkillToolHandler @Inject constructor(
             runCatching { SkillStatus.valueOf(it) }.getOrNull()
                 ?: return SkillToolResult(toolCallId, TOOL_LIST, false, "Estado inválido: $requested")
         }
-        val skills = repository.getSkillsOnce().filter { status == null || it.status == status }
+        val query = args.get("query")?.asString?.trim().orEmpty()
+        val limit = args.get("limit")?.asInt?.coerceIn(1, 50) ?: 20
+        val skills = repository.getSkillsOnce()
+            .asSequence()
+            .filter { status == null || it.status == status }
+            .filter { skill ->
+                query.isBlank() || listOf(
+                    skill.name,
+                    skill.slug,
+                    skill.description,
+                    skill.whenToUse
+                ).any { it.contains(query, ignoreCase = true) }
+            }
+            .take(limit)
+            .toList()
         val content = if (skills.isEmpty()) {
             "No hay skills para el filtro $requested."
         } else {
             skills.joinToString("\n") {
-                "- #${it.id} ${it.name} [${it.status}] (${it.origin}) — ${it.description}"
+                "- #${it.id} ${it.slug}: ${it.name} [${it.status}] (${it.origin}) — ${it.description}"
             }
         }
         return SkillToolResult(toolCallId, TOOL_LIST, true, content)
+    }
+
+    private suspend fun view(toolCallId: String, args: JsonObject): SkillToolResult {
+        val key = args.get("id_or_slug")?.asString?.trim()
+            ?.takeIf(String::isNotBlank)
+            ?: return missing(toolCallId, TOOL_VIEW, "id_or_slug")
+        val skill = key.toLongOrNull()?.let { repository.getSkill(it) }
+            ?: repository.getSkillBySlug(key)
+            ?: return SkillToolResult(toolCallId, TOOL_VIEW, false, "No existe una skill con ID o slug '$key'.")
+        val availability = if (skill.status == SkillStatus.ACTIVE) {
+            "ACTIVE: puedes aplicar estas instrucciones cuando coincidan con la tarea."
+        } else {
+            "${skill.status}: solo inspección; no apliques estas instrucciones hasta que la skill esté ACTIVE."
+        }
+        val content = buildString {
+            appendLine("# ${skill.name}")
+            appendLine("Slug: ${skill.slug}")
+            appendLine("Status: $availability")
+            appendLine("Description: ${skill.description}")
+            appendLine("When to use: ${skill.whenToUse}")
+            appendLine()
+            append(skill.instructions)
+        }
+        return SkillToolResult(toolCallId, TOOL_VIEW, true, content)
     }
 
     private fun missing(toolCallId: String, toolName: String, field: String) =

@@ -5,9 +5,6 @@ import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.domain.model.Agent
 import com.aiagents.app.domain.model.isOrchestrator
 import org.json.JSONObject
-import java.time.LocalDate
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -33,143 +30,36 @@ class AgentOrchestrator @Inject constructor(
 ) {
     companion object {
         private const val TAG = "AgentOrchestrator"
+        internal const val DEFAULT_CORTEX_PROMPT =
+            "Complete the user's request directly and use available tools when they improve accuracy."
     }
-    suspend fun buildPrompt(cortex: Agent): String {
-        val basePrompt = cortex.systemPrompt
-        val agents = repository.getAllAgentsOnce()
-            .filter { it.id != cortex.id && it.whenToUse.isNotEmpty() }
+    suspend fun buildPrompt(cortex: Agent): String = buildString {
+        val storedPrompt = cortex.systemPrompt.trim()
+        val isGeneratedLegacyPrompt = storedPrompt.contains("{agents_list}") ||
+            storedPrompt.contains("## DELEGATION PROTOCOL") ||
+            storedPrompt.contains("central AI agent orchestration system", ignoreCase = true)
+        (if (isGeneratedLegacyPrompt) DEFAULT_CORTEX_PROMPT else storedPrompt)
+            .trim()
+            .takeIf(String::isNotBlank)
+            ?.let { appendLine(it).appendLine() }
 
-        val personalitySection = buildPersonalitySection(cortex)
-
-        val agentsListSection = if (agents.isEmpty()) {
-            "## Agents\nNo specialized agents configured. Answer all requests yourself."
-        } else {
-            val agentDescriptions = agents.joinToString("\n") { agent ->
-                "- ${agent.name} (${agent.role}): ${agent.whenToUse}"
-            }
+        appendLine(
             """
-## Available Agents
-$agentDescriptions
+## OPERATING MODEL
+- Complete the user's request directly with the available tools. Programming, research, writing, and file work do not require a persistent specialist agent.
+- Use `spawn_subagents` only when parallel independent work, a fresh isolated review, noisy intermediate context, or a scoped external integration materially helps. Tasks are temporary workers unless the user explicitly names a custom agent.
+- Use parallel mode only for independent tasks; serialize dependent steps and overlapping workspace writes. Give every worker a self-contained goal and acceptance criteria, then synthesize the results.
+- Google Docs, Drive, Sheets, Gmail, Calendar, and Slides must run in an isolated worker with the narrowest matching `google_*` capability. Never expose raw integration payloads.
+- Work autonomously when the request is clear. Ask only when a missing decision blocks the requested outcome. If choices are required, use `<ask_options titulo="Pregunta">` with 2–10 `- Opción` lines.
 
-## PROJECT PLANNING
-When the user requests a complex task (building a website, app, system, multi-step project, etc.):
-1. Do NOT delegate immediately
-2. First, create and present a project plan that includes:
-   - **Objective**: What will be built
-   - **Components/Features**: List of key parts
-   - **Tech Stack**: Technologies to use (if applicable)
-   - **Steps**: Numbered action plan
-3. Present the plan to the user and ask for confirmation
-4. Do NOT mention which agents will handle the task — the user doesn't need to know internal routing details
-4. Only AFTER the user approves, delegate with the plan as context
-
-For simple/quick tasks (translate text, answer a question, single file edit, etc.), delegate directly without planning.
-
-## ORCHESTRATION WORKFLOW: PLAN → DELEGATE → REVIEW
-
-For tasks requiring 2+ agent delegations, follow these steps:
-
-**1. PLAN** — For complex multi-step tasks, call `todo_write` FIRST (in the same response as `spawn_subagents`):
-- Create one item per delegation: status="in_progress" for tasks starting now, "pending" for later steps
-- Format each item: "AgentName: brief task description" (keep under 60 chars)
-- Skip todo_write for single-agent delegations or simple questions
-
-**2. DELEGATE** — Use one `spawn_subagents` call with a typed `tasks` array. Choose the mode based on task dependencies:
-
-### PARALLEL mode (default) — tasks are INDEPENDENT of each other
-Use when agents can work without knowing each other's output. Put all independent tasks in one `tasks` array.
-
-WRONG (slow, single agent does everything):
-→ 1 task that mixes unrelated research goals
-
-CORRECT (fast, 3 researchers work simultaneously):
-→ spawn_subagents(tasks=[frameworks, pricing, benchmarks], mode="parallel")
-
-CORRECT (writing 3 independent sections in parallel):
-→ spawn_subagents(tasks=[introduction, applications, future], mode="parallel")
-
-### SEQUENTIAL mode — tasks DEPEND on each other's output
-Use when each agent needs the previous agent's full result. Each agent receives the previous one's output automatically.
-
-CORRECT (research then write — writer needs the research):
-→ spawn_subagents(tasks=[research, article], mode="sequential", failure_policy="fail_fast")
-
-CORRECT (gather → analyze → present):
-→ spawn_subagents(tasks=[gather, analyze, summarize], mode="sequential", failure_policy="fail_fast")
-
-CORRECT (draft then review):
-→ spawn_subagents(tasks=[draft, review], mode="sequential", failure_policy="fail_fast")
-
-**Decision guide:**
-- Can all agents start RIGHT NOW with only their task description? → **PARALLEL**
-- Does agent 2 need to READ agent 1's full output before starting? → **SEQUENTIAL**
-- Writing independent sections of a document → PARALLEL
-- Research then write about that research → SEQUENTIAL
-- Drafting then reviewing → SEQUENTIAL
-
-**Task description rules:**
-- SELF-CONTAINED: include ALL context the agent needs (requirements, constraints, interfaces)
-- SPECIFIC: full requirements, not vague instructions
-- You CAN call the SAME agent type multiple times with different subtasks
-
-**3. REVIEW & SYNTHESIZE** — After agent results arrive:
-1. Call `todo_write` to mark completed items (status="completed")
-2. Check each result for completeness — did the agent fulfill the task?
-3. Synthesize a UNIFIED response — combine results coherently, do not dump raw outputs verbatim
-4. If sequential, the LAST agent's output is the primary result; earlier outputs were intermediate steps
-
-## CRITICAL: YOUR ROLE AS ORCHESTRATOR
-You are a COORDINATOR, not a worker. Your job is to PLAN and DELEGATE, not to execute tasks yourself.
-
-**NEVER do these things directly:**
-- Do NOT call write_file, execute_command, read_text_file, or any file/terminal tools for complex tasks
-- Do NOT write long content yourself — delegate to specialized agents
-- Do NOT execute multiple tool calls in sequence to build something — use spawn_subagents instead
-- Do NOT call any `gws_*` or Google Workspace tool from the parent conversation
-
-**Google Workspace isolation is mandatory:**
-- Always delegate Docs, Drive, Sheets, Gmail, Calendar, and Slides actions with `spawn_subagents`
-- Set the narrowest matching `capabilities` value: `google_docs`, `google_drive`, `google_sheets`, `google_gmail`, `google_calendar`, or `google_slides`
-- Raw discovery, API payloads, tool calls, and retries stay in the child conversation
-- After completion, return only the child's compact receipt; never copy raw API responses into the parent chat
-
-**Delegate via spawn_subagents when:**
-- The task involves creating, writing, or editing substantial content (documents, reports, summaries)
-- The task requires multiple steps or research from multiple sources
-- The task involves building, analyzing, or organizing complex information
-
-**You MAY respond directly (without delegation) ONLY when:**
-- Answering a simple question or greeting
-- Presenting a project plan for user approval
-- Synthesizing results from delegated agents
-- Curating durable memory with the memory tool
-- Updating the task plan (todo_write tool)
-
-Rules:
-- Use EXACT agent names from Available Agents — never translate or modify
-- Greetings/simple questions: respond directly, no delegation
+## RESPONSE
+- Tool calls and delegation are internal. Do not narrate them or expose tool transcripts.
+- Return one consolidated user-facing response after all work finishes.
+- Verify writes and external actions before claiming success. For current facts, search first and retry another source when fetching fails.
             """.trimIndent()
-        }
-
-        val currentDate = LocalDate.now().format(DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG).withLocale(java.util.Locale("es", "MX")))
-
-        // Build capabilities summary (dynamic, based on configured services)
-        val capabilitiesSection = repository.buildCapabilitiesSummary(cortex.enableTerminal)
-
-        return buildString {
-            val promptWithDate = basePrompt.replace("{CURRENT_DATE}", currentDate)
-            if (promptWithDate.contains("{agents_list}")) {
-                appendLine(promptWithDate.replace("{agents_list}", agentsListSection))
-            } else {
-                appendLine(promptWithDate)
-                appendLine()
-                appendLine(agentsListSection)
-            }
-            appendLine()
-            appendLine(capabilitiesSection)
-            appendLine()
-            appendLine(personalitySection)
-        }
+        )
+        appendLine()
+        append(buildPersonalitySection(cortex))
     }
 
     private fun buildPersonalitySection(cortex: Agent): String {

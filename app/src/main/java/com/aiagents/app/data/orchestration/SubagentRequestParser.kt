@@ -33,7 +33,7 @@ object SubagentRequestParser {
         val taskObjects = when {
             root.has("tasks") && root.get("tasks").isJsonArray ->
                 root.getAsJsonArray("tasks").map { it.asJsonObject }
-            root.has("agent_name") && (root.has("goal") || root.has("task")) -> listOf(root)
+            root.has("goal") || root.has("task") -> listOf(root)
             else -> error("tasks must contain at least one subagent task")
         }
         require(taskObjects.isNotEmpty()) { "tasks must not be empty" }
@@ -42,7 +42,6 @@ object SubagentRequestParser {
             tasks = taskObjects.map { task ->
                 val agentName = task.string("agent_name")?.trim().orEmpty()
                 val goal = (task.string("goal") ?: task.string("task"))?.trim().orEmpty()
-                require(agentName.isNotBlank()) { "agent_name is required" }
                 require(goal.isNotBlank()) { "goal is required" }
                 ParsedSubagentTask(
                     agentName = agentName,

@@ -28,7 +28,6 @@ import com.aiagents.app.R
 import com.aiagents.app.domain.model.MoonshotEndpointType
 import com.aiagents.app.domain.model.NvidiaProviderConfig
 import com.aiagents.app.domain.model.OpenCodeVariantType
-import com.aiagents.app.domain.model.OpenAIAuthMode
 import com.aiagents.app.domain.model.ProviderType
 import com.aiagents.app.domain.model.ZAIPlanType
 
@@ -100,6 +99,7 @@ fun ProvidersScreen(
                             ProviderType.OPENAI -> R.drawable.ic_openai
                             ProviderType.NVIDIA -> R.drawable.ic_nvidia
                             ProviderType.OLLAMA -> R.drawable.ic_ollama
+                            ProviderType.LM_STUDIO -> R.drawable.ic_lm_studio
                             ProviderType.MINIMAX -> R.drawable.ic_minimax
                             ProviderType.MOONSHOT -> R.drawable.ic_moonshot
                             ProviderType.ANTHROPIC -> R.drawable.ic_anthropic
@@ -292,12 +292,11 @@ fun ProviderConfigDialog(
     var selectedOpenCodeVariant by remember { mutableStateOf(state.openCodeVariant) }
     var openCodeVariantExpanded by remember { mutableStateOf(false) }
 
-    var selectedOpenAIAuthMode by remember(type) { mutableStateOf(state.openAIAuthMode) }
-
     val isOpenAI = type == ProviderType.OPENAI
-    val isOpenAIOAuth = isOpenAI && selectedOpenAIAuthMode == OpenAIAuthMode.OAUTH_BACKEND
-    val needsBaseUrl = type == ProviderType.OLLAMA || type == ProviderType.MOONSHOT || isOpenAIOAuth
-    val needsApiKey = type != ProviderType.OLLAMA
+    val isLocalServer = type == ProviderType.OLLAMA || type == ProviderType.LM_STUDIO
+    val needsBaseUrl = isLocalServer || type == ProviderType.MOONSHOT
+    val showsApiKey = type != ProviderType.OLLAMA
+    val requiresApiKey = !isLocalServer
     val isMoonshot = type == ProviderType.MOONSHOT
     val isZAI = type == ProviderType.ZAI
     val isOpenCode = type == ProviderType.OPENCODE
@@ -316,15 +315,13 @@ fun ProviderConfigDialog(
         state.baseUrl,
         state.moonshotEndpoint,
         state.zaiPlan,
-        state.openCodeVariant,
-        state.openAIAuthMode
+        state.openCodeVariant
     ) {
         apiKey = state.apiKey
         baseUrl = state.baseUrl
         selectedMoonshotEndpoint = state.moonshotEndpoint
         selectedZAIPlan = state.zaiPlan
         selectedOpenCodeVariant = state.openCodeVariant
-        selectedOpenAIAuthMode = state.openAIAuthMode
     }
 
     AlertDialog(
@@ -454,55 +451,8 @@ fun ProviderConfigDialog(
                     }
                 }
 
-                if (isOpenAI) {
-                    item {
-                        Text("Método de autenticación", style = MaterialTheme.typography.labelLarge)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FilterChip(
-                                selected = selectedOpenAIAuthMode == OpenAIAuthMode.API_KEY,
-                                onClick = {
-                                    selectedOpenAIAuthMode = OpenAIAuthMode.API_KEY
-                                    viewModel.setOpenAIAuthMode(OpenAIAuthMode.API_KEY)
-                                    saved = false
-                                },
-                                label = { Text("API key") },
-                                modifier = Modifier.weight(1f)
-                            )
-                            FilterChip(
-                                selected = selectedOpenAIAuthMode == OpenAIAuthMode.OAUTH_BACKEND,
-                                onClick = {
-                                    selectedOpenAIAuthMode = OpenAIAuthMode.OAUTH_BACKEND
-                                    viewModel.setOpenAIAuthMode(OpenAIAuthMode.OAUTH_BACKEND)
-                                    saved = false
-                                },
-                                label = { Text("OAuth") },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer
-                            )
-                        ) {
-                            Text(
-                                if (isOpenAIOAuth) {
-                                    "OAuth mediante backend de Cortex. El backend conserva la API key de OpenAI, realiza el inicio de sesión y la renovación; el teléfono solo guarda el token de sesión."
-                                } else {
-                                    "Conexión directa a la API oficial. OpenAI autentica esta API con una API key; el inicio de sesión de ChatGPT no sirve como credencial de inferencia."
-                                },
-                                modifier = Modifier.padding(12.dp),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                        }
-                    }
-                }
-
                 // ── Sección de credenciales ──────────────────────────────
-                if (needsApiKey) {
+                if (showsApiKey) {
                     item {
                         OutlinedTextField(
                             value = apiKey,
@@ -524,8 +474,8 @@ fun ProviderConfigDialog(
                                     Text("API Key - ${selectedZAIPlan.displayName}")
                                 } else if (isOpenCode) {
                                     Text("API Key - ${selectedOpenCodeVariant.displayName}")
-                                } else if (isOpenAIOAuth) {
-                                    Text("Token de sesión OAuth (opcional)")
+                                } else if (type == ProviderType.LM_STUDIO) {
+                                    Text("Token API de LM Studio (opcional)")
                                 } else {
                                     Text("API Key")
                                 }
@@ -548,7 +498,7 @@ fun ProviderConfigDialog(
                     }
                 }
 
-                if (isOpenAI && !isOpenAIOAuth) {
+                if (isOpenAI) {
                     item {
                         OutlinedButton(
                             onClick = {
@@ -617,28 +567,15 @@ fun ProviderConfigDialog(
                                 baseUrl = it
                                 saved = false
                             },
-                            label = { Text(if (isOpenAIOAuth) "URL HTTPS del backend OAuth" else "URL Base") },
+                            label = { Text("URL Base") },
                             modifier = Modifier.fillMaxWidth(),
-                            placeholder = {
-                                Text(
-                                    if (isOpenAIOAuth) "https://tu-backend.example/v1/"
-                                    else viewModel.getDefaultBaseUrl(type)
-                                )
-                            },
+                            placeholder = { Text(viewModel.getDefaultBaseUrl(type)) },
                             singleLine = true
                         )
                         Text(
-                            if (isOpenAIOAuth) {
-                                "Debe ser una URL HTTPS compatible con OpenAI: /models, /chat/completions y, para web_search, /responses."
-                            } else {
-                                "Dejar vacío para usar la URL por defecto"
-                            },
+                            "Dejar vacío para usar la URL por defecto",
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (isOpenAIOAuth && baseUrl.isNotBlank() && !viewModel.isValidOpenAIOAuthBackendUrl(baseUrl)) {
-                                MaterialTheme.colorScheme.error
-                            } else {
-                                MaterialTheme.colorScheme.outline
-                            }
+                            color = MaterialTheme.colorScheme.outline
                         )
                     }
                 }
@@ -836,6 +773,34 @@ fun ProviderConfigDialog(
                     }
                 }
 
+                if (type == ProviderType.LM_STUDIO) {
+                    item {
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text(
+                                    "Para usar LM Studio:",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    "1. Carga un modelo en LM Studio\n" +
+                                        "2. En Developer, inicia el servidor local y habilita el acceso desde la red\n" +
+                                        "3. Emulador: http://10.0.2.2:1234/v1/\n" +
+                                        "4. Teléfono: usa http://IP-DE-TU-PC:1234/v1/\n" +
+                                        "5. Si activas Require Authentication, pega arriba el token generado",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "El teléfono y la computadora deben estar en la misma red.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // ── Botón Guardar inline ──────────────────────────────────
                 if (!saved) {
                     item {
@@ -858,15 +823,14 @@ fun ProviderConfigDialog(
                                 isMoonshot -> apiKey.isNotBlank() || state.moonshotApiKeys.values.any { it.isNotBlank() }
                                 isZAI -> apiKey.isNotBlank() || state.zaiApiKeys.values.any { it.isNotBlank() }
                                 isOpenCode -> apiKey.isNotBlank() || state.openCodeApiKeys.values.any { it.isNotBlank() }
-                                isOpenAIOAuth -> viewModel.isValidOpenAIOAuthBackendUrl(baseUrl)
-                                needsApiKey -> apiKey.isNotBlank()
+                                requiresApiKey -> apiKey.isNotBlank()
                                 else -> true
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(Icons.Default.Save, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
-                            Text("Guardar credenciales")
+                            Text(if (isLocalServer) "Guardar configuración" else "Guardar credenciales")
                         }
                     }
                 }

@@ -28,7 +28,9 @@ private fun toJsonNoNulls(map: Map<String, Any?>): String {
  * Converts a ChatMessage to a Map for streaming requests, omitting null fields.
  * This matches the behavior of Retrofit+Gson which skips null fields by default.
  */
-fun ChatMessage.toStreamingMap(): Map<String, Any> {
+fun ChatMessage.toStreamingMap(
+    requireStringContentForToolCalls: Boolean = false
+): Map<String, Any> {
     val map = mutableMapOf<String, Any>("role" to role)
     // content: use vision format if imageDataUri present
     if (imageDataUri != null) {
@@ -36,17 +38,17 @@ fun ChatMessage.toStreamingMap(): Map<String, Any> {
             mapOf("type" to "text", "text" to content.ifBlank { "Imagen:" }),
             mapOf("type" to "image_url", "image_url" to mapOf("url" to imageDataUri))
         )
+    } else if (role == "assistant" && !toolCalls.isNullOrEmpty() && content.isBlank()) {
+        // Most gateways accept an omitted field; LM Studio/Gemma requires a string.
+        if (requireStringContentForToolCalls) map["content"] = ""
     } else {
         map["content"] = content
     }
     toolCalls?.let { tcs ->
-        // Normalize type to "function" for OpenAI-compatible APIs (may be "tool_use" from Anthropic providers)
-        map["tool_calls"] = tcs.map { tc ->
-            if (tc.type != "function") tc.copy(type = "function") else tc
-        }
+        map["tool_calls"] = tcs.map { it.toOpenAIRequestMap() }
     }
     toolCallId?.let { map["tool_call_id"] = it }
-    name?.let { map["name"] = it }
+    if (role != "tool") name?.let { map["name"] = it }
     return map
 }
 
@@ -76,11 +78,10 @@ fun streamOpenAICompatible(
         return@flow
     }
 
-    val rawBody = response.body?.string()
-    response.close()
-
-    if (rawBody.isNullOrBlank()) {
+    val responseBody = response.body
+    if (responseBody == null) {
         emit(StreamingChunk(error = "Empty response body"))
+        response.close()
         return@flow
     }
 
@@ -89,9 +90,22 @@ fun streamOpenAICompatible(
     val toolCallsMap = mutableMapOf<Int, MutableToolCallAccumulator>()
     var finishReason: String? = null
 
-    // Determine if response is SSE (has at least one "data:" line) or plain JSON
-    val lines = rawBody.lines()
-    val isSSE = lines.any { it.startsWith("data:") }
+    // Consume SSE lazily so each token reaches the UI as soon as LM Studio sends it.
+    // Calling responseBody.string() for an event stream blocks until generation ends.
+    val isSSE = response.header("Content-Type")
+        ?.contains("text/event-stream", ignoreCase = true) == true
+    val reader = if (isSSE) BufferedReader(responseBody.charStream()) else null
+    val rawBody = if (isSSE) null else responseBody.string()
+    if (!isSSE && rawBody.isNullOrBlank()) {
+        emit(StreamingChunk(error = "Empty response body"))
+        response.close()
+        return@flow
+    }
+    val lines: Sequence<String> = if (isSSE) {
+        generateSequence { reader?.readLine() }
+    } else {
+        rawBody!!.lineSequence()
+    }
 
     if (isSSE) {
         // ── SSE path ─────────────────────────────────────────────────────────
@@ -157,14 +171,16 @@ fun streamOpenAICompatible(
         } catch (e: Exception) {
             Log.e(TAG, "Error reading SSE stream", e)
             emit(StreamingChunk(error = "Stream error: ${e.message}"))
+            response.close()
             return@flow
         }
     } else {
         // ── JSON fallback path (non-streaming response) ───────────────────────
         // Some APIs return plain JSON even when stream:true is requested.
         Log.d(TAG, "Non-SSE response detected, attempting JSON parse")
+        val jsonBody = rawBody.orEmpty()
         try {
-            val json = JsonParser.parseString(rawBody).asJsonObject
+            val json = JsonParser.parseString(jsonBody).asJsonObject
             val choices = json.getAsJsonArray("choices")
             if (choices != null && choices.size() > 0) {
                 val choice = choices[0].asJsonObject
@@ -202,14 +218,15 @@ fun streamOpenAICompatible(
                     emit(StreamingChunk(error = errorMsg))
                     return@flow
                 }
-                Log.w(TAG, "Unexpected JSON response without choices (${rawBody.length} chars)")
+                Log.w(TAG, "Unexpected JSON response without choices (${jsonBody.length} chars)")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "JSON fallback parse failed: ${e.message}. Raw: ${rawBody.take(200)}")
-            emit(StreamingChunk(error = "Unexpected response format: ${rawBody.take(100)}"))
+            Log.e(TAG, "JSON fallback parse failed: ${e.message}. Raw: ${jsonBody.take(200)}")
+            emit(StreamingChunk(error = "Unexpected response format: ${jsonBody.take(100)}"))
             return@flow
         }
     }
+    response.close()
 
     // Note: <think> tag extraction is now handled in real-time by
     // withRealtimeThinkTagParsing() — no need for post-stream extraction here.

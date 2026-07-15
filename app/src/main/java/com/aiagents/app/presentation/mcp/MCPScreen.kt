@@ -2,6 +2,7 @@ package com.aiagents.app.presentation.mcp
 
 import android.content.Context
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.ui.res.stringResource
 import com.aiagents.app.R
+import com.aiagents.app.domain.model.WebSearchProvider
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -90,10 +92,20 @@ fun MCPScreen(
                 }
             }
 
+            item {
+                WebSearchProviderCard(
+                    selectedProvider = uiState.webSearchProvider,
+                    braveIsConfigured = uiState.braveIsConfigured,
+                    serpApiIsConfigured = uiState.serpApiIsConfigured,
+                    onProviderSelected = viewModel::selectWebSearchProvider
+                )
+            }
+
             // Brave Search Card
             item {
                 BraveSearchCard(
                     isConfigured = uiState.braveIsConfigured,
+                    isSelected = uiState.webSearchProvider == WebSearchProvider.BRAVE,
                     isLoading = uiState.isLoading,
                     onConfigure = { viewModel.showBraveConfigDialog() }
                 )
@@ -112,6 +124,7 @@ fun MCPScreen(
             item {
                 SerpApiCard(
                     isConfigured = uiState.serpApiIsConfigured,
+                    isSelected = uiState.webSearchProvider == WebSearchProvider.SERPAPI,
                     isLoading = uiState.isLoading,
                     onConfigure = { viewModel.showSerpApiConfigDialog() }
                 )
@@ -322,8 +335,106 @@ fun MCPScreen(
 }
 
 @Composable
+private fun WebSearchProviderCard(
+    selectedProvider: WebSearchProvider,
+    braveIsConfigured: Boolean,
+    serpApiIsConfigured: Boolean,
+    onProviderSelected: (WebSearchProvider) -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Language, contentDescription = null)
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text(
+                        "Motor de búsqueda web",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        "La opción nativa no utiliza API keys",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            WebSearchProviderOption(
+                title = "Nativo (predeterminado)",
+                description = "DuckDuckGo HTML y extracción local con Jsoup",
+                selected = selectedProvider == WebSearchProvider.NATIVE,
+                enabled = true,
+                onClick = { onProviderSelected(WebSearchProvider.NATIVE) }
+            )
+            WebSearchProviderOption(
+                title = "Brave Search",
+                description = if (braveIsConfigured) "Configurado · uso opcional" else "Requiere configurar una API key",
+                selected = selectedProvider == WebSearchProvider.BRAVE,
+                enabled = braveIsConfigured,
+                onClick = { onProviderSelected(WebSearchProvider.BRAVE) }
+            )
+            WebSearchProviderOption(
+                title = "SerpAPI",
+                description = if (serpApiIsConfigured) "Configurado · uso opcional" else "Requiere configurar una API key",
+                selected = selectedProvider == WebSearchProvider.SERPAPI,
+                enabled = serpApiIsConfigured,
+                onClick = { onProviderSelected(WebSearchProvider.SERPAPI) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun WebSearchProviderOption(
+    title: String,
+    description: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = null,
+            enabled = enabled
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+            )
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 1f else 0.55f)
+            )
+        }
+    }
+}
+
+@Composable
 private fun BraveSearchCard(
     isConfigured: Boolean,
+    isSelected: Boolean,
     isLoading: Boolean,
     onConfigure: () -> Unit
 ) {
@@ -332,7 +443,7 @@ private fun BraveSearchCard(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isConfigured)
+            containerColor = if (isSelected)
                 MaterialTheme.colorScheme.primaryContainer
             else
                 MaterialTheme.colorScheme.surface
@@ -371,7 +482,11 @@ private fun BraveSearchCard(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        if (isConfigured) "Configurado y activo" else "No configurado",
+                        when {
+                            isSelected -> "Seleccionado para búsquedas"
+                            isConfigured -> "Configurado · uso opcional"
+                            else -> "No configurado"
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (isConfigured)
                             MaterialTheme.colorScheme.primary
@@ -741,6 +856,7 @@ private fun GoogleMapsConfigDialog(
 @Composable
 private fun SerpApiCard(
     isConfigured: Boolean,
+    isSelected: Boolean,
     isLoading: Boolean,
     onConfigure: () -> Unit
 ) {
@@ -749,7 +865,7 @@ private fun SerpApiCard(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isConfigured)
+            containerColor = if (isSelected)
                 MaterialTheme.colorScheme.primaryContainer
             else
                 MaterialTheme.colorScheme.surface
@@ -788,7 +904,11 @@ private fun SerpApiCard(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        if (isConfigured) "Configurado y activo" else "No configurado",
+                        when {
+                            isSelected -> "Seleccionado para búsquedas"
+                            isConfigured -> "Configurado · uso opcional"
+                            else -> "No configurado"
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (isConfigured)
                             MaterialTheme.colorScheme.primary

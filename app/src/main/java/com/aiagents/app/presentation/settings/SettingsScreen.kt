@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.DeveloperBoard
@@ -52,6 +53,7 @@ fun SettingsScreen(
     onNavigateToLocalModels: () -> Unit,
     onNavigateToMemory: () -> Unit,
     onNavigateToSkills: () -> Unit,
+    onNavigateToScheduledTasks: () -> Unit,
     onNavigateToMCP: () -> Unit,
     onNavigateToGoogleWorkspace: () -> Unit
 ) {
@@ -80,6 +82,20 @@ fun SettingsScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
+            item {
+                SettingsSection(
+                    title = stringResource(R.string.settings_section_automation),
+                    entries = listOf(
+                        SettingsEntry(
+                            icon = Icons.Default.Alarm,
+                            title = stringResource(R.string.settings_scheduled_tasks_title),
+                            subtitle = stringResource(R.string.settings_scheduled_tasks_subtitle),
+                            onClick = onNavigateToScheduledTasks
+                        )
+                    )
+                )
+            }
+
             item {
                 SettingsSection(
                     title = stringResource(R.string.settings_section_ai),

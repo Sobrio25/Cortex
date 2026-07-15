@@ -32,6 +32,12 @@ class AIClientFactory(
                 NvidiaProviderConfig.API_BASE_URL
             )
             ProviderType.OLLAMA -> OllamaClient(okHttpClient, baseUrl?.takeIf { it.isNotBlank() } ?: "http://localhost:11434")
+            ProviderType.LM_STUDIO -> OpenAIClient(
+                okHttpClient,
+                apiKey,
+                baseUrl?.takeIf { it.isNotBlank() } ?: "http://10.0.2.2:1234/v1/",
+                requireStringContentForToolCalls = true
+            )
             ProviderType.MINIMAX -> MiniMaxClient(okHttpClient, apiKey)
             ProviderType.MOONSHOT -> MoonshotClient(
                 okHttpClient, apiKey, baseUrl?.takeIf { it.isNotBlank() },

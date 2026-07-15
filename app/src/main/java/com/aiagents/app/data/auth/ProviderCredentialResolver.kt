@@ -2,10 +2,8 @@ package com.aiagents.app.data.auth
 
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.domain.model.MoonshotEndpointType
-import com.aiagents.app.domain.model.OpenAIAuthMode
 import com.aiagents.app.domain.model.ProviderType
 import com.aiagents.app.domain.model.ZAIPlanType
-import java.net.URI
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,6 +24,10 @@ class ProviderCredentialResolver @Inject constructor(
         ProviderType.LOCAL -> ProviderCredentials(apiKey = "", baseUrl = null)
         ProviderType.OLLAMA -> ProviderCredentials(
             apiKey = "",
+            baseUrl = securePreferences.getBaseUrl(provider)
+        )
+        ProviderType.LM_STUDIO -> ProviderCredentials(
+            apiKey = securePreferences.getApiKey(provider).orEmpty(),
             baseUrl = securePreferences.getBaseUrl(provider)
         )
         ProviderType.OPENAI -> resolveOpenAI()
@@ -53,22 +55,11 @@ class ProviderCredentialResolver @Inject constructor(
             ?.let { ProviderCredentials(it, securePreferences.getBaseUrl(provider)) }
     }
 
-    fun resolveOpenAI(): ProviderCredentials? = when (securePreferences.getOpenAIAuthMode()) {
-        OpenAIAuthMode.API_KEY -> securePreferences.getApiKey(ProviderType.OPENAI)
+    fun resolveOpenAI(): ProviderCredentials? =
+        securePreferences.getOpenAIProviderApiKey()
             ?.trim()
             ?.takeIf(String::isNotEmpty)
             ?.let { ProviderCredentials(it, OpenAIEndpointPolicy.OFFICIAL_API_BASE_URL) }
-
-        OpenAIAuthMode.OAUTH_BACKEND -> {
-            val baseUrl = OpenAIEndpointPolicy.normalizeBackendBaseUrl(
-                securePreferences.getOpenAIBackendBaseUrl().orEmpty()
-            ) ?: return null
-            ProviderCredentials(
-                apiKey = securePreferences.getOpenAIBackendToken().orEmpty(),
-                baseUrl = baseUrl
-            )
-        }
-    }
 
     private fun <T> resolveVariant(
         active: T,
@@ -90,14 +81,4 @@ class ProviderCredentialResolver @Inject constructor(
 
 object OpenAIEndpointPolicy {
     const val OFFICIAL_API_BASE_URL = "https://api.openai.com/v1/"
-
-    /** A backend URL is a credential destination, so URL credentials and suffixes are rejected. */
-    fun normalizeBackendBaseUrl(rawValue: String): String? = runCatching {
-        val uri = URI(rawValue.trim()).normalize()
-        if (!uri.scheme.equals("https", ignoreCase = true)) return null
-        if (uri.host.isNullOrBlank() || uri.rawUserInfo != null) return null
-        if (uri.rawQuery != null || uri.rawFragment != null) return null
-        if (uri.host.trimEnd('.').equals("api.openai.com", ignoreCase = true)) return null
-        uri.toASCIIString().trimEnd('/') + "/"
-    }.getOrNull()
 }

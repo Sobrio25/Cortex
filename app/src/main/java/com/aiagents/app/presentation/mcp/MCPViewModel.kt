@@ -7,6 +7,7 @@ import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.model.BraveSearchConfig
 import com.aiagents.app.data.model.SerpApiConfig
 import com.aiagents.app.data.model.MCPServerEntity
+import com.aiagents.app.domain.model.WebSearchProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,6 +16,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class MCPUiState(
+    val webSearchProvider: WebSearchProvider = WebSearchProvider.NATIVE,
     val braveApiKey: String = "",
     val braveIsConfigured: Boolean = false,
     val googleMapsApiKey: String = "",
@@ -61,6 +63,7 @@ class MCPViewModel @Inject constructor(
     val uiState: StateFlow<MCPUiState> = _uiState.asStateFlow()
 
     init {
+        loadWebSearchProvider()
         loadBraveConfig()
         loadGoogleMapsConfig()
         loadSerpApiConfig()
@@ -74,6 +77,34 @@ class MCPViewModel @Inject constructor(
         loadGoogleImagenConfig()
         loadDalleConfig()
         initializeMCPServers()
+    }
+
+    private fun loadWebSearchProvider() {
+        val stored = securePreferences.getWebSearchProvider()
+        val available = when (stored) {
+            WebSearchProvider.NATIVE -> true
+            WebSearchProvider.BRAVE -> securePreferences.hasBraveApiKey()
+            WebSearchProvider.SERPAPI -> securePreferences.hasSerpApiKey()
+        }
+        val selected = stored.takeIf { available } ?: WebSearchProvider.NATIVE
+        if (selected != stored) securePreferences.setWebSearchProvider(selected)
+        _uiState.value = _uiState.value.copy(webSearchProvider = selected)
+    }
+
+    fun selectWebSearchProvider(provider: WebSearchProvider) {
+        val available = when (provider) {
+            WebSearchProvider.NATIVE -> true
+            WebSearchProvider.BRAVE -> _uiState.value.braveIsConfigured
+            WebSearchProvider.SERPAPI -> _uiState.value.serpApiIsConfigured
+        }
+        if (!available) {
+            _uiState.value = _uiState.value.copy(
+                errorMessage = "Configura la API key de ${if (provider == WebSearchProvider.BRAVE) "Brave" else "SerpAPI"} antes de seleccionarlo."
+            )
+            return
+        }
+        securePreferences.setWebSearchProvider(provider)
+        _uiState.value = _uiState.value.copy(webSearchProvider = provider, errorMessage = null)
     }
 
     private fun initializeMCPServers() {
@@ -376,8 +407,14 @@ class MCPViewModel @Inject constructor(
                     // Eliminar configuracion
                     securePreferences.removeBraveApiKey()
                     mcpDao.setServerEnabled("brave_search", false)
+                    val selectedProvider = if (_uiState.value.webSearchProvider == WebSearchProvider.BRAVE) {
+                        WebSearchProvider.NATIVE.also(securePreferences::setWebSearchProvider)
+                    } else {
+                        _uiState.value.webSearchProvider
+                    }
 
                     _uiState.value = _uiState.value.copy(
+                        webSearchProvider = selectedProvider,
                         braveApiKey = "",
                         braveIsConfigured = false,
                         isLoading = false,
@@ -669,8 +706,14 @@ class MCPViewModel @Inject constructor(
                     // Eliminar configuracion
                     securePreferences.removeSerpApiKey()
                     mcpDao.setServerEnabled("serpapi", false)
+                    val selectedProvider = if (_uiState.value.webSearchProvider == WebSearchProvider.SERPAPI) {
+                        WebSearchProvider.NATIVE.also(securePreferences::setWebSearchProvider)
+                    } else {
+                        _uiState.value.webSearchProvider
+                    }
 
                     _uiState.value = _uiState.value.copy(
+                        webSearchProvider = selectedProvider,
                         serpApiKey = "",
                         serpApiIsConfigured = false,
                         isLoading = false,

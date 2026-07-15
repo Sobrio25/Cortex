@@ -3,11 +3,10 @@ package com.aiagents.app.data.local
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
-import com.aiagents.app.data.auth.OpenAIEndpointPolicy
 import com.aiagents.app.domain.model.MoonshotEndpointType
 import com.aiagents.app.domain.model.OpenCodeVariantType
-import com.aiagents.app.domain.model.OpenAIAuthMode
 import com.aiagents.app.domain.model.ProviderType
+import com.aiagents.app.domain.model.WebSearchProvider
 import com.aiagents.app.domain.model.ZAIPlanType
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -70,44 +69,37 @@ class SecurePreferences @Inject constructor(
         return getApiKey(provider) != null
     }
 
-    fun getOpenAIAuthMode(): OpenAIAuthMode = OpenAIAuthMode.fromStoredValue(
-        encryptedPrefs.getString("OPENAI_AUTH_MODE", null)
-    )
-
-    /** Saves the selected mode and all of its destination-bound credentials in one transaction. */
-    fun saveOpenAIConfig(
-        mode: OpenAIAuthMode,
-        credential: String,
-        backendBaseUrl: String
-    ) {
-        val editor = encryptedPrefs.edit().putString("OPENAI_AUTH_MODE", mode.name)
-        when (mode) {
-            OpenAIAuthMode.API_KEY -> {
-                editor.putString("${ProviderType.OPENAI.name}_API_KEY", credential.trim())
-            }
-            OpenAIAuthMode.OAUTH_BACKEND -> {
-                val normalizedUrl = requireNotNull(
-                    OpenAIEndpointPolicy.normalizeBackendBaseUrl(backendBaseUrl)
-                ) { "La URL del backend de OpenAI no es válida" }
-                editor.putString("OPENAI_BACKEND_BASE_URL", normalizedUrl)
-                if (credential.isBlank()) editor.remove("OPENAI_BACKEND_TOKEN")
-                else editor.putString("OPENAI_BACKEND_TOKEN", credential.trim())
-            }
-        }
-        // Remove the old shared URL so it can never be paired with a direct API key.
-        editor.remove("${ProviderType.OPENAI.name}_BASE_URL").apply()
+    /**
+     * OpenAI's inference API is configured only with its official API key flow.
+     * Legacy proxy-OAuth values are deleted so obsolete session tokens are not retained.
+     */
+    fun saveOpenAIProviderApiKey(apiKey: String) {
+        encryptedPrefs.edit()
+            .putString("${ProviderType.OPENAI.name}_API_KEY", apiKey.trim())
+            .remove("OPENAI_AUTH_MODE")
+            .remove("OPENAI_BACKEND_BASE_URL")
+            .remove("OPENAI_BACKEND_TOKEN")
+            .remove("${ProviderType.OPENAI.name}_BASE_URL")
+            .apply()
     }
 
-    fun getOpenAIBackendBaseUrl(): String? {
-        val current = encryptedPrefs.getString("OPENAI_BACKEND_BASE_URL", null)
-        if (!current.isNullOrBlank()) return current
-        // One-way compatibility for installations that saved the proxy URL in the old shared key.
-        if (getOpenAIAuthMode() != OpenAIAuthMode.OAUTH_BACKEND) return null
-        return encryptedPrefs.getString("${ProviderType.OPENAI.name}_BASE_URL", null)
+    fun getOpenAIProviderApiKey(): String? {
+        clearLegacyOpenAIOAuthConfig()
+        return getApiKey(ProviderType.OPENAI)
     }
 
-    fun getOpenAIBackendToken(): String? = encryptedPrefs.getString("OPENAI_BACKEND_TOKEN", null)
-        ?.trim()?.takeIf { it.isNotEmpty() }
+    private fun clearLegacyOpenAIOAuthConfig() {
+        val legacyKeys = listOf(
+            "OPENAI_AUTH_MODE",
+            "OPENAI_BACKEND_BASE_URL",
+            "OPENAI_BACKEND_TOKEN",
+            "${ProviderType.OPENAI.name}_BASE_URL"
+        )
+        if (legacyKeys.none(encryptedPrefs::contains)) return
+        encryptedPrefs.edit().also { editor ->
+            legacyKeys.forEach(editor::remove)
+        }.apply()
+    }
 
     /** Stable, salted identifier for cache isolation; never persists a raw credential or URL. */
     @Synchronized
@@ -288,6 +280,14 @@ class SecurePreferences @Inject constructor(
     fun hasSerpApiKey(): Boolean {
         return !getSerpApiKey().isNullOrBlank()
     }
+
+    fun setWebSearchProvider(provider: WebSearchProvider) {
+        encryptedPrefs.edit().putString("WEB_SEARCH_PROVIDER", provider.name).apply()
+    }
+
+    fun getWebSearchProvider(): WebSearchProvider = WebSearchProvider.fromStoredValue(
+        encryptedPrefs.getString("WEB_SEARCH_PROVIDER", null)
+    )
 
     // Canva
     fun saveCanvaAccessToken(token: String) {

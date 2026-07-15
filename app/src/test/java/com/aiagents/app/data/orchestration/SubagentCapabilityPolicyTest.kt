@@ -22,6 +22,8 @@ class SubagentCapabilityPolicyTest {
         )
 
         assertTrue("read_text_file" in tools)
+        assertTrue("skill_list" in tools)
+        assertTrue("skill_view" in tools)
         assertFalse("write_file" in tools)
         assertFalse("execute_command" in tools)
         assertFalse(DelegationToolHandler.TOOL_NAME in tools)

@@ -38,11 +38,7 @@ class CortexProfileStore @Inject constructor(
         file = File(directory, SOUL_FILE_NAME),
         maxChars = HERMES_CONTEXT_FILE_MAX_CHARS,
         defaultContent = {
-            defaultSoul(
-                agentName = securePreferences.getCortexName() ?: DEFAULT_AGENT_NAME,
-                userName = securePreferences.getUserName(),
-                preferredName = securePreferences.getPreferredUserName()
-            )
+            defaultSoul(securePreferences.getCortexName() ?: DEFAULT_AGENT_NAME)
         }
     )
     private val userDocument = ProfileDocument(
@@ -74,7 +70,7 @@ class CortexProfileStore @Inject constructor(
         val canonicalAgentName = agentName.trim().ifBlank { DEFAULT_AGENT_NAME }
         securePreferences.saveCortexName(canonicalAgentName)
         _soulSnapshots.value = soulDocument.replace(
-            defaultSoul(canonicalAgentName, userName, preferredName),
+            defaultSoul(canonicalAgentName),
             expectedRevision = null
         ).snapshot
         _userSnapshots.value = userDocument.replace(
@@ -96,16 +92,18 @@ class CortexProfileStore @Inject constructor(
         val storedAgentName = securePreferences.getCortexName() ?: DEFAULT_AGENT_NAME
         val currentSoul = soulDocument.reload()
         val generatedCandidates = setOf(
-            defaultSoul(DEFAULT_AGENT_NAME, null, null),
-            defaultSoul(DEFAULT_AGENT_NAME, userName, preferredName),
-            defaultSoul(storedAgentName, null, null),
-            defaultSoul(storedAgentName, userName, preferredName)
+            defaultSoul(DEFAULT_AGENT_NAME),
+            defaultSoul(storedAgentName),
+            legacyDefaultSoul(DEFAULT_AGENT_NAME, null, null),
+            legacyDefaultSoul(DEFAULT_AGENT_NAME, userName, preferredName),
+            legacyDefaultSoul(storedAgentName, null, null),
+            legacyDefaultSoul(storedAgentName, userName, preferredName)
         )
         if (currentSoul.storageError == null && currentSoul.content in generatedCandidates &&
-            currentSoul.content != defaultSoul(canonicalAgentName, userName, preferredName)
+            currentSoul.content != defaultSoul(canonicalAgentName)
         ) {
             _soulSnapshots.value = soulDocument.replace(
-                defaultSoul(canonicalAgentName, userName, preferredName),
+                defaultSoul(canonicalAgentName),
                 expectedRevision = currentSoul.revision
             ).snapshot
         } else {
@@ -309,7 +307,18 @@ class CortexProfileStore @Inject constructor(
         private const val MAX_DOCUMENT_BYTES = 64 * 1024
         private const val MAX_DOCUMENT_UTF16_UNITS = 65_536
 
-        internal fun defaultSoul(
+        internal fun defaultSoul(agentName: String): String {
+            val safeAgent = singleLine(agentName).ifBlank { DEFAULT_AGENT_NAME }
+            return """
+                # SOUL.md
+
+                You are $safeAgent, a capable personal AI running on the user's Android device.
+
+                Be honest about uncertainty and completed actions. Protect the user's privacy, ask before consequential external actions, and use available tools when they improve accuracy. Match the user's language and adapt to their preferences without pretending to know facts that are not in context.
+            """.trimIndent()
+        }
+
+        private fun legacyDefaultSoul(
             agentName: String,
             userName: String?,
             preferredName: String?

@@ -35,6 +35,10 @@ class TokenCounterTest {
             32_768,
             TokenCounter.getContextWindowForModel("vendor/custom-chat", ProviderType.OPENROUTER)
         )
+        assertEquals(
+            32_768,
+            TokenCounter.getContextWindowForModel("local/custom-chat", ProviderType.LM_STUDIO)
+        )
     }
 
     @Test

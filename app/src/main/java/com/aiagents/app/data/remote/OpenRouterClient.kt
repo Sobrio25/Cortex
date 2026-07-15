@@ -173,26 +173,29 @@ class OpenRouterClient(
     }
 }
 
-internal fun ChatMessage.toRequestFormat(): MessageRequestFormat {
+internal fun ChatMessage.toRequestFormat(
+    requireStringContentForToolCalls: Boolean = false
+): MessageRequestFormat {
     // Si hay imagen, serializar content como lista de content blocks (OpenAI vision)
     val contentValue: Any? = if (imageDataUri != null) {
         listOf(
             mapOf("type" to "text", "text" to content.ifBlank { "Imagen:" }),
             mapOf("type" to "image_url", "image_url" to mapOf("url" to imageDataUri))
         )
+    } else if (role == "assistant" && !toolCalls.isNullOrEmpty() && content.isBlank()) {
+        // LM Studio/Gemma requires content to be a string even on a tool-call-only turn.
+        // Other gateways are kept on the established omitted-content behavior.
+        if (requireStringContentForToolCalls) "" else null
     } else {
         content
-    }
-    // Normalize tool call type to "function" for OpenAI-compatible APIs (may be "tool_use" from Anthropic providers)
-    val normalizedToolCalls = toolCalls?.map { tc ->
-        if (tc.type != "function") tc.copy(type = "function") else tc
     }
     return MessageRequestFormat(
         role = role,
         content = contentValue,
-        toolCalls = normalizedToolCalls,
+        toolCalls = toolCalls?.map { it.toOpenAIRequestMap() },
         toolCallId = toolCallId,
-        name = name
+        // `name` belongs to legacy function messages. Strict gateways reject it on role=tool.
+        name = name.takeUnless { role == "tool" }
     )
 }
 
@@ -200,10 +203,24 @@ data class MessageRequestFormat(
     val role: String,
     val content: Any?,   // String para texto, List para vision content blocks
     @SerializedName("tool_calls")
-    val toolCalls: List<ToolCall>? = null,
+    val toolCalls: List<Map<String, Any>>? = null,
     @SerializedName("tool_call_id")
     val toolCallId: String? = null,
     val name: String? = null
+)
+
+/**
+ * Produces the exact OpenAI-compatible wire shape without relying on Gson reflection over
+ * domain models. Domain field names may be obfuscated in release builds, while protocol keys
+ * must remain stable.
+ */
+internal fun ToolCall.toOpenAIRequestMap(): Map<String, Any> = mapOf(
+    "id" to id,
+    "type" to "function",
+    "function" to mapOf(
+        "name" to function.name,
+        "arguments" to function.arguments
+    )
 )
 
 data class ChatRequest(

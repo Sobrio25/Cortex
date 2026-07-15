@@ -15,13 +15,14 @@ data class SkillTranscriptMessage(
 )
 
 /**
- * Redacts and bounds chat input before it is persisted for local skill review.
+ * Redacts and bounds chat input before it is persisted for background learning review.
  * System prompts and tool results are deliberately excluded.
  */
 object SkillTranscriptRedactor {
-    private const val MAX_MESSAGES = 12
-    private const val MAX_MESSAGE_CHARS = 700
-    private const val MAX_TRANSCRIPT_CHARS = 7_000
+    // Ten ordinary turns plus a reasonable number of intermediate tool-call iterations.
+    private const val MAX_MESSAGES = 40
+    private const val MAX_MESSAGE_CHARS = 900
+    private const val MAX_TRANSCRIPT_CHARS = 20_000
 
     private val secretAssignment = Regex(
         "(?i)\\b(api[ _-]?key|token|secret|password|passphrase|contraseña)\\s*[:=]\\s*[^\\s,;]+"

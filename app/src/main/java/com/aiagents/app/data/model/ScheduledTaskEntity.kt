@@ -6,12 +6,17 @@ import androidx.room.PrimaryKey
 
 @Entity(
     tableName = "scheduled_tasks",
-    indices = [Index(value = ["nextRunAt"]), Index(value = ["enabled"])]
+    indices = [
+        Index(value = ["nextRunAt"]),
+        Index(value = ["enabled"]),
+        Index(value = ["conversationId"])
+    ]
 )
 data class ScheduledTaskEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
     val workspaceId: Long,
+    val conversationId: Long? = null,     // chat where every execution is persisted
     val agentName: String? = null,       // null = Cortex
     val prompt: String,                   // what to execute
     val scheduleType: String,             // once, daily, weekly, interval

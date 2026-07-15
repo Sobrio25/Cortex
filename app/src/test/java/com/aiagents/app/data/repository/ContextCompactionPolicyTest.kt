@@ -2,6 +2,8 @@ package com.aiagents.app.data.repository
 
 import com.aiagents.app.domain.model.Message
 import com.aiagents.app.domain.model.MessageRole
+import com.aiagents.app.domain.model.ToolCall
+import com.aiagents.app.domain.model.ToolFunction
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -9,7 +11,7 @@ import org.junit.Test
 
 class ContextCompactionPolicyTest {
     @Test
-    fun `visible history retains every original message and hides only checkpoint`() {
+    fun `visible history retains completed messages and hides checkpoint`() {
         val original = (1L..6L).map { id ->
             Message(
                 id = id,
@@ -27,6 +29,47 @@ class ContextCompactionPolicyTest {
         val persisted = original.take(4) + checkpoint + original.drop(4)
 
         assertEquals(original.map { it.id }, ContextCompactionPolicy.visibleHistory(persisted).map { it.id })
+    }
+
+    @Test
+    fun `visible history hides tool protocol turns but keeps final response`() {
+        val user = Message(1, MessageRole.USER, "List my skills", timestamp = 1)
+        val preamble = Message(
+            id = 2,
+            role = MessageRole.ASSISTANT,
+            content = "I'll list them now.",
+            timestamp = 2,
+            toolCalls = listOf(
+                ToolCall("call-1", function = ToolFunction("skill_list", "{}"))
+            )
+        )
+        val tool = Message(3, MessageRole.TOOL, "skill-a", timestamp = 3)
+        val final = Message(4, MessageRole.ASSISTANT, "You have skill-a.", timestamp = 4)
+
+        val visible = ContextCompactionPolicy.visibleHistory(listOf(user, preamble, tool, final))
+
+        assertEquals(listOf(1L, 4L), visible.map { it.id })
+    }
+
+    @Test
+    fun `command view includes assistant calls and tool responses`() {
+        val preamble = Message(
+            id = 1,
+            role = MessageRole.ASSISTANT,
+            content = "Checking.",
+            toolCalls = listOf(
+                ToolCall("call-1", function = ToolFunction("skill_list", "{}"))
+            )
+        )
+        val tool = Message(2, MessageRole.TOOL, "skill-a", timestamp = 2)
+
+        assertEquals(
+            listOf(preamble, tool),
+            ContextCompactionPolicy.visibleHistory(
+                listOf(preamble, tool),
+                includeInternalActions = true
+            )
+        )
     }
 
     @Test

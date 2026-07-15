@@ -33,7 +33,8 @@ object SubagentCapabilityPolicy {
     private val writeFiles = setOf("write_file")
     private val web = setOf("duckduckgo_search", "brave_web_search", "serpapi_search") +
         UnifiedWebToolHandler.ALL_TOOL_NAMES
-    private val safeReads = readFiles + web + MemoryToolHandler.READ_TOOL_NAMES + setOf("skill_list")
+    private val safeReads = readFiles + web + MemoryToolHandler.READ_TOOL_NAMES +
+        setOf("skill_list", "skill_view")
     private val codeTools = writeFiles + setOf("execute_command") + CodeExecutionHandler.ALL_TOOL_NAMES
 
     fun allowedTools(

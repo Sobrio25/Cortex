@@ -1,6 +1,8 @@
 package com.aiagents.app.data.terminal
 
 import android.util.Log
+import com.aiagents.app.data.local.SecurePreferences
+import com.aiagents.app.domain.model.WebSearchProvider
 import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -17,7 +19,8 @@ data class SerpAPISearchResult(
 
 @Singleton
 class SerpAPIToolHandler @Inject constructor(
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient,
+    private val securePreferences: SecurePreferences
 ) {
     companion object {
         private const val TAG = "SerpAPIToolHandler"
@@ -74,6 +77,13 @@ PREFIERE esta herramienta sobre brave_web_search para busquedas especializadas (
         arguments: String,
         apiKey: String
     ): SerpAPISearchResult {
+        if (securePreferences.getWebSearchProvider() != WebSearchProvider.SERPAPI) {
+            return SerpAPISearchResult(
+                toolCallId,
+                false,
+                "SerpAPI está configurado, pero no está seleccionado como proveedor de búsqueda web."
+            )
+        }
         return try {
             val args = JsonParser.parseString(arguments).asJsonObject
             val query = args.get("query")?.asString

@@ -1,6 +1,8 @@
 package com.aiagents.app.data.terminal
 
 import android.util.Log
+import com.aiagents.app.data.local.SecurePreferences
+import com.aiagents.app.domain.model.WebSearchProvider
 import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -17,7 +19,8 @@ data class BraveSearchResult(
 
 @Singleton
 class BraveSearchToolHandler @Inject constructor(
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient,
+    private val securePreferences: SecurePreferences
 ) {
     companion object {
         private const val TAG = "BraveSearchToolHandler"
@@ -56,6 +59,13 @@ class BraveSearchToolHandler @Inject constructor(
         arguments: String,
         apiKey: String
     ): BraveSearchResult {
+        if (securePreferences.getWebSearchProvider() != WebSearchProvider.BRAVE) {
+            return BraveSearchResult(
+                toolCallId,
+                false,
+                "Brave Search está configurado, pero no está seleccionado como proveedor de búsqueda web."
+            )
+        }
         return try {
             val args = JsonParser.parseString(arguments).asJsonObject
             val query = args.get("query")?.asString

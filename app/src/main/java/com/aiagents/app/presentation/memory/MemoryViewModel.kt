@@ -10,6 +10,7 @@ import com.aiagents.app.data.memory.CortexMarkdownMemoryStore
 import com.aiagents.app.data.memory.CortexMemoryPolicy
 import com.aiagents.app.data.memory.CortexMemorySnapshot
 import com.aiagents.app.data.memory.CortexProfileStore
+import com.aiagents.app.data.memory.SecondaryMemoryStore
 import com.aiagents.app.data.model.MemoryEntity
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -32,6 +33,7 @@ class MemoryViewModel @Inject constructor(
     private val memoryDao: MemoryDao,
     private val cortexMarkdownMemoryStore: CortexMarkdownMemoryStore,
     private val cortexProfileStore: CortexProfileStore,
+    private val secondaryMemoryStore: SecondaryMemoryStore,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -52,6 +54,9 @@ class MemoryViewModel @Inject constructor(
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery
 
+    private val _exportResult = MutableStateFlow<String?>(null)
+    val exportResult: StateFlow<String?> = _exportResult
+
     private val initialEditors = ContextFileKind.entries.associateWith { kind ->
         val snapshot = snapshotFor(kind)
         ContextFileEditorState(
@@ -68,7 +73,7 @@ class MemoryViewModel @Inject constructor(
     val selectedContextFile: StateFlow<ContextFileKind> = _selectedContextFile
 
     init {
-        loadMemories()
+        loadMemories(reconcileActive = true)
         observeContextFile(ContextFileKind.SOUL, cortexProfileStore.soulSnapshots)
         observeContextFile(ContextFileKind.USER, cortexProfileStore.userSnapshots)
         observeContextFile(ContextFileKind.MEMORY, cortexMarkdownMemoryStore.snapshots)
@@ -149,6 +154,9 @@ class MemoryViewModel @Inject constructor(
             ContextFileKind.SOUL -> cortexProfileStore.replaceSoul(draft, expectedRevision)
             ContextFileKind.USER -> cortexProfileStore.replaceUser(draft, expectedRevision)
             ContextFileKind.MEMORY -> cortexMarkdownMemoryStore.replaceAll(draft, expectedRevision)
+        }
+        if (result.success && kind != ContextFileKind.SOUL) {
+            loadMemories(reconcileActive = true)
         }
         updateEditor(kind) { current ->
             if (result.success) {
@@ -276,26 +284,37 @@ class MemoryViewModel @Inject constructor(
         }
     }
 
-    fun loadMemories() {
+    fun loadMemories(reconcileActive: Boolean = false) {
         viewModelScope.launch {
-            val category = _selectedCategory.value
-            val query = _searchQuery.value.trim()
-
-            _memories.value = when {
-                query.isNotEmpty() -> {
-                    val ftsQuery = query.split("\\s+".toRegex()).joinToString(" ") { "$it*" }
-                    try {
-                        val results = memoryDao.searchFts(ftsQuery, 50)
-                        if (category != null) results.filter { it.category == category } else results
-                    } catch (_: Exception) {
-                        if (category != null) memoryDao.getByCategory(category, 50)
-                        else memoryDao.getAll(50)
+            try {
+                if (reconcileActive) {
+                    val removed = secondaryMemoryStore.removeActiveDuplicates()
+                    if (removed > 0) {
+                        _exportResult.value = "Se eliminaron $removed duplicados de la memoria activa"
                     }
                 }
-                category != null -> memoryDao.getByCategory(category, 50)
-                else -> memoryDao.getAll(50)
+                val category = _selectedCategory.value
+                val query = _searchQuery.value.trim()
+
+                _memories.value = when {
+                    query.isNotEmpty() -> {
+                        val ftsQuery = query.split("\\s+".toRegex()).joinToString(" ") { "$it*" }
+                        try {
+                            val results = memoryDao.searchFts(ftsQuery, 50)
+                            if (category != null) results.filter { it.category == category } else results
+                        } catch (_: Exception) {
+                            if (category != null) memoryDao.getByCategory(category, 50)
+                            else memoryDao.getAll(50)
+                        }
+                    }
+                    category != null -> memoryDao.getByCategory(category, 50)
+                    else -> memoryDao.getAll(50)
+                }
+                _totalCount.value = memoryDao.count()
+            } catch (e: Exception) {
+                Log.e(TAG, "Secondary memory load failed", e)
+                _exportResult.value = "No se pudo cargar la memoria secundaria: ${e.message}"
             }
-            _totalCount.value = memoryDao.count()
         }
     }
 
@@ -311,47 +330,61 @@ class MemoryViewModel @Inject constructor(
 
     fun deleteMemory(id: Long) {
         viewModelScope.launch {
-            memoryDao.deleteLinksForMemory(id)
-            memoryDao.deleteById(id)
-            loadMemories()
+            try {
+                memoryDao.deleteById(id)
+                _exportResult.value = "Memoria secundaria eliminada"
+                loadMemories()
+            } catch (e: Exception) {
+                Log.e(TAG, "Secondary memory delete failed for id=$id", e)
+                _exportResult.value = "No se pudo eliminar la memoria: ${e.message}"
+            }
         }
     }
 
     fun updateMemory(id: Long, content: String, importance: Int) {
         viewModelScope.launch {
-            val existing = memoryDao.getById(id) ?: return@launch
-            memoryDao.update(existing.copy(
-                content = content,
-                importance = importance,
-                updatedAt = System.currentTimeMillis()
-            ))
-            loadMemories()
+            try {
+                val existing = memoryDao.getById(id) ?: return@launch
+                memoryDao.update(existing.copy(
+                    content = content,
+                    importance = importance.coerceAtMost(SecondaryMemoryStore.MAX_SECONDARY_IMPORTANCE),
+                    updatedAt = System.currentTimeMillis()
+                ))
+                loadMemories(reconcileActive = true)
+            } catch (e: Exception) {
+                Log.e(TAG, "Secondary memory update failed for id=$id", e)
+                _exportResult.value = "No se pudo actualizar la memoria: ${e.message}"
+            }
         }
     }
 
     fun runCleanupNow() {
         viewModelScope.launch {
-            val thirtyDaysAgo = System.currentTimeMillis() - 30L * 24 * 60 * 60 * 1000
-            memoryDao.decayOldMemories(threshold = thirtyDaysAgo, factor = 0.9f)
-            memoryDao.deleteWeakMemories()
-            memoryDao.deleteExpiredMemories()
-            loadMemories()
+            try {
+                val thirtyDaysAgo = System.currentTimeMillis() - 30L * 24 * 60 * 60 * 1000
+                memoryDao.decayOldMemories(threshold = thirtyDaysAgo, factor = 0.9f)
+                memoryDao.deleteWeakMemories()
+                memoryDao.deleteExpiredMemories()
+                loadMemories(reconcileActive = true)
+            } catch (e: Exception) {
+                Log.e(TAG, "Secondary memory cleanup failed", e)
+                _exportResult.value = "No se pudo depurar la memoria secundaria: ${e.message}"
+            }
         }
     }
 
     fun deleteAllMemories() {
         viewModelScope.launch {
-            val all = memoryDao.getAll(1000)
-            for (m in all) {
-                memoryDao.deleteLinksForMemory(m.id)
-                memoryDao.deleteById(m.id)
+            try {
+                memoryDao.deleteAll()
+                _exportResult.value = "Memoria secundaria borrada"
+                loadMemories()
+            } catch (e: Exception) {
+                Log.e(TAG, "Secondary memory clear failed", e)
+                _exportResult.value = "No se pudo borrar la memoria secundaria: ${e.message}"
             }
-            loadMemories()
         }
     }
-
-    private val _exportResult = MutableStateFlow<String?>(null)
-    val exportResult: StateFlow<String?> = _exportResult
 
     fun clearExportResult() { _exportResult.value = null }
 
@@ -388,27 +421,20 @@ class MemoryViewModel @Inject constructor(
                 val json = appContext.contentResolver.openInputStream(uri)?.bufferedReader()?.readText() ?: return@launch
                 val type = object : TypeToken<List<Map<String, Any>>>() {}.type
                 val data: List<Map<String, Any>> = Gson().fromJson(json, type)
-                val now = System.currentTimeMillis()
                 var count = 0
                 for (item in data) {
                     val content = item["content"]?.toString() ?: continue
                     val category = item["category"]?.toString() ?: "fact"
                     val subcategory = item["subcategory"]?.toString() ?: ""
                     val importance = (item["importance"] as? Double)?.toInt() ?: 5
-                    val confidence = (item["confidence"] as? Double)?.toFloat() ?: 1.0f
-
-                    memoryDao.insert(MemoryEntity(
+                    val result = secondaryMemoryStore.save(
                         content = content,
                         category = category,
                         subcategory = subcategory,
                         importance = importance,
-                        confidence = confidence,
-                        source = "import",
-                        createdAt = now,
-                        updatedAt = now,
-                        lastAccessedAt = now
-                    ))
-                    count++
+                        source = "import"
+                    )
+                    if (result.changed) count++
                 }
                 _exportResult.value = "Importadas $count memorias"
                 loadMemories()

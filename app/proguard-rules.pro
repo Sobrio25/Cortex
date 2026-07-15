@@ -5,11 +5,22 @@
     @com.google.gson.annotations.SerializedName <fields>;
 }
 
+# Retrofit and Gson inspect generic signatures and instantiate response DTOs reflectively.
+-keepattributes Signature, InnerClasses, EnclosingMethod
+-keep class com.aiagents.app.data.remote.** { *; }
+
+# Tool handlers deserialize LLM arguments with Gson. R8 must not merge or abstract their DTOs
+# (for example ExecuteCommandArgs), otherwise valid tool calls fail only in release builds.
+-keep class com.aiagents.app.data.terminal.** { *; }
+
 # MediaPipe
 -keep class com.google.mediapipe.tasks.genai.llminference.** { *; }
 -keep class com.google.mediapipe.tasks.genai.llminference.jni.proto.** { *; }
 -keep class com.google.mediapipe.framework.image.** { *; }
 -keep class com.google.mediapipe.framework.** { *; }
+# tasks-genai references optional image helpers that are not packaged by this app.
+-dontwarn com.google.mediapipe.framework.image.**
+-dontwarn com.google.mediapipe.framework.**
 
 # Protobuf
 -keep class com.google.protobuf.** { *; }

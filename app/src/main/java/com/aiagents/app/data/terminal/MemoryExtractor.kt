@@ -2,11 +2,12 @@ package com.aiagents.app.data.terminal
 
 import android.util.Log
 import com.aiagents.app.data.auth.ProviderCredentialResolver
+import com.aiagents.app.data.events.AgentChangeNotifier
 import com.aiagents.app.data.local.ConversationDao
 import com.aiagents.app.data.local.MemoryDao
 import com.aiagents.app.data.local.MessageDao
+import com.aiagents.app.data.memory.SecondaryMemoryStore
 import com.aiagents.app.data.model.ConversationEntity
-import com.aiagents.app.data.model.MemoryEntity
 import com.aiagents.app.data.model.MessageEntity
 import com.aiagents.app.data.remote.AIClientFactory
 import com.aiagents.app.data.remote.ChatMessage
@@ -15,6 +16,7 @@ import com.aiagents.app.domain.model.ProviderType
 import com.google.gson.JsonParser
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -35,9 +37,16 @@ class MemoryExtractor @Inject constructor(
     private val messageDao: MessageDao,
     private val aiClientFactory: AIClientFactory,
     private val providerCredentialResolver: ProviderCredentialResolver,
-    private val runtimeContextProvider: RuntimeContextProvider
+    private val runtimeContextProvider: RuntimeContextProvider,
+    private val secondaryMemoryStore: SecondaryMemoryStore,
+    private val changeNotifier: AgentChangeNotifier
 ) {
     private val extractionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    @Volatile
+    private var activeExtractionJob: Job? = null
+
+    private val foregroundRequestCount = AtomicInteger(0)
     
     @Volatile
     private var lastBatchExtractionTime = 0L
@@ -55,7 +64,15 @@ class MemoryExtractor @Inject constructor(
          * to generate searchable memories with proper key conventions.
          */
         private const val EXTRACTION_SYSTEM_PROMPT = """
-You are a Memory Extraction Specialist. Analyze conversations and extract factual information about the user into a structured memory database.
+You are the secondary-memory curator. Analyze conversations and retain only useful details that are not important enough for active MEMORY.md or USER.md.
+
+## TWO-TIER MEMORY CONTRACT
+- MEMORY.md and USER.md are active, high-priority memory and are already included in your system context.
+- cortex_memories is a searchable SQLite secondary archive.
+- NEVER copy, paraphrase, or restate a fact already present in MEMORY.md or USER.md.
+- High-value identity, strong preferences, durable corrections, and stable operating conventions belong in active Markdown; the main memory tool handles them, so skip them here.
+- Save only lower-priority but potentially useful details, minor preferences/habits, and compact historical context.
+- Entries deliberately demoted from MEMORY.md are archived automatically by the main memory tool; do not recreate them from conversation text.
 
 ## DATABASE SCHEMA (cortex_memories)
 Fields you populate via extraction:
@@ -64,29 +81,12 @@ Fields you populate via extraction:
   • Value: User's language as stated in conversation
 - category: fact | preference | habit | interaction | relationship
 - subcategory: Topic for grouping (e.g., "name", "food", "work")
-- importance: 1-10 (determines priority in agent prompts)
+- importance: 1-6 (secondary tier only; anything higher belongs in active Markdown)
 
-## KEY CONVENTIONS (CRITICAL - Use these exact keys)
-Personal Identity:
-  name, preferred_name, nickname, age, birthday, birth_year
-  
-Location & Contact:
-  city, country, timezone, location, email, phone
-  
-Work & Education:
-  job_title, occupation, company, industry, experience_level
-  education_level, university, field_of_study
-  
-Preferences:
-  favorite_food, favorite_music, favorite_movie, favorite_book, 
-  favorite_color, preferred_language, communication_style
-  
-Habits & Lifestyle:
-  work_schedule, sleep_schedule, exercise_routine, dietary_restrictions,
-  hobbies, pets, family_status
-  
-Technical (if applicable):
-  programming_languages, preferred_stack, experience_with, tools_used
+## KEY CONVENTIONS
+Use concise English snake_case keys that identify the topic, for example:
+  occasional_food, minor_hobby, secondary_tool, past_project, recent_topic,
+  travel_detail, entertainment_detail, temporary_context
 
 ## OUTPUT FORMAT
 Return ONLY a JSON array. Use [] if nothing to extract.
@@ -96,7 +96,7 @@ Return ONLY a JSON array. Use [] if nothing to extract.
     "content": "key: value",
     "category": "fact|preference|habit|interaction|relationship",
     "subcategory": "topic",
-    "importance": 1-10
+    "importance": 1-6
   }
 ]
 
@@ -106,18 +106,18 @@ Return ONLY a JSON array. Use [] if nothing to extract.
 3. Value in user's original language
 4. Subcategory should match the key's topic category
 5. Importance scale:
-   10 = Core identity (name, critical preferences)
-   8-9 = Strong preferences, important context
-   5-7 = Useful context
-   3-4 = Minor details
+   5-6 = Useful secondary detail that may matter again
+   3-4 = Minor preference, habit, or context
+   1-2 = Compact historical/interaction context
 6. Maximum 5 extractions per conversation
 7. Only explicit facts or strongly implied information
 8. Do NOT invent or assume
+9. If a fact belongs in active Markdown or already appears there, omit it
 
 ## EXAMPLES
-✓ GOOD: {"content": "name: Gabriel Hernández", "category": "fact", "subcategory": "name", "importance": 10}
-✓ GOOD: {"content": "favorite_food: tacos al pastor", "category": "preference", "subcategory": "food", "importance": 8}
-✓ GOOD: {"content": "work_schedule: nocturno", "category": "habit", "subcategory": "work_schedule", "importance": 6}
+✓ GOOD: {"content": "minor_hobby: armar teclados", "category": "habit", "subcategory": "hobby", "importance": 4}
+✓ GOOD: {"content": "past_project: app de inventario", "category": "interaction", "subcategory": "project", "importance": 3}
+✗ BAD: {"content": "preferred_name: Gabo", "category": "fact", "subcategory": "name", "importance": 6}  // Active-profile material
 ✗ BAD: {"content": "El usuario se llama Gabriel"}  // Wrong: not key:value, not English key
 ✗ BAD: {"content": "nombre: Gabriel"}  // Wrong: key must be English
 """
@@ -142,16 +142,25 @@ Use same language as the conversation.
         modelId: String,
         provider: ProviderType
     ) {
+        if (foregroundRequestCount.get() > 0) {
+            Log.d(TAG, "Extraction skipped: foreground chat active")
+            return
+        }
         // Prevent spam: max 1 batch per minute
         val now = System.currentTimeMillis()
         if (now - lastBatchExtractionTime < EXTRACTION_COOLDOWN_MS) {
             Log.d(TAG, "Extraction skipped: cooldown active")
             return
         }
-        lastBatchExtractionTime = now
-        
-        extractionScope.launch {
+        if (activeExtractionJob?.isActive == true) {
+            Log.d(TAG, "Extraction skipped: another batch is active")
+            return
+        }
+
+        activeExtractionJob = extractionScope.launch {
+            var completed = false
             try {
+                if (foregroundRequestCount.get() > 0) return@launch
                 val conversations = if (excludeConversationId != null) {
                     // Normal case: exclude active conversation
                     conversationDao.getConversationsNeedingExtraction(
@@ -175,11 +184,28 @@ Use same language as the conversation.
                     // Small delay to avoid overwhelming the API
                     delay(500)
                 }
-                
+                completed = true
+            } catch (e: CancellationException) {
+                Log.d(TAG, "Memory extraction cancelled for foreground chat")
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Batch extraction failed", e)
+            } finally {
+                if (completed) lastBatchExtractionTime = System.currentTimeMillis()
+                activeExtractionJob = null
             }
         }
+    }
+
+    /** Frees the selected model immediately when a foreground request starts. */
+    fun beginForegroundRequest() {
+        foregroundRequestCount.incrementAndGet()
+        activeExtractionJob?.cancel()
+        activeExtractionJob = null
+    }
+
+    fun endForegroundRequest() {
+        foregroundRequestCount.updateAndGet { count -> (count - 1).coerceAtLeast(0) }
     }
     
     /**
@@ -193,6 +219,7 @@ Use same language as the conversation.
         modelId: String,
         provider: ProviderType
     ): Boolean {
+        if (foregroundRequestCount.get() > 0) return false
         val conversation = conversationDao.getConversationById(conversationId) ?: return false
         
         // Check if there are new messages since last extraction
@@ -225,6 +252,10 @@ Use same language as the conversation.
     ): Boolean {
         return try {
             Log.d(TAG, "Extracting memories from conversation ${conversation.id}")
+            val removedDuplicates = secondaryMemoryStore.removeActiveDuplicates()
+            if (removedDuplicates > 0) {
+                Log.i(TAG, "Removed $removedDuplicates secondary memories duplicated in active Markdown")
+            }
             
             // Get messages since last extraction (or all if never extracted)
             val allMessages = messageDao.getMessagesForConversation(conversation.id).first()
@@ -258,7 +289,9 @@ Use same language as the conversation.
             
             // Also generate a summary for substantial conversations
             if (allMessages.size >= 10 && conversation.lastMemoryExtraction == null) {
-                generateConversationSummary(conversation, allMessages, modelId, provider)
+                if (generateConversationSummary(conversation, allMessages, modelId, provider)) {
+                    savedCount++
+                }
             }
             
             // Update timestamp (even if no memories found, to avoid re-processing)
@@ -266,10 +299,19 @@ Use same language as the conversation.
             
             // Enforce global cap
             enforceMemoryCap()
-            
+
+            if (savedCount > 0) {
+                changeNotifier.memorySaved(
+                    target = AgentChangeNotifier.TARGET_ARCHIVE,
+                    itemCount = savedCount
+                )
+            }
+
             Log.i(TAG, "Saved $savedCount memories from conversation ${conversation.id}")
             true
             
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Failed to extract from conversation ${conversation.id}", e)
             // Don't update timestamp on failure, will retry next time
@@ -310,7 +352,11 @@ Use same language as the conversation.
             maxTokens = 1024
         )
         
-        return parseExtractions(result.getOrNull() ?: "")
+        val response = result.getOrElse { throw it }
+        if (response.isBlank()) {
+            throw IllegalStateException("Memory extraction model returned an empty response")
+        }
+        return parseExtractions(response)
     }
     
     /**
@@ -332,7 +378,8 @@ Use same language as the conversation.
                         content = obj.get("content")?.asString ?: return@mapNotNull null,
                         category = obj.get("category")?.asString ?: "fact",
                         subcategory = obj.get("subcategory")?.asString ?: "",
-                        importance = obj.get("importance")?.asInt?.coerceIn(1, 10) ?: 5
+                        importance = obj.get("importance")?.asInt
+                            ?.coerceIn(1, SecondaryMemoryStore.MAX_SECONDARY_IMPORTANCE) ?: 4
                     )
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to parse extraction element", e)
@@ -349,57 +396,13 @@ Use same language as the conversation.
      * Saves a single memory, handling deduplication.
      */
     private suspend fun saveMemory(extraction: MemoryExtraction): Boolean {
-        // Check for duplicates by key prefix
-        val contentKey = if (extraction.content.contains(":")) {
-            extraction.content.substringBefore(":").trim()
-        } else null
-        
-        val existing = if (contentKey != null && extraction.subcategory.isNotBlank()) {
-            memoryDao.getByCategoryAndSubcategory(extraction.category, extraction.subcategory)
-                .filter { it.content.startsWith("$contentKey:") }
-        } else {
-            // Fallback to FTS for non key:value content
-            val ftsQuery = extraction.content.trim().split("\\s+".toRegex()).take(4)
-                .filter { it.length > 1 }.joinToString(" ") { "$it*" }
-            try {
-                if (ftsQuery.isNotBlank()) {
-                    memoryDao.searchFts(ftsQuery, 3)
-                        .filter { it.category == extraction.category && it.subcategory == extraction.subcategory }
-                } else emptyList()
-            } catch (_: Exception) { emptyList() }
-        }
-        
-        val now = System.currentTimeMillis()
-        
-        if (existing.isNotEmpty()) {
-            // Update existing
-            val match = existing.first()
-            if (match.content != extraction.content) {
-                memoryDao.update(match.copy(
-                    content = extraction.content,
-                    importance = maxOf(match.importance, extraction.importance),
-                    confidence = 1.0f,
-                    updatedAt = now,
-                    lastAccessedAt = now
-                ))
-                return true
-            }
-        } else {
-            // Insert new
-            memoryDao.insert(MemoryEntity(
-                content = extraction.content,
-                category = extraction.category,
-                subcategory = extraction.subcategory,
-                importance = extraction.importance,
-                confidence = 1.0f,
-                source = "extraction",
-                createdAt = now,
-                updatedAt = now,
-                lastAccessedAt = now
-            ))
-            return true
-        }
-        return false
+        return secondaryMemoryStore.save(
+            content = extraction.content,
+            category = extraction.category,
+            subcategory = extraction.subcategory,
+            importance = extraction.importance,
+            source = SecondaryMemoryStore.SOURCE_SECONDARY_EXTRACTION
+        ).changed
     }
     
     /**
@@ -410,16 +413,16 @@ Use same language as the conversation.
         messages: List<MessageEntity>,
         modelId: String,
         provider: ProviderType
-    ) {
-        try {
+    ): Boolean {
+        return try {
             val userAssistantMsgs = messages.filter { 
                 it.role == "USER" || it.role == "ASSISTANT" 
             }
             
-            if (userAssistantMsgs.size < 10) return
+            if (userAssistantMsgs.size < 10) return false
             runtimeContextProvider.refreshIdentityFromMemory()
             
-            val credentials = providerCredentialResolver.resolve(provider) ?: return
+            val credentials = providerCredentialResolver.resolve(provider) ?: return false
             val client = aiClientFactory.createClient(provider, credentials.apiKey, credentials.baseUrl)
             
             val conversationText = userAssistantMsgs.joinToString("\n") { msg ->
@@ -439,26 +442,26 @@ Use same language as the conversation.
                 maxTokens = 256
             )
             
-            val summary = result.getOrNull()?.trim() ?: return
-            if (summary.length < 10) return
+            val summary = result.getOrNull()?.trim() ?: return false
+            if (summary.length < 10) return false
             
-            val now = System.currentTimeMillis()
-            memoryDao.insert(MemoryEntity(
+            val changed = secondaryMemoryStore.save(
                 content = summary,
                 category = "interaction",
                 subcategory = "conversation_summary",
                 importance = 2,
-                source = "summary",
-                createdAt = now,
-                updatedAt = now,
-                lastAccessedAt = now
-            ))
+                source = "summary"
+            ).changed
             
             memoryDao.deleteOldestSummaries(MAX_CONVERSATION_SUMMARIES)
             Log.i(TAG, "Saved conversation summary")
+            changed
             
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "Summary generation failed (non-critical)", e)
+            false
         }
     }
     

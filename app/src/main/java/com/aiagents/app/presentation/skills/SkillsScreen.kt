@@ -239,12 +239,12 @@ private fun AutomaticReviewCard(
                 Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "Sugerencias automáticas",
+                        "Aprendizaje automático",
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                     Text(
-                        "El revisor local solo crea borradores; nunca los activa.",
+                        "Después de responder, Cortex puede guardar memoria y crear o mejorar skills activas.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
@@ -254,13 +254,13 @@ private fun AutomaticReviewCard(
             if (enabled) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "Revisar cada",
+                        "Umbral de revisión",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                     Box {
                         TextButton(onClick = { intervalMenuExpanded = true }) {
-                            Text("$interval mensajes")
+                            Text("$interval turnos/pasos")
                         }
                         DropdownMenu(
                             expanded = intervalMenuExpanded,
@@ -268,7 +268,7 @@ private fun AutomaticReviewCard(
                         ) {
                             SkillReviewScheduler.ALLOWED_INTERVALS.sorted().forEach { option ->
                                 DropdownMenuItem(
-                                    text = { Text("$option mensajes") },
+                                    text = { Text("$option turnos/pasos") },
                                     onClick = {
                                         onIntervalChange(option)
                                         intervalMenuExpanded = false
@@ -283,7 +283,8 @@ private fun AutomaticReviewCard(
                             when (lastResult) {
                                 SkillReviewStatus.PENDING -> "Revisión pendiente"
                                 SkillReviewStatus.DRAFT_CREATED -> "Borrador sugerido"
-                                SkillReviewStatus.SKIPPED -> "Sin sugerencia"
+                                SkillReviewStatus.CHANGES_APPLIED -> "Aprendizaje guardado"
+                                SkillReviewStatus.SKIPPED -> "Sin cambios duraderos"
                                 SkillReviewStatus.FAILED -> "Revisión fallida"
                             },
                             style = MaterialTheme.typography.labelSmall,

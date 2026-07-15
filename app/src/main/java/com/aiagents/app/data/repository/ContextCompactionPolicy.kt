@@ -21,9 +21,23 @@ object ContextCompactionPolicy {
         isInternalCheckpoint(message) ||
             (message.role == MessageRole.SYSTEM && message.content.startsWith(LEGACY_CHECKPOINT_PREFIX))
 
-    /** Full transcript for UI, hiding only Cortex's internal checkpoint records. */
-    fun visibleHistory(messages: List<Message>): List<Message> =
-        messages.filterNot(::isInternalCheckpoint)
+    /**
+     * User-facing transcript.
+     *
+     * Assistant records that contain tool calls and TOOL responses are protocol turns, not
+     * completed replies. They stay persisted for provider context but are removed from the
+     * normal chat list so hidden rows cannot accumulate spacing between visible messages.
+     * They remain available in the explicit command/debug view.
+     */
+    fun visibleHistory(
+        messages: List<Message>,
+        includeInternalActions: Boolean = false
+    ): List<Message> = messages.filterNot { message ->
+        isInternalCheckpoint(message) ||
+            (!includeInternalActions &&
+                (message.role == MessageRole.TOOL ||
+                    (message.role == MessageRole.ASSISTANT && message.toolCalls.isNotEmpty())))
+    }
 
     /** Latest checkpoint plus the verbatim tail that followed it. */
     fun modelHistory(messages: List<Message>): List<Message> {

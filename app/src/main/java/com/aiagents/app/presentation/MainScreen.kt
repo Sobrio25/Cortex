@@ -27,6 +27,7 @@ import com.aiagents.app.presentation.memory.MemoryScreen
 import com.aiagents.app.presentation.onboarding.OnboardingScreen
 import com.aiagents.app.presentation.onboarding.OnboardingViewModel
 import com.aiagents.app.presentation.providers.ProvidersScreen
+import com.aiagents.app.presentation.scheduled_tasks.ScheduledTasksScreen
 import com.aiagents.app.presentation.settings.GoogleWorkspaceSettingsScreen
 import com.aiagents.app.presentation.settings.SettingsScreen
 import com.aiagents.app.presentation.skills.SkillsScreen
@@ -48,6 +49,7 @@ sealed class Screen(val route: String) {
     data object MCP : Screen("settings/mcp")
     data object Memory : Screen("settings/memory")
     data object Skills : Screen("settings/skills")
+    data object ScheduledTasks : Screen("settings/scheduled_tasks")
     data object GoogleWorkspace : Screen("settings/google_workspace")
     data object WorkspaceDetail : Screen("workspace/{workspaceId}") {
         fun createRoute(workspaceId: Long) = "workspace/$workspaceId"
@@ -56,14 +58,22 @@ sealed class Screen(val route: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen() {
+fun MainScreen(
+    scheduledTaskWorkspaceId: Long? = null,
+    scheduledTaskConversationId: Long? = null,
+    onScheduledTaskDestinationHandled: () -> Unit = {}
+) {
     val onboardingViewModel: OnboardingViewModel = hiltViewModel()
     val onboardingCompleted by onboardingViewModel.onboardingCompleted.collectAsState()
 
     if (!onboardingCompleted) {
         OnboardingFlow(onboardingViewModel)
     } else {
-        MainAppContent()
+        MainAppContent(
+            scheduledTaskWorkspaceId = scheduledTaskWorkspaceId,
+            scheduledTaskConversationId = scheduledTaskConversationId,
+            onScheduledTaskDestinationHandled = onScheduledTaskDestinationHandled
+        )
     }
 }
 
@@ -140,7 +150,11 @@ private fun OnboardingFlowContent(onboardingViewModel: OnboardingViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MainAppContent() {
+private fun MainAppContent(
+    scheduledTaskWorkspaceId: Long?,
+    scheduledTaskConversationId: Long?,
+    onScheduledTaskDestinationHandled: () -> Unit
+) {
     val navController = rememberNavController()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -151,6 +165,20 @@ private fun MainAppContent() {
     val conversations by drawerViewModel.conversations.collectAsState()
     val activeConversationId by drawerViewModel.activeConversationId.collectAsState()
     val isGlobalMode by drawerViewModel.isGlobalMode.collectAsState()
+
+    LaunchedEffect(scheduledTaskWorkspaceId, scheduledTaskConversationId) {
+        val workspaceId = scheduledTaskWorkspaceId ?: return@LaunchedEffect
+        val conversationId = scheduledTaskConversationId ?: return@LaunchedEffect
+        if (workspaceId <= 0 || conversationId <= 0) return@LaunchedEffect
+
+        drawerViewModel.setActiveWorkspace(workspaceId)
+        drawerViewModel.setActiveConversation(conversationId)
+        navController.navigate(Screen.ChatWithConversation.createRoute(conversationId)) {
+            popUpTo(Screen.Chat.route) { inclusive = true }
+            launchSingleTop = true
+        }
+        onScheduledTaskDestinationHandled()
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -284,6 +312,9 @@ private fun MainAppContent() {
                     onNavigateToLocalModels = { navController.navigate(Screen.LocalModels.route) },
                     onNavigateToMemory = { navController.navigate(Screen.Memory.route) },
                     onNavigateToSkills = { navController.navigate(Screen.Skills.route) },
+                    onNavigateToScheduledTasks = {
+                        navController.navigate(Screen.ScheduledTasks.route)
+                    },
                     onNavigateToMCP = { navController.navigate(Screen.MCP.route) },
                     onNavigateToGoogleWorkspace = {
                         navController.navigate(Screen.GoogleWorkspace.route)
@@ -319,6 +350,21 @@ private fun MainAppContent() {
             composable(Screen.Skills.route) {
                 SkillsScreen(
                     onBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.ScheduledTasks.route) {
+                ScheduledTasksScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenConversation = { workspaceId, conversationId ->
+                        drawerViewModel.setActiveWorkspace(workspaceId)
+                        drawerViewModel.setActiveConversation(conversationId)
+                        navController.navigate(
+                            Screen.ChatWithConversation.createRoute(conversationId)
+                        ) {
+                            popUpTo(Screen.Chat.route) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
                 )
             }
             composable(Screen.GoogleWorkspace.route) {

@@ -1,5 +1,6 @@
 package com.aiagents.app.data.terminal
 
+import com.aiagents.app.data.events.AgentChangeNotifier
 import com.aiagents.app.data.memory.CortexMarkdownMemoryStore
 import com.aiagents.app.data.memory.CortexMemoryAction
 import com.aiagents.app.data.memory.CortexMemoryMutationResult
@@ -7,6 +8,8 @@ import com.aiagents.app.data.memory.CortexMemoryOperation
 import com.aiagents.app.data.memory.CortexMemoryPolicy
 import com.aiagents.app.data.memory.CortexMemorySnapshot
 import com.aiagents.app.data.memory.CortexProfileStore
+import com.aiagents.app.data.memory.SecondaryMemoryStore
+import com.aiagents.app.data.memory.SecondaryMemoryWriteResult
 import com.aiagents.app.domain.model.Agent
 import com.aiagents.app.domain.model.isOrchestrator
 import com.google.gson.JsonArray
@@ -20,11 +23,13 @@ import javax.inject.Singleton
 @Singleton
 class CortexMemoryToolHandler @Inject constructor(
     private val store: CortexMarkdownMemoryStore,
-    private val profileStore: CortexProfileStore
+    private val profileStore: CortexProfileStore,
+    private val secondaryMemoryStore: SecondaryMemoryStore,
+    private val changeNotifier: AgentChangeNotifier
 ) {
     private val failureLimiter = CortexMemoryFailureLimiter()
 
-    fun executeTool(
+    suspend fun executeTool(
         toolCallId: String,
         arguments: String,
         agent: Agent,
@@ -35,7 +40,7 @@ class CortexMemoryToolHandler @Inject constructor(
                 toolCallId,
                 success = false,
                 content = CortexMemoryToolResponseFormatter.error(
-                    "Only the orchestrator can modify MEMORY.md or USER.md.",
+                    "Only the orchestrator can curate active or secondary memory.",
                     store.snapshot()
                 )
             )
@@ -54,6 +59,9 @@ class CortexMemoryToolHandler @Inject constructor(
         return try {
             val args = JsonParser.parseString(arguments).asJsonObject
             val target = args.stringOrNull("target").orEmpty()
+            if (target == TARGET_ARCHIVE) {
+                return executeArchiveWrite(toolCallId, args, turnKey)
+            }
             val targetSnapshot = when (target) {
                 TARGET_MEMORY -> store.snapshot()
                 TARGET_USER -> profileStore.userSnapshot()
@@ -64,7 +72,7 @@ class CortexMemoryToolHandler @Inject constructor(
                     toolCallId,
                     success = false,
                     content = CortexMemoryToolResponseFormatter.error(
-                        "target must be 'memory' or 'user'.",
+                        "target must be 'memory', 'user', or 'archive'.",
                         store.snapshot(),
                         target = TARGET_MEMORY
                     )
@@ -76,7 +84,32 @@ class CortexMemoryToolHandler @Inject constructor(
                 TARGET_USER -> profileStore.applyUserOperations(operations, expectedRevision)
                 else -> store.applyOperations(operations, expectedRevision)
             }
-            val terminalFailure = if (result.success) {
+            val finalResult = if (result.success && result.changed) {
+                val notes = mutableListOf<String>()
+                try {
+                    if (target == TARGET_MEMORY) {
+                        val demoted = CortexMemoryPolicy.entriesMarkedForArchive(
+                            targetSnapshot.entries,
+                            operations
+                        )
+                        val archived = secondaryMemoryStore.archiveDemoted(demoted)
+                        if (archived > 0) notes += "$archived demoted entr${if (archived == 1) "y" else "ies"} archived."
+                    }
+                    val duplicatesRemoved = secondaryMemoryStore.removeActiveDuplicates()
+                    if (duplicatesRemoved > 0) {
+                        notes += "$duplicatesRemoved duplicate secondary entr${if (duplicatesRemoved == 1) "y" else "ies"} removed."
+                    }
+                } catch (_: Exception) {
+                    notes += "Active memory was saved, but secondary-memory reconciliation will retry later."
+                }
+                if (notes.isEmpty()) result else result.copy(message = result.message + " " + notes.joinToString(" "))
+            } else {
+                result
+            }
+            if (finalResult.success && finalResult.changed) {
+                changeNotifier.memorySaved(target)
+            }
+            val terminalFailure = if (finalResult.success) {
                 failureLimiter.reset(turnKey)
                 false
             } else {
@@ -84,11 +117,11 @@ class CortexMemoryToolHandler @Inject constructor(
             }
             CortexMemoryToolResult(
                 toolCallId = toolCallId,
-                success = result.success,
+                success = finalResult.success,
                 content = if (terminalFailure) {
-                    CortexMemoryToolResponseFormatter.terminalFailure(result, target)
+                    CortexMemoryToolResponseFormatter.terminalFailure(finalResult, target)
                 } else {
-                    CortexMemoryToolResponseFormatter.result(result, target)
+                    CortexMemoryToolResponseFormatter.result(finalResult, target)
                 }
             )
         } catch (error: Exception) {
@@ -101,6 +134,49 @@ class CortexMemoryToolHandler @Inject constructor(
                 )
             )
         }
+    }
+
+    private suspend fun executeArchiveWrite(
+        toolCallId: String,
+        args: JsonObject,
+        turnKey: String
+    ): CortexMemoryToolResult {
+        if (args.has("operations")) {
+            return CortexMemoryToolResult(
+                toolCallId,
+                false,
+                CortexMemoryToolResponseFormatter.archiveError(
+                    "Secondary-memory writes use one add operation at a time."
+                )
+            )
+        }
+        val action = CortexMemoryAction.fromWireValue(args.stringOrNull("action"))
+        if (action != CortexMemoryAction.ADD) {
+            return CortexMemoryToolResult(
+                toolCallId,
+                false,
+                CortexMemoryToolResponseFormatter.archiveError(
+                    "target='archive' currently supports action='add' only."
+                )
+            )
+        }
+        val content = args.stringOrNull("content").orEmpty()
+        val result = secondaryMemoryStore.save(
+            content = content,
+            category = args.stringOrNull("category") ?: "fact",
+            subcategory = args.stringOrNull("subcategory").orEmpty(),
+            importance = args.intOrNull("importance") ?: 4,
+            source = SecondaryMemoryStore.SOURCE_SECONDARY_EXTRACTION
+        )
+        if (result.success && result.changed) {
+            changeNotifier.memorySaved(AgentChangeNotifier.TARGET_ARCHIVE)
+        }
+        if (result.success) failureLimiter.reset(turnKey)
+        return CortexMemoryToolResult(
+            toolCallId = toolCallId,
+            success = result.success,
+            content = CortexMemoryToolResponseFormatter.archive(result)
+        )
     }
 
     private fun parseOperations(args: JsonObject): List<CortexMemoryOperation> {
@@ -125,7 +201,8 @@ class CortexMemoryToolHandler @Inject constructor(
         return CortexMemoryOperation(
             action = action,
             content = json.stringOrNull("content"),
-            oldText = json.stringOrNull("old_text")
+            oldText = json.stringOrNull("old_text"),
+            preserveInArchive = json.booleanOrFalse("preserve_in_archive")
         )
     }
 
@@ -135,10 +212,21 @@ class CortexMemoryToolHandler @Inject constructor(
         return value.asString
     }
 
+    private fun JsonObject.booleanOrFalse(name: String): Boolean {
+        val value = get(name) ?: return false
+        return value.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean ?: false
+    }
+
+    private fun JsonObject.intOrNull(name: String): Int? {
+        val value = get(name) ?: return null
+        return value.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asInt
+    }
+
     companion object {
         const val TOOL_NAME = "memory"
         internal const val TARGET_MEMORY = "memory"
         internal const val TARGET_USER = "user"
+        internal const val TARGET_ARCHIVE = "archive"
         private const val MAX_BATCH_OPERATIONS = 32
         private const val MAX_ARGUMENT_UTF16_UNITS = 24_000
 
@@ -147,14 +235,14 @@ class CortexMemoryToolHandler @Inject constructor(
                 "type" to "function",
                 "function" to mapOf(
                     "name" to TOOL_NAME,
-                    "description" to "Manage Cortex's bounded context files, matching Hermes Agent: MEMORY.md (${CortexMemoryPolicy.HERMES_MEMORY_MAX_CHARS} chars) for durable facts and USER.md (${CortexProfileStore.HERMES_USER_MAX_CHARS} chars) for the user profile. Skip temporary progress, obvious facts, raw dumps, secrets, runtime facts, and reusable procedures that belong in skills. Entries are separated by §. Prefer compact wording and consolidate above 80%. There is no read action because frozen snapshots are already in system context. Use operations for an atomic replace/remove/add batch.",
+                    "description" to "Curate both memory tiers. USER.md (${CortexProfileStore.HERMES_USER_MAX_CHARS} chars) and MEMORY.md (${CortexMemoryPolicy.HERMES_MEMORY_MAX_CHARS} chars) are active context for durable, high-value facts and preferences. target='archive' stores useful but lower-priority facts in searchable SQLite without duplicating active Markdown. When removing a still-valid entry from MEMORY.md only to free space or lower its priority, set preserve_in_archive=true; leave it false for corrections, explicit forgetting, secrets, or stale facts. Skip trivial/easily rediscovered facts, raw dumps, progress logs, temporary TODOs, credentials, and reusable procedures that belong in skills. Frozen active snapshots are already in context, so there is no read action.",
                     "parameters" to mapOf(
                         "type" to "object",
                         "properties" to mapOf(
                             "target" to mapOf(
                                 "type" to "string",
-                                "enum" to listOf(TARGET_MEMORY, TARGET_USER),
-                                "description" to "'memory' for MEMORY.md or 'user' for USER.md."
+                                "enum" to listOf(TARGET_MEMORY, TARGET_USER, TARGET_ARCHIVE),
+                                "description" to "'memory'/'user' for active Markdown; 'archive' for one lower-priority add."
                             ),
                             "action" to mapOf(
                                 "type" to "string",
@@ -168,6 +256,25 @@ class CortexMemoryToolHandler @Inject constructor(
                             "old_text" to mapOf(
                                 "type" to "string",
                                 "description" to "Short, case-sensitive substring that uniquely identifies one entry for replace/remove."
+                            ),
+                            "preserve_in_archive" to mapOf(
+                                "type" to "boolean",
+                                "description" to "For MEMORY.md remove/replace only: true demotes the still-valid previous entry to SQLite. False means forget/correct it everywhere."
+                            ),
+                            "category" to mapOf(
+                                "type" to "string",
+                                "enum" to listOf("fact", "preference", "habit", "interaction", "relationship"),
+                                "description" to "Optional category for target='archive'."
+                            ),
+                            "subcategory" to mapOf(
+                                "type" to "string",
+                                "description" to "Optional searchable topic for target='archive'."
+                            ),
+                            "importance" to mapOf(
+                                "type" to "integer",
+                                "minimum" to 1,
+                                "maximum" to SecondaryMemoryStore.MAX_SECONDARY_IMPORTANCE,
+                                "description" to "Archive importance only; active-worthy facts belong in Markdown."
                             ),
                             "expected_revision" to mapOf(
                                 "type" to "string",
@@ -185,7 +292,8 @@ class CortexMemoryToolHandler @Inject constructor(
                                             "enum" to listOf("add", "replace", "remove")
                                         ),
                                         "content" to mapOf("type" to "string"),
-                                        "old_text" to mapOf("type" to "string")
+                                        "old_text" to mapOf("type" to "string"),
+                                        "preserve_in_archive" to mapOf("type" to "boolean")
                                     ),
                                     "required" to listOf("action")
                                 )
@@ -201,6 +309,28 @@ class CortexMemoryToolHandler @Inject constructor(
 
 /** Pure response formatting keeps successful tool history bounded and independently testable. */
 internal object CortexMemoryToolResponseFormatter {
+    fun archive(result: SecondaryMemoryWriteResult): String = JsonObject().apply {
+        addProperty("target", CortexMemoryToolHandler.TARGET_ARCHIVE)
+        addProperty("success", result.success)
+        addProperty("changed", result.changed)
+        addProperty("done", true)
+        result.memoryId?.let { addProperty("memory_id", it) }
+        if (result.success) addProperty("message", result.message)
+        else addProperty("error", result.message)
+        addProperty(
+            "next_action",
+            "Secondary-memory operation is complete. Do not copy the same fact into active Markdown."
+        )
+    }.toString()
+
+    fun archiveError(message: String): String = JsonObject().apply {
+        addProperty("target", CortexMemoryToolHandler.TARGET_ARCHIVE)
+        addProperty("success", false)
+        addProperty("changed", false)
+        addProperty("done", true)
+        addProperty("error", message)
+    }.toString()
+
     fun result(
         result: CortexMemoryMutationResult,
         target: String = CortexMemoryToolHandler.TARGET_MEMORY

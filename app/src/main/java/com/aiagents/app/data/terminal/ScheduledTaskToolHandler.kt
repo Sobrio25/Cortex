@@ -1,7 +1,9 @@
 package com.aiagents.app.data.terminal
 
 import android.util.Log
+import com.aiagents.app.data.local.ConversationDao
 import com.aiagents.app.data.local.ScheduledTaskDao
+import com.aiagents.app.data.model.ConversationEntity
 import com.aiagents.app.data.model.ScheduledTaskEntity
 import com.aiagents.app.data.scheduling.TaskSchedulerManager
 import com.google.gson.Gson
@@ -27,6 +29,7 @@ data class ScheduledTaskToolResult(
 @Singleton
 class ScheduledTaskToolHandler @Inject constructor(
     private val scheduledTaskDao: ScheduledTaskDao,
+    private val conversationDao: ConversationDao,
     private val schedulerManager: TaskSchedulerManager
 ) {
     companion object {
@@ -39,7 +42,7 @@ class ScheduledTaskToolHandler @Inject constructor(
                 "type" to "function",
                 "function" to mapOf(
                     "name" to TOOL_NAME,
-                    "description" to """Manage scheduled agent tasks (cron jobs). Agents execute prompts automatically at specified times.
+                    "description" to """Manage scheduled agent tasks (cron jobs). Agents execute prompts automatically at specified times. Each full result is saved in the linked chat so the user can continue the conversation.
 
 Actions:
 - "create": Create a scheduled task. Params:
@@ -73,7 +76,8 @@ Actions:
     suspend fun executeTool(
         toolCallId: String,
         arguments: String,
-        workspaceId: Long
+        workspaceId: Long,
+        conversationId: Long? = null
     ): ScheduledTaskToolResult {
         return try {
             val args = gson.fromJson(arguments, JsonObject::class.java) ?: JsonObject()
@@ -82,7 +86,7 @@ Actions:
             val params = args.getAsJsonObject("params") ?: JsonObject()
 
             when (action) {
-                "create" -> createTask(toolCallId, params, workspaceId)
+                "create" -> createTask(toolCallId, params, workspaceId, conversationId)
                 "list" -> listTasks(toolCallId)
                 "delete" -> deleteTask(toolCallId, params)
                 "toggle" -> toggleTask(toolCallId, params)
@@ -97,7 +101,8 @@ Actions:
     private suspend fun createTask(
         toolCallId: String,
         params: JsonObject,
-        workspaceId: Long
+        workspaceId: Long,
+        conversationId: Long?
     ): ScheduledTaskToolResult {
         val prompt = params.get("prompt")?.asString
             ?: return ScheduledTaskToolResult(toolCallId, success = false, content = "Missing 'prompt'.")
@@ -112,9 +117,15 @@ Actions:
             ?: return ScheduledTaskToolResult(toolCallId, success = false,
                 content = "Invalid schedule. Type: $scheduleType, Value: $scheduleValue. " +
                     "Formats: once='2026-03-25T09:00', daily='09:00', weekly='MON,FRI 09:00', interval='30m'")
+        val linkedConversationId = resolveConversationId(
+            requestedConversationId = conversationId,
+            workspaceId = workspaceId,
+            label = label
+        )
 
         val entity = ScheduledTaskEntity(
             workspaceId = workspaceId,
+            conversationId = linkedConversationId,
             agentName = agentName,
             prompt = prompt,
             scheduleType = scheduleType,
@@ -134,7 +145,24 @@ Actions:
         Log.i(TAG, "Created scheduled task $id: '$label' ($scheduleType: $scheduleValue)")
 
         return ScheduledTaskToolResult(toolCallId, success = true,
-            content = "Scheduled task created (id: $id).\nLabel: $label\nSchedule: $scheduleType $scheduleValue\nNext run: $nextRunStr\nAgent: ${agentName ?: "Cortex"}")
+            content = "Scheduled task created (id: $id).\nLabel: $label\nSchedule: $scheduleType $scheduleValue\nNext run: $nextRunStr\nAgent: ${agentName ?: "Cortex"}\nChat: $linkedConversationId")
+    }
+
+    private suspend fun resolveConversationId(
+        requestedConversationId: Long?,
+        workspaceId: Long,
+        label: String
+    ): Long {
+        val existing = requestedConversationId
+            ?.takeIf { it > 0 }
+            ?.let { conversationDao.getConversationById(it) }
+            ?.takeIf { it.workspaceId == workspaceId }
+        if (existing != null) return existing.id
+
+        val title = "Cron: ${label.ifBlank { "Tarea programada" }}".take(80)
+        return conversationDao.insertConversation(
+            ConversationEntity(workspaceId = workspaceId, title = title)
+        )
     }
 
     private suspend fun listTasks(toolCallId: String): ScheduledTaskToolResult {
@@ -155,7 +183,7 @@ Actions:
                     LocalDateTime.ofInstant(Instant.ofEpochMilli(it), ZoneId.systemDefault())
                         .format(DateTimeFormatter.ofPattern("MM-dd HH:mm"))
                 } ?: "never"
-                appendLine("  [${task.id}] $status | ${task.label} | ${task.scheduleType} ${task.scheduleValue} | next: $nextStr | last: $lastStr | runs: ${task.runCount}")
+                appendLine("  [${task.id}] $status | ${task.label} | ${task.scheduleType} ${task.scheduleValue} | chat: ${task.conversationId ?: "pending"} | next: $nextStr | last: $lastStr | runs: ${task.runCount}")
             }
         }
         return ScheduledTaskToolResult(toolCallId, success = true, content = info.trim())

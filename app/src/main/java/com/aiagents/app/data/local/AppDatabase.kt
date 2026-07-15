@@ -49,7 +49,7 @@ import com.aiagents.app.domain.model.WeatherWidgetsBuiltin
         SkillReviewEntity::class,
         SubagentExecutionEntity::class
     ],
-    version = 41,
+    version = 44,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -767,12 +767,12 @@ SIEMPRE usa la herramienta pubmed_search para buscar estudios científicos relev
                 """)
                 db.execSQL("""
                     CREATE TRIGGER IF NOT EXISTS cortex_memories_bd BEFORE DELETE ON cortex_memories BEGIN
-                        INSERT INTO cortex_memory_fts(cortex_memory_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+                        DELETE FROM cortex_memory_fts WHERE rowid = old.rowid;
                     END
                 """)
                 db.execSQL("""
                     CREATE TRIGGER IF NOT EXISTS cortex_memories_bu BEFORE UPDATE ON cortex_memories BEGIN
-                        INSERT INTO cortex_memory_fts(cortex_memory_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+                        DELETE FROM cortex_memory_fts WHERE rowid = old.rowid;
                     END
                 """)
                 db.execSQL("""
@@ -1021,6 +1021,133 @@ SIEMPRE usa la herramienta pubmed_search para buscar estudios científicos relev
                         "ON subagent_executions(status)"
                 )
             }
+        }
+
+        /**
+         * Repairs the external-content FTS4 triggers. The previous triggers used FTS5's special
+         * 'delete' command, which makes every UPDATE or DELETE fail with "SQL logic error" on
+         * FTS4 and can terminate callers that do not catch the database exception.
+         */
+        val MIGRATION_41_42 = object : Migration(41, 42) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                repairMemoryFtsTriggers(db)
+            }
+        }
+
+        /**
+         * Cortex now works directly and creates task-scoped workers on demand. Remove only
+         * untouched generated agents; user-edited and user-created agents remain intact.
+         */
+        val MIGRATION_42_43 = object : Migration(42, 43) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val generatedDefaults = """
+                    (name = 'Programmer' AND folderPath = 'agents/programmer') OR
+                    (name = 'Writer' AND folderPath = 'agents/writer') OR
+                    (name = 'Researcher' AND folderPath = 'agents/researcher') OR
+                    (name = 'Data Analyst' AND folderPath = 'agents/data_analyst') OR
+                    (name = 'Tutor' AND folderPath = 'agents/tutor') OR
+                    (name = 'Health Advisor' AND folderPath = 'agents/health')
+                """.trimIndent()
+                val removableAgents = "createdAt = updatedAt AND ($generatedDefaults)"
+
+                db.execSQL(
+                    """
+                    UPDATE workspaces
+                    SET activeAgentId = (
+                        SELECT id FROM agents WHERE role = 'Agent Orchestrator' LIMIT 1
+                    )
+                    WHERE activeAgentId IN (SELECT id FROM agents WHERE $removableAgents)
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE scheduled_tasks
+                    SET agentName = COALESCE(
+                        (SELECT name FROM agents WHERE role = 'Agent Orchestrator' LIMIT 1),
+                        'Cortex'
+                    )
+                    WHERE agentName IN (SELECT name FROM agents WHERE $removableAgents)
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE scheduled_tasks
+                    SET agentName = COALESCE(
+                        (SELECT name FROM agents WHERE role = 'Agent Orchestrator' LIMIT 1),
+                        'Cortex'
+                    )
+                    WHERE agentName = 'Agent Architect'
+                    """.trimIndent()
+                )
+                db.execSQL("DELETE FROM agents WHERE $removableAgents")
+                db.execSQL(
+                    "DELETE FROM agents WHERE name = 'Agent Architect' " +
+                        "AND folderPath = 'agents/architect' AND isSystemAgent = 1"
+                )
+
+                db.execSQL(
+                    """
+                    UPDATE agents
+                    SET systemPrompt = ?
+                    WHERE role = 'Agent Orchestrator'
+                      AND createdAt = updatedAt
+                      AND (
+                          systemPrompt LIKE 'Coordinate specialized agents to execute complex tasks,%'
+                          OR systemPrompt LIKE '%{agents_list}%'
+                          OR systemPrompt LIKE '%## DELEGATION PROTOCOL%'
+                      )
+                    """.trimIndent(),
+                    arrayOf(
+                        "Complete the user's request directly and use available tools when they improve accuracy."
+                    )
+                )
+            }
+        }
+
+        val MIGRATION_43_44 = object : Migration(43, 44) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE scheduled_tasks ADD COLUMN conversationId INTEGER")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_scheduled_tasks_conversationId " +
+                        "ON scheduled_tasks(conversationId)"
+                )
+            }
+        }
+
+        fun repairMemoryFtsTriggers(db: SupportSQLiteDatabase) {
+            db.execSQL("DROP TRIGGER IF EXISTS cortex_memories_ai")
+            db.execSQL("DROP TRIGGER IF EXISTS cortex_memories_bd")
+            db.execSQL("DROP TRIGGER IF EXISTS cortex_memories_bu")
+            db.execSQL("DROP TRIGGER IF EXISTS cortex_memories_au")
+            db.execSQL(
+                """
+                CREATE TRIGGER cortex_memories_ai AFTER INSERT ON cortex_memories BEGIN
+                    INSERT INTO cortex_memory_fts(rowid, content) VALUES(new.rowid, new.content);
+                END
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TRIGGER cortex_memories_bd BEFORE DELETE ON cortex_memories BEGIN
+                    DELETE FROM cortex_memory_fts WHERE rowid = old.rowid;
+                END
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TRIGGER cortex_memories_bu BEFORE UPDATE ON cortex_memories BEGIN
+                    DELETE FROM cortex_memory_fts WHERE rowid = old.rowid;
+                END
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TRIGGER cortex_memories_au AFTER UPDATE ON cortex_memories BEGIN
+                    INSERT INTO cortex_memory_fts(rowid, content) VALUES(new.rowid, new.content);
+                END
+                """.trimIndent()
+            )
+            db.execSQL("INSERT INTO cortex_memory_fts(cortex_memory_fts) VALUES('rebuild')")
         }
 
         fun ensureBuiltInSkills(db: SupportSQLiteDatabase) {

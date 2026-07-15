@@ -3,10 +3,12 @@ package com.aiagents.app.data.remote
 import android.util.Log
 import com.aiagents.app.domain.model.ToolCall
 import com.aiagents.app.domain.model.ToolFunction
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import retrofit2.HttpException
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
@@ -15,7 +17,8 @@ import retrofit2.http.POST
 class OpenAIClient(
     private val okHttpClient: OkHttpClient,
     private val apiKey: String,
-    private val baseUrl: String? = null
+    private val baseUrl: String? = null,
+    private val requireStringContentForToolCalls: Boolean = false
 ) : AIClient {
 
     private val authorizationHeader: String?
@@ -60,7 +63,9 @@ class OpenAIClient(
             
             val request = ChatRequest(
                 model = model,
-                messages = allMessages.map { it.toRequestFormat() },
+                messages = allMessages.map {
+                    it.toRequestFormat(requireStringContentForToolCalls)
+                },
                 temperature = temperature,
                 maxTokens = maxTokens,
                 tools = if (tools.isEmpty()) null else tools
@@ -124,6 +129,19 @@ class OpenAIClient(
             )
 
             Result.success(ChatResponseWithTools(cleanContent, toolCalls, finishReason, finalReasoning))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            val detail = e.response()?.errorBody()?.string()
+                ?.trim()
+                ?.take(MAX_HTTP_ERROR_CHARS)
+                ?.takeIf(String::isNotEmpty)
+            val message = buildString {
+                append("HTTP ${e.code()}")
+                if (detail != null) append(": $detail")
+            }
+            Log.e("OpenAIClient", "Chat request failed: $message", e)
+            Result.failure(Exception(message, e))
         } catch (e: Exception) {
             Log.e("OpenAIClient", "Error in chat", e)
             Result.failure(e)
@@ -143,7 +161,9 @@ class OpenAIClient(
 
         val requestBody = mutableMapOf<String, Any?>(
             "model" to model,
-            "messages" to allMessages.map { it.toStreamingMap() },
+            "messages" to allMessages.map {
+                it.toStreamingMap(requireStringContentForToolCalls)
+            },
             "temperature" to temperature,
             "max_tokens" to maxTokens,
             "stream" to true
@@ -176,6 +196,17 @@ class OpenAIClient(
                     )
                 }
             )
+        } catch (e: HttpException) {
+            val detail = e.response()?.errorBody()?.string()
+                ?.trim()
+                ?.take(MAX_HTTP_ERROR_CHARS)
+                ?.takeIf(String::isNotEmpty)
+            val message = buildString {
+                append("HTTP ${e.code()}")
+                if (detail != null) append(": $detail")
+            }
+            Log.e("OpenAIClient", "Error getting models: $message", e)
+            Result.failure(Exception(message, e))
         } catch (e: Exception) {
             Log.e("OpenAIClient", "Error getting models", e)
             Result.failure(e)
@@ -193,5 +224,9 @@ class OpenAIClient(
         suspend fun getModels(
             @Header("Authorization") authorization: String?
         ): ModelsResponse
+    }
+
+    private companion object {
+        const val MAX_HTTP_ERROR_CHARS = 4_000
     }
 }

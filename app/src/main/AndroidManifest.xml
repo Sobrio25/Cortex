@@ -173,6 +173,10 @@
             android:exported="false" />
 
         <receiver
+            android:name=".data.terminal.TaskPermissionActionReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".data.scheduling.ScheduledTaskReceiver"
             android:exported="false" />
 
@@ -183,6 +187,12 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <service
+            android:name=".data.background.CortexForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
 
         <!-- Disable default WorkManager initializer to use Hilt configuration -->
         <provider

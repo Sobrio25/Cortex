@@ -1,5 +1,7 @@
 package com.aiagents.app.domain.model
 
+import com.google.gson.annotations.SerializedName
+
 data class Message(
     val id: Long = 0,
     val role: MessageRole,
@@ -21,20 +23,29 @@ enum class MessageRole {
 }
 
 data class ToolCall(
+    @SerializedName(value = "id", alternate = ["a"])
     val id: String,
+    @SerializedName(value = "type", alternate = ["b"])
     val type: String = "function",
+    @SerializedName(value = "function", alternate = ["c"])
     val function: ToolFunction,
+    @SerializedName(value = "thoughtSignature", alternate = ["d"])
     val thoughtSignature: String? = null
 )
 
 data class ToolFunction(
+    @SerializedName(value = "name", alternate = ["a"])
     val name: String,
+    @SerializedName(value = "arguments", alternate = ["b"])
     val arguments: String
 )
 
 data class ToolResult(
+    @SerializedName(value = "toolCallId", alternate = ["a"])
     val toolCallId: String,
+    @SerializedName(value = "name", alternate = ["b"])
     val name: String,
+    @SerializedName(value = "content", alternate = ["c"])
     val content: String
 )
 

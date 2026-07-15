@@ -148,6 +148,7 @@ internal fun modelsDevProviderId(provider: ProviderType, baseUrl: String?): Stri
         ProviderType.NVIDIA,
         ProviderType.OPENCODE,
         ProviderType.OLLAMA,
+        ProviderType.LM_STUDIO,
         ProviderType.LOCAL -> null
     }
 }

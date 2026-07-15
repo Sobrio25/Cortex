@@ -166,6 +166,31 @@ class CortexMemoryPolicyTest {
     }
 
     @Test
+    fun onlyExplicitDemotionsAreMarkedForSecondaryArchive() {
+        val original = listOf("Dato de baja prioridad", "Dato incorrecto", "Dato olvidable")
+        val operations = listOf(
+            CortexMemoryOperation(
+                CortexMemoryAction.REMOVE,
+                oldText = "baja prioridad",
+                preserveInArchive = true
+            ),
+            CortexMemoryOperation(
+                CortexMemoryAction.REPLACE,
+                oldText = "incorrecto",
+                content = "Dato corregido"
+            ),
+            CortexMemoryOperation(CortexMemoryAction.REMOVE, oldText = "olvidable")
+        )
+
+        val applied = CortexMemoryPolicy.apply(original, operations)
+        val archived = CortexMemoryPolicy.entriesMarkedForArchive(original, operations)
+
+        assertTrue(applied.success)
+        assertEquals(listOf("Dato corregido"), applied.entries)
+        assertEquals(listOf("Dato de baja prioridad"), archived)
+    }
+
+    @Test
     fun overflowingBatchRollsBackEveryPriorOperation() {
         val original = listOf("Dato que no debe perderse")
 

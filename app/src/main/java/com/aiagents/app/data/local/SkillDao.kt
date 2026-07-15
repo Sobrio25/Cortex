@@ -66,6 +66,33 @@ interface SkillDao {
     @Query(
         """
         UPDATE skills SET
+            name = :name,
+            description = :description,
+            whenToUse = :whenToUse,
+            instructions = :instructions,
+            status = 'ACTIVE',
+            version = version + 1,
+            updatedAt = :updatedAt,
+            activatedAt = COALESCE(activatedAt, :updatedAt),
+            archivedAt = NULL
+        WHERE id = :id
+          AND origin = 'AUTO'
+          AND isImmutable = 0
+          AND status != 'ARCHIVED'
+        """
+    )
+    suspend fun updateAutomatic(
+        id: Long,
+        name: String,
+        description: String,
+        whenToUse: String,
+        instructions: String,
+        updatedAt: Long
+    ): Int
+
+    @Query(
+        """
+        UPDATE skills SET
             status = :status,
             updatedAt = :updatedAt,
             activatedAt = :activatedAt,

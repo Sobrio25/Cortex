@@ -16,7 +16,8 @@ class DelegationToolHandler {
                 "function" to mapOf(
                     "name" to TOOL_NAME,
                     "description" to buildString {
-                        append("Spawn one or more specialized subagents with isolated conversations and explicit budgets. ")
+                        append("Spawn one or more temporary subagents with isolated conversations and explicit budgets. ")
+                        append("Cortex creates a suitable temporary worker automatically; agent_name is only for an existing custom agent explicitly chosen by the user. ")
                         append("Use parallel mode only for independent tasks. Use sequential mode when each task depends on the previous result. ")
                         append("Choose read_only_shared for research/review and write_exclusive for tasks that modify files. ")
                         append("For external integrations, request the narrowest capability (for example google_docs) so the work and tool history stay isolated. ")
@@ -34,7 +35,7 @@ class DelegationToolHandler {
                                     "properties" to mapOf(
                                         "agent_name" to mapOf(
                                             "type" to "string",
-                                            "description" to "Exact agent name from Available Agents"
+                                            "description" to "Optional existing custom agent name. Omit it to create an ephemeral worker for this task."
                                         ),
                                         "goal" to mapOf(
                                             "type" to "string",
@@ -85,7 +86,7 @@ class DelegationToolHandler {
                                             "maximum" to 100
                                         )
                                     ),
-                                    "required" to listOf("agent_name", "goal")
+                                    "required" to listOf("goal")
                                 )
                             ),
                             "mode" to mapOf(

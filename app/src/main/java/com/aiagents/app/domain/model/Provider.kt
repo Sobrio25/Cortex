@@ -6,6 +6,7 @@ enum class ProviderType {
     OPENAI,
     NVIDIA,
     OLLAMA,
+    LM_STUDIO,
     MINIMAX,
     MOONSHOT,
     ANTHROPIC,

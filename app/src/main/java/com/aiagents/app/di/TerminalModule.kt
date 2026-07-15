@@ -85,8 +85,9 @@ object TerminalModule {
     @Provides
     @Singleton
     fun provideBraveSearchToolHandler(
-        okHttpClient: OkHttpClient
-    ): BraveSearchToolHandler = BraveSearchToolHandler(okHttpClient)
+        okHttpClient: OkHttpClient,
+        securePreferences: SecurePreferences
+    ): BraveSearchToolHandler = BraveSearchToolHandler(okHttpClient, securePreferences)
 
     @Provides
     @Singleton
@@ -97,8 +98,9 @@ object TerminalModule {
     @Provides
     @Singleton
     fun provideSerpAPIToolHandler(
-        okHttpClient: OkHttpClient
-    ): SerpAPIToolHandler = SerpAPIToolHandler(okHttpClient)
+        okHttpClient: OkHttpClient,
+        securePreferences: SecurePreferences
+    ): SerpAPIToolHandler = SerpAPIToolHandler(okHttpClient, securePreferences)
 
     @Provides
     @Singleton

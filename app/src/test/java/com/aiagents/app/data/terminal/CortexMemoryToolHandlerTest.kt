@@ -2,6 +2,7 @@ package com.aiagents.app.data.terminal
 
 import com.aiagents.app.data.memory.CortexMemoryMutationResult
 import com.aiagents.app.data.memory.CortexMemorySnapshot
+import com.aiagents.app.data.memory.SecondaryMemoryWriteResult
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -26,7 +27,7 @@ class CortexMemoryToolHandlerTest {
         assertTrue(function.get("description").asString.contains("MEMORY.md (2200 chars)"))
         assertTrue(function.get("description").asString.contains("USER.md (1375 chars)"))
         assertEquals(
-            listOf("memory", "user"),
+            listOf("memory", "user", "archive"),
             stringValues(properties.target().getAsJsonArray("enum"))
         )
         assertEquals(listOf("target"), stringValues(parameters.getAsJsonArray("required")))
@@ -44,6 +45,8 @@ class CortexMemoryToolHandlerTest {
         assertEquals(topLevelActions, batchActions)
         assertFalse(topLevelActions.contains("read"))
         assertFalse(batchActions.contains("read"))
+        assertEquals("boolean", properties.getAsJsonObject("preserve_in_archive").get("type").asString)
+        assertEquals(6, properties.getAsJsonObject("importance").get("maximum").asInt)
     }
 
     @Test
@@ -109,6 +112,25 @@ class CortexMemoryToolHandlerTest {
 
         assertEquals("user", response.get("target").asString)
         assertEquals("9/1375", response.get("usage").asString)
+    }
+
+    @Test
+    fun secondaryArchiveResponseDoesNotExposeActiveMarkdown() {
+        val response = JsonParser.parseString(
+            CortexMemoryToolResponseFormatter.archive(
+                SecondaryMemoryWriteResult(
+                    success = true,
+                    changed = true,
+                    memoryId = 42,
+                    message = "saved"
+                )
+            )
+        ).asJsonObject
+
+        assertEquals("archive", response.get("target").asString)
+        assertEquals(42, response.get("memory_id").asInt)
+        assertTrue(response.get("done").asBoolean)
+        assertFalse(response.has("current_entries"))
     }
 
     @Test

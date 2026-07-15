@@ -79,6 +79,7 @@ object TokenCounter {
         ProviderType.OPENCODE to 32_768,
         ProviderType.OPENROUTER to 32_768,
         ProviderType.OLLAMA to 8_192,
+        ProviderType.LM_STUDIO to 32_768,
         ProviderType.LOCAL to 4_096
     )
 

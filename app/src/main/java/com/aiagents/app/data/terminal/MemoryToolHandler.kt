@@ -65,13 +65,13 @@ class MemoryToolHandler @Inject constructor(
             TOOL_SEARCH, TOOL_SAVE, TOOL_LIST, TOOL_DELETE, TOOL_UPDATE, TOOL_LINK
         )
 
-        /** Legacy Room memory is an on-demand semantic archive, not Cortex's bounded memory. */
+        /** Room is the on-demand secondary tier; active Markdown is already in prompt context. */
         val READ_TOOL_NAMES = setOf(TOOL_SEARCH, TOOL_LIST)
 
         fun getToolDefinitionsJson(): List<Map<String, Any>> = listOf(
             mapOf("type" to "function", "function" to mapOf(
                 "name" to TOOL_SEARCH,
-                "description" to "Search persistent memory. Keys are in English (name, country, food, etc). Use English keys for best results. Auto-translates common terms.",
+                "description" to "Search lower-priority or demoted secondary memory in SQLite. Active MEMORY.md/USER.md is already in context and is not duplicated here. Keys are normally English snake_case.",
                 "parameters" to mapOf("type" to "object",
                     "properties" to mapOf(
                         "query" to mapOf("type" to "string", "description" to "Search text"),
@@ -83,7 +83,7 @@ class MemoryToolHandler @Inject constructor(
             )),
             mapOf("type" to "function", "function" to mapOf(
                 "name" to TOOL_SAVE,
-                "description" to "Save user info. Format: 'key: value'. Keys in English, values in user's language. importance: 9-10 identity, 7-8 preferences, 5-6 context, 3-4 casual.",
+                "description" to "Internal secondary-memory write. Active-worthy facts belong in the memory tool's Markdown targets; secondary importance is limited to 1-6.",
                 "parameters" to mapOf("type" to "object",
                     "properties" to mapOf(
                         "content" to mapOf("type" to "string", "description" to "Format 'key: value'. E.g. 'name: Gabriel', 'food: mexicana'"),
@@ -96,7 +96,7 @@ class MemoryToolHandler @Inject constructor(
             )),
             mapOf("type" to "function", "function" to mapOf(
                 "name" to TOOL_LIST,
-                "description" to "List saved memories, optionally filtered by category.",
+                "description" to "List lower-priority and demoted secondary memories, optionally filtered by category.",
                 "parameters" to mapOf("type" to "object",
                     "properties" to mapOf(
                         "category" to mapOf("type" to "string",

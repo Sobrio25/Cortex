@@ -7,7 +7,6 @@ import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.domain.model.MoonshotEndpointType
 import com.aiagents.app.domain.model.NvidiaProviderConfig
 import com.aiagents.app.domain.model.OpenCodeVariantType
-import com.aiagents.app.domain.model.OpenAIAuthMode
 import com.aiagents.app.domain.model.ProviderType
 import com.aiagents.app.domain.model.ZAIPlanType
 import android.content.Context
@@ -40,8 +39,7 @@ data class ProviderState(
     val zaiApiKeys: Map<ZAIPlanType, String> = emptyMap(),
     // Campos específicos para OpenCode
     val openCodeVariant: OpenCodeVariantType = OpenCodeVariantType.ZEN,
-    val openCodeApiKeys: Map<OpenCodeVariantType, String> = emptyMap(),
-    val openAIAuthMode: OpenAIAuthMode = OpenAIAuthMode.API_KEY
+    val openCodeApiKeys: Map<OpenCodeVariantType, String> = emptyMap()
 )
 
 @HiltViewModel
@@ -109,17 +107,9 @@ class ProvidersViewModel @Inject constructor(
                 )
             }
             ProviderType.OPENAI -> {
-                val authMode = repository.getOpenAIAuthMode()
                 currentStates[type] = currentStates[type]!!.copy(
-                    apiKey = when (authMode) {
-                        OpenAIAuthMode.API_KEY -> repository.getApiKey(type) ?: ""
-                        OpenAIAuthMode.OAUTH_BACKEND -> repository.getOpenAIBackendToken() ?: ""
-                    },
-                    baseUrl = when (authMode) {
-                        OpenAIAuthMode.API_KEY -> OpenAIEndpointPolicy.OFFICIAL_API_BASE_URL
-                        OpenAIAuthMode.OAUTH_BACKEND -> repository.getOpenAIBackendBaseUrl().orEmpty()
-                    },
-                    openAIAuthMode = authMode
+                    apiKey = repository.getApiKey(type) ?: "",
+                    baseUrl = OpenAIEndpointPolicy.OFFICIAL_API_BASE_URL
                 )
             }
             else -> {
@@ -151,29 +141,6 @@ class ProvidersViewModel @Inject constructor(
         val currentStates = _providerStates.value.toMutableMap()
         currentStates[type] = currentStates[type]!!.copy(baseUrl = baseUrl)
         _providerStates.value = currentStates
-    }
-
-    fun setOpenAIAuthMode(mode: OpenAIAuthMode) {
-        val states = _providerStates.value.toMutableMap()
-        val state = states[ProviderType.OPENAI] ?: return
-        states[ProviderType.OPENAI] = state.copy(
-            openAIAuthMode = mode,
-            apiKey = when (mode) {
-                OpenAIAuthMode.API_KEY -> repository.getApiKey(ProviderType.OPENAI).orEmpty()
-                OpenAIAuthMode.OAUTH_BACKEND -> repository.getOpenAIBackendToken().orEmpty()
-            },
-            baseUrl = when (mode) {
-                OpenAIAuthMode.API_KEY -> getDefaultBaseUrl(ProviderType.OPENAI)
-                OpenAIAuthMode.OAUTH_BACKEND -> repository.getOpenAIBackendBaseUrl().orEmpty()
-            },
-            availableModels = emptyList(),
-            isLoading = false,
-            catalogSource = null,
-            catalogError = null,
-            catalogUpdatedAtEpochMillis = null,
-            loadedCatalogKey = null
-        )
-        _providerStates.value = states
     }
 
     // ── Métodos específicos para Moonshot ──────────────────────────────────
@@ -416,11 +383,7 @@ class ProvidersViewModel @Inject constructor(
             try {
                 if (type == ProviderType.OPENAI) {
                     val previousScope = repository.getStoredCredentialScope(type)
-                    repository.saveOpenAIConfig(
-                        mode = state.openAIAuthMode,
-                        credential = state.apiKey,
-                        backendBaseUrl = state.baseUrl
-                    )
+                    repository.saveOpenAIProviderApiKey(state.apiKey)
                     clearSelectionsIfCredentialChanged(type, previousScope)
                 } else {
                     val previousScope = repository.getStoredCredentialScope(type)
@@ -511,19 +474,11 @@ class ProvidersViewModel @Inject constructor(
                     )
                 }
                 ProviderType.OPENAI -> {
-                    val authMode = repository.getOpenAIAuthMode()
                     ProviderState(
                         type = type,
-                        apiKey = when (authMode) {
-                            OpenAIAuthMode.API_KEY -> repository.getApiKey(type) ?: ""
-                            OpenAIAuthMode.OAUTH_BACKEND -> repository.getOpenAIBackendToken() ?: ""
-                        },
-                        baseUrl = when (authMode) {
-                            OpenAIAuthMode.API_KEY -> OpenAIEndpointPolicy.OFFICIAL_API_BASE_URL
-                            OpenAIAuthMode.OAUTH_BACKEND -> repository.getOpenAIBackendBaseUrl().orEmpty()
-                        },
-                        isConfigured = repository.hasApiKey(type),
-                        openAIAuthMode = authMode
+                        apiKey = repository.getApiKey(type) ?: "",
+                        baseUrl = OpenAIEndpointPolicy.OFFICIAL_API_BASE_URL,
+                        isConfigured = repository.hasApiKey(type)
                     )
                 }
                 else -> {
@@ -654,7 +609,6 @@ class ProvidersViewModel @Inject constructor(
             ProviderType.MOONSHOT -> "${state.moonshotEndpoint.name}|${state.moonshotEndpoint.baseUrl}"
             ProviderType.ZAI -> "${state.zaiPlan.name}|${state.zaiPlan.baseUrl}"
             ProviderType.OPENCODE -> "remote-v2|${state.openCodeVariant.name}|${state.openCodeVariant.baseUrl}"
-            ProviderType.OPENAI -> "${state.openAIAuthMode.name}|${state.baseUrl}"
             else -> state.baseUrl.ifBlank { getDefaultBaseUrl(state.type) }
         }.trim().trimEnd('/')
         val scope = repository.getCredentialScope(state.type, state.apiKey, destination)
@@ -705,6 +659,7 @@ class ProvidersViewModel @Inject constructor(
             ProviderType.OPENAI -> "https://api.openai.com/v1/"
             ProviderType.NVIDIA -> NvidiaProviderConfig.API_BASE_URL
             ProviderType.OLLAMA -> "http://localhost:11434/"
+            ProviderType.LM_STUDIO -> "http://10.0.2.2:1234/v1/"
             ProviderType.MINIMAX -> "https://api.minimax.io/v1/"
             ProviderType.MOONSHOT -> "https://api.moonshot.ai/v1/"
             ProviderType.ANTHROPIC -> "https://api.anthropic.com/v1/"
@@ -725,6 +680,7 @@ class ProvidersViewModel @Inject constructor(
             ProviderType.OPENAI -> "OpenAI"
             ProviderType.NVIDIA -> "NVIDIA NIM"
             ProviderType.OLLAMA -> "Ollama (Local)"
+            ProviderType.LM_STUDIO -> "LM Studio (Local)"
             ProviderType.MINIMAX -> "MiniMax"
             ProviderType.MOONSHOT -> "Moonshot AI"
             ProviderType.ANTHROPIC -> "Anthropic (Claude)"
@@ -737,9 +693,6 @@ class ProvidersViewModel @Inject constructor(
             ProviderType.LOCAL -> "Local (On-Device)"
         }
     }
-
-    fun isValidOpenAIOAuthBackendUrl(value: String): Boolean =
-        OpenAIEndpointPolicy.normalizeBackendBaseUrl(value) != null
 
     // ── Anthropic OAuth (2-step: open browser → paste code) ────────────
 

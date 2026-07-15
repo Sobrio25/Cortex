@@ -23,6 +23,8 @@ import com.aiagents.app.data.remote.ChatMessage
 import com.aiagents.app.data.remote.ChatResponseWithTools
 import com.aiagents.app.data.remote.StreamingChunk
 import com.aiagents.app.data.remote.RemoteModelInfo
+import com.aiagents.app.data.remote.flattenToolHistoryForCompatibility
+import com.aiagents.app.data.remote.isHttp400
 import com.aiagents.app.data.runtime.RuntimeContextProvider
 import com.aiagents.app.data.skills.SkillReviewScheduler
 import com.aiagents.app.data.terminal.AgentCreatorToolHandler
@@ -69,10 +71,10 @@ import com.aiagents.app.domain.model.AgentFile
 import com.aiagents.app.domain.model.Conversation
 import com.aiagents.app.domain.model.Message
 import com.aiagents.app.domain.model.OpenCodeVariantType
-import com.aiagents.app.domain.model.OpenAIAuthMode
 import com.aiagents.app.domain.model.ProviderType
 import com.aiagents.app.domain.model.ToolCall
 import com.aiagents.app.domain.model.ToolResult
+import com.aiagents.app.domain.model.WebSearchProvider
 import com.aiagents.app.domain.model.Workspace
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -209,33 +211,44 @@ class AgentRepository @Inject constructor(
 
     suspend fun addMessage(workspaceId: Long, message: Message, agentId: Long? = null): Long {
         val id = messageDao.insertMessage(MessageEntity.fromDomain(message, workspaceId, agentId))
-        scheduleSkillReviewIfEligible(workspaceId, null, message)
+        scheduleSelfImprovementIfEligible(workspaceId, null, message, agentId)
         return id
     }
 
     suspend fun addMessage(workspaceId: Long, conversationId: Long?, message: Message, agentId: Long? = null): Long {
         val id = messageDao.insertMessage(MessageEntity.fromDomain(message, workspaceId, agentId, conversationId))
-        scheduleSkillReviewIfEligible(workspaceId, conversationId, message)
+        scheduleSelfImprovementIfEligible(workspaceId, conversationId, message, agentId)
         return id
     }
 
-    private suspend fun scheduleSkillReviewIfEligible(
+    private suspend fun scheduleSelfImprovementIfEligible(
         workspaceId: Long,
         conversationId: Long?,
-        message: Message
+        message: Message,
+        agentId: Long?
     ) {
-        if (message.role != com.aiagents.app.domain.model.MessageRole.USER) return
+        if (message.role != com.aiagents.app.domain.model.MessageRole.ASSISTANT) return
+        // Assistant turns with tool calls are intermediate iterations, not the response boundary.
+        if (message.toolCalls.isNotEmpty()) return
         // Delegated sub-conversation prompts are synthetic and must not count as user messages.
         if (conversationId != null && conversationDao.getConversationById(conversationId)?.parentConversationId != null) return
         runCatching {
+            val workspace = workspaceDao.getWorkspaceById(workspaceId) ?: return@runCatching
+            val respondingAgentId = agentId ?: workspace.activeAgentId ?: return@runCatching
+            val respondingAgent = agentDao.getAgentById(respondingAgentId)?.toDomain() ?: return@runCatching
+            if (!respondingAgent.isOrchestrator) return@runCatching
             val recent = if (conversationId != null) {
-                messageDao.getRecentConversationMessages(conversationId, 24)
+                messageDao.getRecentConversationMessages(conversationId, 80)
             } else {
-                messageDao.getRecentConversationMessagesForWorkspace(workspaceId, 24)
+                messageDao.getRecentConversationMessagesForWorkspace(workspaceId, 80)
             }.asReversed().map { it.toDomain() }
-            skillReviewScheduler.recordMessage(workspaceId, message, recent)
+            skillReviewScheduler.recordCompletedTurn(
+                scopeId = workspaceId,
+                recentTranscript = recent,
+                modelKey = workspace.selectedModel
+            )
         }.onFailure {
-            Log.w("AgentRepository", "Could not schedule skill review", it)
+            Log.w("AgentRepository", "Could not schedule background self-improvement", it)
         }
     }
 
@@ -507,17 +520,14 @@ class AgentRepository @Inject constructor(
 
     fun saveBaseUrl(provider: ProviderType, baseUrl: String) {
         require(provider != ProviderType.OPENAI) {
-            "OpenAI debe guardarse con saveOpenAIConfig para mantener credencial y destino atómicos"
+            "OpenAI usa exclusivamente la URL oficial"
         }
         securePreferences.saveBaseUrl(provider, baseUrl)
     }
 
     fun getBaseUrl(provider: ProviderType): String? {
         if (provider != ProviderType.OPENAI) return securePreferences.getBaseUrl(provider)
-        return when (securePreferences.getOpenAIAuthMode()) {
-            OpenAIAuthMode.API_KEY -> OpenAIEndpointPolicy.OFFICIAL_API_BASE_URL
-            OpenAIAuthMode.OAUTH_BACKEND -> securePreferences.getOpenAIBackendBaseUrl()
-        }
+        return OpenAIEndpointPolicy.OFFICIAL_API_BASE_URL
     }
 
     fun hasApiKey(provider: ProviderType): Boolean {
@@ -528,11 +538,7 @@ class AgentRepository @Inject constructor(
         return providerCredentialResolver.resolve(provider) != null
     }
 
-    fun getOpenAIAuthMode(): OpenAIAuthMode = securePreferences.getOpenAIAuthMode()
-    fun getOpenAIBackendToken(): String? = securePreferences.getOpenAIBackendToken()
-    fun getOpenAIBackendBaseUrl(): String? = securePreferences.getOpenAIBackendBaseUrl()
-    fun saveOpenAIConfig(mode: OpenAIAuthMode, credential: String, backendBaseUrl: String) =
-        securePreferences.saveOpenAIConfig(mode, credential, backendBaseUrl)
+    fun saveOpenAIProviderApiKey(apiKey: String) = securePreferences.saveOpenAIProviderApiKey(apiKey)
 
     fun setActiveProvider(provider: ProviderType) {
         securePreferences.setActiveProvider(provider)
@@ -547,11 +553,7 @@ class AgentRepository @Inject constructor(
     }
 
     private fun missingCredentialsMessage(provider: ProviderType): String =
-        if (provider == ProviderType.OPENAI && getOpenAIAuthMode() == OpenAIAuthMode.OAUTH_BACKEND) {
-            "OAuth de OpenAI no configurado: guarda una URL HTTPS válida para el backend"
-        } else {
-            "Credenciales no configuradas para $provider"
-        }
+        "Credenciales no configuradas para $provider"
 
     suspend fun chatWithTools(
         agent: Agent,
@@ -613,19 +615,52 @@ class AgentRepository @Inject constructor(
         val tools = buildToolDefinitions(agent, enableTerminal, workspaceFolderPath, allowedToolNames)
 
         val sanitized = sanitizeToolCallHistory(chatMessages)
-        Log.d("AgentRepository", "Sending ${sanitized.size} messages to API with ${tools.size} tools")
+        val runtimePrompt = buildRuntimeSystemPrompt(
+            agent,
+            messages,
+            tools,
+            enableTerminal,
+            workspaceFolderPath,
+            allowedToolNames,
+            memorySessionKey
+        )
+        val requiresTextToolHistory = activeProvider == ProviderType.KILO &&
+            modelToUse.startsWith("tencent/hy3", ignoreCase = true) &&
+            sanitized.any { it.role == "tool" }
+        val firstAttemptMessages = if (requiresTextToolHistory) {
+            Log.d(
+                "AgentRepository",
+                "Using text-compatible tool history for Kilo model $modelToUse"
+            )
+            flattenToolHistoryForCompatibility(sanitized)
+        } else {
+            sanitized
+        }
+
+        Log.d("AgentRepository", "Sending ${firstAttemptMessages.size} messages to API with ${tools.size} tools")
+        val firstAttempt = client.chatWithTools(
+            model = modelToUse,
+            messages = firstAttemptMessages,
+            systemPrompt = runtimePrompt,
+            temperature = agent.temperature,
+            maxTokens = agent.maxTokens,
+            tools = tools
+        )
+
+        val shouldRetryWithTextToolHistory = !requiresTextToolHistory &&
+            activeProvider == ProviderType.KILO &&
+            firstAttempt.exceptionOrNull()?.isHttp400() == true &&
+            sanitized.any { it.role == "tool" }
+        if (!shouldRetryWithTextToolHistory) return firstAttempt
+
+        Log.w(
+            "AgentRepository",
+            "Kilo rejected native tool history with HTTP 400; retrying once with text-compatible history"
+        )
         return client.chatWithTools(
             model = modelToUse,
-            messages = sanitized,
-            systemPrompt = buildRuntimeSystemPrompt(
-                agent,
-                messages,
-                tools,
-                enableTerminal,
-                workspaceFolderPath,
-                allowedToolNames,
-                memorySessionKey
-            ),
+            messages = flattenToolHistoryForCompatibility(sanitized),
+            systemPrompt = runtimePrompt,
             temperature = agent.temperature,
             maxTokens = agent.maxTokens,
             tools = tools
@@ -1039,6 +1074,7 @@ class AgentRepository @Inject constructor(
     ): List<Map<String, Any>> {
         val enabledSet = if (agent.enabledTools.isBlank()) null
                          else agent.enabledTools.split(",").map { it.trim() }.toSet()
+        val webSearchProvider = unifiedWebToolHandler.selectedProvider()
 
         val cacheKey = "${agent.id}|${agent.name}|${agent.role}|${agent.enabledTools}|$enableTerminal|${workspaceFolderPath}" +
             "|${securePreferences.hasBraveApiKey()}|${securePreferences.hasGoogleMapsApiKey()}" +
@@ -1047,7 +1083,8 @@ class AgentRepository @Inject constructor(
             "|${securePreferences.hasGitHubToken()}|${securePreferences.hasNotionToken()}|${securePreferences.hasSlackToken()}" +
             "|${securePreferences.hasGoogleWorkspaceConfig()}" +
             "|${securePreferences.isFinanceEnabled()}|${securePreferences.isWeatherEnabled()}" +
-            "|${securePreferences.isImageGenerationEnabled()}|web=${unifiedWebToolHandler.isSearchConfigured()}"
+            "|${securePreferences.isImageGenerationEnabled()}" +
+            "|web=${webSearchProvider.name}:${unifiedWebToolHandler.isSearchConfigured()}"
 
         cachedAllTools?.let { if (cachedAllToolsKey == cacheKey) return it }
 
@@ -1070,13 +1107,17 @@ class AgentRepository @Inject constructor(
         }
 
         val mcpTools = buildList {
-            if (enabledSet == null || "brave_search" in enabledSet) {
+            if (webSearchProvider == WebSearchProvider.BRAVE &&
+                (enabledSet == null || "web" in enabledSet || "brave_search" in enabledSet)
+            ) {
                 if (securePreferences.hasBraveApiKey()) addAll(BraveSearchToolHandler.getToolDefinitionsJson())
             }
             if (enabledSet == null || "google_maps" in enabledSet) {
                 if (securePreferences.hasGoogleMapsApiKey()) addAll(GoogleMapsToolHandler.getToolDefinitionsJson())
             }
-            if (enabledSet == null || "serpapi" in enabledSet) {
+            if (webSearchProvider == WebSearchProvider.SERPAPI &&
+                (enabledSet == null || "web" in enabledSet || "serpapi" in enabledSet)
+            ) {
                 if (securePreferences.hasSerpApiKey()) addAll(SerpAPIToolHandler.getToolDefinitionsJson())
             }
             if (enabledSet == null || "canva" in enabledSet) {
@@ -1122,8 +1163,8 @@ class AgentRepository @Inject constructor(
             addAll(AgentCreatorToolHandler.getToolDefinitionsJson())
             addAll(LocationToolHandler.getToolDefinitionsJson())
             addAll(ReminderToolHandler.getToolDefinitionsJson())
-            // Room is retained as a searchable historical archive. Durable writes go only to the
-            // bounded Markdown memory and only the stable orchestrator role can see that tool.
+            // Room is the searchable secondary tier. The orchestrator's single memory tool curates
+            // both active Markdown and lower-priority/demoted SQLite entries.
             addAll(MemoryToolHandler.getReadToolDefinitionsJson())
             if (agent.isOrchestrator) {
                 addAll(CortexMemoryToolHandler.getToolDefinitionsJson())
@@ -1383,12 +1424,14 @@ class AgentRepository @Inject constructor(
         return getActiveOpenCodeVariant().baseUrl
     }
 
-    // ── Auto-creación de agentes via Agent Architect ────────────────────────
+    // ── Explicit agent creation with an ephemeral designer ─────────────────
     suspend fun autoCreateAgent(description: String): Result<String> {
         runtimeContextProvider.refreshIdentityFromMemory()
-        // 1. Get the Agent Architect's system prompt
-        val architect = agentDao.getAgentByName("Agent Architect")
-            ?: return Result.failure(Exception("Agent Architect no encontrado en la base de datos"))
+        if (description.isBlank()) {
+            return Result.failure(Exception("Describe el agente que quieres crear"))
+        }
+        val cortex = getOrchestratorAgent()
+            ?: return Result.failure(Exception("Cortex no está disponible"))
 
         // 2. Get a configured provider + model
         val selectedModels = securePreferences.getSelectedModels()
@@ -1415,27 +1458,35 @@ class AgentRepository @Inject constructor(
 
         val client = aiClientFactory.createClient(providerType, apiKey, baseUrl)
 
-        // 4. Call the AI with the Agent Architect's prompt and create_agent tool
-        val tools = AgentCreatorToolHandler.getToolDefinitionsJson()
+        // The designer exists only for this request; it is never stored in the agents table.
+        val tools = AgentCreatorToolHandler.getToolDefinitionsJson().filter { definition ->
+            @Suppress("UNCHECKED_CAST")
+            val function = definition["function"] as? Map<String, Any>
+            function?.get("name") == AgentCreatorToolHandler.TOOL_CREATE
+        }
         val enhancedPrompt = runtimeContextProvider.enrich(
-            basePrompt = architect.systemPrompt + "\n\n" +
-            "## CRITICAL INSTRUCTION\n" +
-            "You have access to the `create_agent` function tool. You MUST call it to create the agent. " +
-            "Do NOT just describe the agent — you MUST invoke the create_agent tool with all required parameters.",
-            agentName = architect.name,
-            agentRole = architect.role,
+            basePrompt = """
+                Design one persistent custom agent from the user's explicit request and call create_agent exactly once.
+                Provide a concise, task-specific system prompt that tells the agent to match the user's language, states its capabilities and limits, and avoids duplicating generic runtime/tool instructions.
+                Choose safe defaults and never create additional agents.
+            """.trimIndent(),
+            agentName = "Temporary Agent Designer",
+            agentRole = "Temporary Task Worker",
             exposedToolNames = listOf("create_agent")
         )
         val messages = listOf(
-            ChatMessage(role = "user", content = "Crea un agente basado en esta descripción del usuario: $description\n\nIMPORTANT: Use the create_agent tool to create it.")
+            ChatMessage(
+                role = "user",
+                content = "Crea un único agente persistente basado en esta descripción: ${description.take(8_000)}"
+            )
         )
 
         val response = client.chatWithTools(
             model = modelId,
             messages = messages,
             systemPrompt = enhancedPrompt,
-            temperature = architect.temperature,
-            maxTokens = architect.maxTokens,
+            temperature = 0.2f,
+            maxTokens = cortex.maxTokens.coerceAtMost(4_096),
             tools = tools
         ).getOrElse { return Result.failure(it) }
 
@@ -1448,7 +1499,12 @@ class AgentRepository @Inject constructor(
         val results = mutableListOf<String>()
         for (tc in toolCalls) {
             if (tc.function.name in AgentCreatorToolHandler.ALL_TOOL_NAMES) {
-                val result = agentCreatorToolHandler.executeTool(tc.id, tc.function.name, tc.function.arguments)
+                val result = agentCreatorToolHandler.executeTool(
+                    tc.id,
+                    tc.function.name,
+                    tc.function.arguments,
+                    allowUserRequestedCreation = true
+                )
                 results.add(result.content)
                 if (!result.success) {
                     return Result.failure(Exception(result.content))

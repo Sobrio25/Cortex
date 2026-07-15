@@ -7,7 +7,7 @@ import org.junit.Test
 
 class RuntimeContextProviderTest {
     @Test
-    fun renderIncludesTimeIdentityAndroidAndActualTools() {
+    fun renderIncludesTimeAndroidAndCompactToolCountsWithoutUserIdentity() {
         val text = RuntimeContextProvider.render(
             RuntimeSnapshot(
                 isoDateTime = "2026-07-13T12:30:00-06:00",
@@ -16,13 +16,10 @@ class RuntimeContextProviderTest {
                 localeTag = "es-MX",
                 agentName = "Atlas",
                 agentRole = "Agent Orchestrator",
-                userName = "Gabriel",
-                preferredUserName = "Gabo",
                 androidRelease = "15",
                 androidApi = 35,
                 deviceManufacturer = "Google",
                 deviceModel = "Pixel",
-                appPackage = "com.aiagents.app",
                 exposedTools = listOf("search_tools", "web_search"),
                 discoverableTools = listOf("device_control", "search_tools", "web_search")
             )
@@ -30,9 +27,11 @@ class RuntimeContextProviderTest {
 
         assertTrue(text.contains("2026-07-13"))
         assertTrue(text.contains("America/Mexico_City"))
-        assertTrue(text.contains("Gabo (name: Gabriel)"))
+        assertFalse(text.contains("Gabriel"))
+        assertFalse(text.contains("Gabo"))
         assertTrue(text.contains("Android 15 / API 35"))
-        assertTrue(text.contains("device_control"))
+        assertTrue(text.contains("2 exposed; 3 discoverable"))
+        assertFalse(text.contains("device_control"))
         assertFalse(text.contains("DuckDuckGo"))
     }
 
@@ -88,7 +87,7 @@ class RuntimeContextProviderTest {
 
         assertTrue(soul.contains(RuntimeContextProvider.SOUL_MARKER))
         assertTrue(soul.contains("primary identity"))
-        assertTrue(soul.contains("Configured agent name (authoritative): Atlas"))
+        assertFalse(soul.contains("Configured agent name (authoritative)"))
         assertTrue(user.contains(RuntimeContextProvider.USER_MARKER))
         assertTrue(user.contains("remembered user data"))
         assertTrue(user.contains("Preferred name: Gabo"))

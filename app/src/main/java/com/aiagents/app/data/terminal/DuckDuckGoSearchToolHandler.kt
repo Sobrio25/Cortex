@@ -52,29 +52,6 @@ class DuckDuckGoSearchToolHandler @Inject constructor(
             )
         )
 
-        // Regex patterns for html.duckduckgo.com/html/ results page
-        private val RESULT_LINK_REGEX = Regex(
-            """<a[^>]*rel="nofollow"[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>""",
-            RegexOption.IGNORE_CASE
-        )
-        private val SNIPPET_REGEX = Regex(
-            """<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)</a>""",
-            RegexOption.IGNORE_CASE
-        )
-        // Fallback: broader pattern for result links
-        private val RESULT_LINK_FALLBACK_REGEX = Regex(
-            """<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>""",
-            RegexOption.IGNORE_CASE
-        )
-        // Another fallback: any link inside result__title
-        private val RESULT_TITLE_LINK_REGEX = Regex(
-            """<h2[^>]*class="result__title"[^>]*>[\s\S]*?<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>""",
-            RegexOption.IGNORE_CASE
-        )
-        private val SNIPPET_FALLBACK_REGEX = Regex(
-            """<div[^>]*class="result__snippet"[^>]*>([\s\S]*?)</div>""",
-            RegexOption.IGNORE_CASE
-        )
     }
 
     // Dedicated client that follows redirects and handles cookies
@@ -110,7 +87,7 @@ class DuckDuckGoSearchToolHandler @Inject constructor(
 
             Log.d(TAG, "Response length: ${body.length}, first 500 chars: ${body.take(500)}")
 
-            val results = parseResults(body, count)
+            val results = NativeWebSearchParser.parse(body, count)
 
             if (results.isEmpty()) {
                 // Log a snippet to debug
@@ -124,10 +101,10 @@ class DuckDuckGoSearchToolHandler @Inject constructor(
             val formatted = buildString {
                 appendLine("Resultados de búsqueda para: \"$query\"")
                 appendLine()
-                results.forEachIndexed { index, (title, resultUrl, snippet) ->
-                    appendLine("${index + 1}. **$title**")
-                    if (resultUrl.isNotBlank()) appendLine("   URL: $resultUrl")
-                    if (snippet.isNotBlank()) appendLine("   $snippet")
+                results.forEachIndexed { index, result ->
+                    appendLine("${index + 1}. **${result.title}**")
+                    appendLine("   URL: ${result.url}")
+                    if (result.snippet.isNotBlank()) appendLine("   ${result.snippet}")
                     appendLine()
                 }
             }
@@ -247,94 +224,4 @@ class DuckDuckGoSearchToolHandler @Inject constructor(
         return agents.random()
     }
 
-    private fun parseResults(html: String, maxResults: Int): List<Triple<String, String, String>> {
-        // Try primary patterns (html.duckduckgo.com/html/)
-        var links = RESULT_LINK_REGEX.findAll(html).toList()
-        var snippets = SNIPPET_REGEX.findAll(html).toList()
-
-        // Fallback patterns
-        if (links.isEmpty()) {
-            links = RESULT_LINK_FALLBACK_REGEX.findAll(html).toList()
-        }
-        if (links.isEmpty()) {
-            links = RESULT_TITLE_LINK_REGEX.findAll(html).toList()
-        }
-        if (snippets.isEmpty()) {
-            snippets = SNIPPET_FALLBACK_REGEX.findAll(html).toList()
-        }
-
-        // Try lite.duckduckgo.com patterns if still nothing
-        if (links.isEmpty()) {
-            return parseLiteResults(html, maxResults)
-        }
-
-        val results = mutableListOf<Triple<String, String, String>>()
-        for (i in links.indices) {
-            if (results.size >= maxResults) break
-            val rawUrl = links[i].groupValues[1]
-            val title = stripHtmlTags(links[i].groupValues[2]).trim()
-            if (title.isBlank()) continue
-            val url = decodeDdgUrl(rawUrl)
-            val snippet = if (i < snippets.size) stripHtmlTags(snippets[i].groupValues[1]).trim() else ""
-            results.add(Triple(title, url, snippet))
-        }
-        return results
-    }
-
-    private fun parseLiteResults(html: String, maxResults: Int): List<Triple<String, String, String>> {
-        // Lite page patterns
-        val liteLink = Regex(
-            """<a[^>]*href="([^"]+)"[^>]*class=['"]result-link['"][^>]*>([\s\S]*?)</a>""",
-            RegexOption.IGNORE_CASE
-        )
-        val liteSnippet = Regex(
-            """<td[^>]*class=['"]result-snippet['"][^>]*>([\s\S]*?)</td>""",
-            RegexOption.IGNORE_CASE
-        )
-        // Remove sponsored results
-        val cleanHtml = Regex(
-            """<tr[^>]*class=["']result-sponsored["'][^>]*>[\s\S]*?</tr>""",
-            RegexOption.IGNORE_CASE
-        ).replace(html, "")
-
-        val links = liteLink.findAll(cleanHtml).toList()
-        val snippets = liteSnippet.findAll(cleanHtml).toList()
-
-        val results = mutableListOf<Triple<String, String, String>>()
-        for (i in links.indices) {
-            if (results.size >= maxResults) break
-            val rawUrl = links[i].groupValues[1]
-            val title = stripHtmlTags(links[i].groupValues[2]).trim()
-            if (title.isBlank()) continue
-            val url = decodeDdgUrl(rawUrl)
-            val snippet = if (i < snippets.size) stripHtmlTags(snippets[i].groupValues[1]).trim() else ""
-            results.add(Triple(title, url, snippet))
-        }
-        return results
-    }
-
-    private fun decodeDdgUrl(rawUrl: String): String {
-        // DuckDuckGo wraps URLs in redirect: //duckduckgo.com/l/?uddg=ENCODED_URL&...
-        if (rawUrl.contains("uddg=")) {
-            val encoded = rawUrl.substringAfter("uddg=").substringBefore("&")
-            return try {
-                java.net.URLDecoder.decode(encoded, "UTF-8")
-            } catch (_: Exception) {
-                rawUrl
-            }
-        }
-        return rawUrl
-    }
-
-    private fun stripHtmlTags(html: String): String {
-        return html.replace(Regex("<[^>]*>"), "")
-            .replace("&amp;", "&")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&#x27;", "'")
-            .replace("&#39;", "'")
-            .replace("&nbsp;", " ")
-            .replace(Regex("\\s+"), " ")
-    }
 }

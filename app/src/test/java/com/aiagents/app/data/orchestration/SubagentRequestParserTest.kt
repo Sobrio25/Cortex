@@ -57,6 +57,16 @@ class SubagentRequestParserTest {
     }
 
     @Test
+    fun agentNameIsOptionalForEphemeralWorkers() {
+        val result = SubagentRequestParser.parse(
+            """{"tasks":[{"goal":"Review the implementation"}]}"""
+        ).getOrThrow()
+
+        assertEquals("", result.tasks.single().agentName)
+        assertEquals("Review the implementation", result.tasks.single().goal)
+    }
+
+    @Test
     fun rejectsUnknownModeAndOversizedBatches() {
         assertTrue(
             SubagentRequestParser.parse(

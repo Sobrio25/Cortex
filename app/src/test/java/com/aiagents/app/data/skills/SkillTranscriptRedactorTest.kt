@@ -36,7 +36,7 @@ class SkillTranscriptRedactorTest {
 
         val transcript = SkillTranscriptRedactor.redact(messages)
 
-        assertTrue(transcript.length <= 7_000)
+        assertTrue(transcript.length <= 20_000)
         assertFalse(transcript.contains("mensaje 1 "))
         assertTrue(transcript.contains("mensaje 30 "))
     }

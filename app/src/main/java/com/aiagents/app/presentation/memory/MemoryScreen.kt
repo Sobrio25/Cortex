@@ -157,12 +157,12 @@ fun MemoryScreen(
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        "Archivo historico recuperable",
+                        "Memoria secundaria recuperable",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        "$totalCount recuerdos semanticos en la base local. Cortex los busca cuando los necesita; no se inyectan siempre en el contexto.",
+                        "$totalCount datos de baja prioridad o descartados de MEMORY.md en SQLite. Cortex los busca cuando hacen falta; los datos activos del Markdown no se duplican aqui.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -173,18 +173,18 @@ fun MemoryScreen(
                         IconButton(
                             onClick = { semanticImportLauncher.launch(arrayOf("application/json")) }
                         ) {
-                            Icon(Icons.Default.FileUpload, contentDescription = "Importar archivo historico JSON")
+                            Icon(Icons.Default.FileUpload, contentDescription = "Importar memoria secundaria JSON")
                         }
                         IconButton(onClick = { semanticExportLauncher.launch("cortex_memory_archive.json") }) {
-                            Icon(Icons.Default.FileDownload, contentDescription = "Exportar archivo historico JSON")
+                            Icon(Icons.Default.FileDownload, contentDescription = "Exportar memoria secundaria JSON")
                         }
                         IconButton(onClick = viewModel::runCleanupNow) {
-                            Icon(Icons.Default.CleaningServices, contentDescription = "Depurar archivo historico")
+                            Icon(Icons.Default.CleaningServices, contentDescription = "Depurar memoria secundaria")
                         }
                         IconButton(onClick = { showDeleteAllDialog = true }) {
                             Icon(
                                 Icons.Default.DeleteSweep,
-                                contentDescription = "Borrar archivo historico",
+                                contentDescription = "Borrar memoria secundaria",
                                 tint = MaterialTheme.colorScheme.error
                             )
                         }
@@ -197,7 +197,7 @@ fun MemoryScreen(
                     value = searchQuery,
                     onValueChange = viewModel::setSearchQuery,
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Buscar en el archivo historico...") },
+                    placeholder = { Text("Buscar en la memoria secundaria...") },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                     singleLine = true,
                     trailingIcon = {
@@ -235,7 +235,7 @@ fun MemoryScreen(
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
                                 if (searchQuery.isBlank() && selectedCategory == null) {
-                                    "El archivo historico esta vacio"
+                                    "La memoria secundaria esta vacia"
                                 } else {
                                     "No hay resultados"
                                 },
@@ -260,10 +260,10 @@ fun MemoryScreen(
     if (showDeleteAllDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteAllDialog = false },
-            title = { Text("Borrar el archivo historico") },
+            title = { Text("Borrar la memoria secundaria") },
             text = {
                 Text(
-                    "Se eliminaran permanentemente los $totalCount recuerdos semanticos. " +
+                    "Se eliminaran permanentemente los $totalCount datos secundarios. " +
                         "SOUL.md, USER.md y MEMORY.md no se modificaran. Esta accion no se puede deshacer."
                 )
             },
@@ -275,7 +275,7 @@ fun MemoryScreen(
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                 ) {
-                    Text("Borrar archivo")
+                    Text("Borrar memoria")
                 }
             },
             dismissButton = {
@@ -699,7 +699,7 @@ private fun MemoryCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "ID:${memory.id} | ${dateFormat.format(Date(memory.updatedAt))} | accesos:${memory.accessCount}",
+                    "ID:${memory.id} | ${memorySourceLabel(memory.source)} | ${dateFormat.format(Date(memory.updatedAt))} | accesos:${memory.accessCount}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -723,7 +723,7 @@ private fun MemoryCard(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Eliminar memoria") },
+            title = { Text("Eliminar memoria secundaria") },
             text = { Text("\"${memory.content}\"") },
             confirmButton = {
                 TextButton(
@@ -764,12 +764,12 @@ private fun EditMemoryDialog(
                     maxLines = 5
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-                Text("Importancia: ${importance.toInt()}", style = MaterialTheme.typography.bodySmall)
+                Text("Importancia secundaria: ${importance.toInt()}/6", style = MaterialTheme.typography.bodySmall)
                 Slider(
                     value = importance,
                     onValueChange = { importance = it },
-                    valueRange = 1f..10f,
-                    steps = 8
+                    valueRange = 1f..6f,
+                    steps = 4
                 )
             }
         },
@@ -780,4 +780,14 @@ private fun EditMemoryDialog(
             TextButton(onClick = onDismiss) { Text("Cancelar") }
         }
     )
+}
+
+private fun memorySourceLabel(source: String): String = when (source) {
+    "memory_demoted" -> "descartado de MEMORY.md"
+    "secondary_extraction" -> "dato secundario"
+    "extraction" -> "dato secundario anterior"
+    "onboarding" -> "perfil anterior"
+    "summary" -> "resumen"
+    "import" -> "importado"
+    else -> source.ifBlank { "local" }
 }
