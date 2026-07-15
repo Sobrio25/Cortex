@@ -146,7 +146,7 @@
     <string name="assistant_download_vosk">Download offline model</string>
     <string name="assistant_voice_output">Spoken responses</string>
     <string name="assistant_tts_ready">An embedded Android voice is ready</string>
-    <string name="assistant_tts_needed">Install an offline voice for your system language</string>
+    <string name="assistant_tts_needed">Install an offline voice for the language configured in Cortex</string>
     <string name="assistant_install_tts">Install offline voice</string>
     <string name="assistant_behavior_title">Conversation behavior</string>
     <string name="assistant_behavior_subtitle">Choose how the compact experience starts and responds.</string>

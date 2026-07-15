@@ -146,7 +146,7 @@
     <string name="assistant_download_vosk">Descargar modelo en español</string>
     <string name="assistant_voice_output">Respuestas habladas</string>
     <string name="assistant_tts_ready">Hay una voz embebida de Android lista</string>
-    <string name="assistant_tts_needed">Instala una voz offline para el idioma del sistema</string>
+    <string name="assistant_tts_needed">Instala una voz offline para el idioma configurado en Cortex</string>
     <string name="assistant_install_tts">Instalar voz offline</string>
     <string name="assistant_behavior_title">Comportamiento de conversación</string>
     <string name="assistant_behavior_subtitle">Elige cómo inicia y responde la experiencia compacta.</string>

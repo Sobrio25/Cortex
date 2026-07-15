@@ -24,6 +24,7 @@ import com.aiagents.app.ui.theme.AIAgentsTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.util.Locale
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -51,6 +52,8 @@ class CortexAssistantActivity : AppCompatActivity() {
                     CortexAssistantScreen(
                         workspaceId = workspaceId,
                         cortexName = securePreferences.getCortexName() ?: "Cortex",
+                        assistantLanguageTag = securePreferences.getAppLanguage()
+                            .ifBlank { Locale.getDefault().toLanguageTag() },
                         textToSpeech = textToSpeech,
                         preferences = assistantPreferences,
                         onDismiss = ::finish

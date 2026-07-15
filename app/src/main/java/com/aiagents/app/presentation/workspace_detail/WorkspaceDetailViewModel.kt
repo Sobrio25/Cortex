@@ -238,6 +238,8 @@ class WorkspaceDetailViewModel @Inject constructor(
     private var assistantModeEnabled = false
     @Volatile
     private var assistantModelOverride: String? = null
+    @Volatile
+    private var assistantLanguageTag: String = "es"
 
     // workspaceId: from nav arg first, then from active workspace preference
     private val workspaceId: Long = (savedStateHandle.get<Long>("workspaceId") ?: 0L).let { navId ->
@@ -1135,7 +1137,7 @@ Rules:
         val extraSections = mutableListOf<String>()
 
         if (assistantModeEnabled) {
-            extraSections.add(CortexAssistantPrompt.SYSTEM_INSTRUCTIONS.trimIndent())
+            extraSections.add(CortexAssistantPrompt.instructionsFor(assistantLanguageTag))
         }
 
         // Contexto de archivos del workspace
@@ -1165,10 +1167,19 @@ Directorio de trabajo: $workspacePath""".trimIndent())
     }
 
     /** Applies compact response rules only to the system-assistant activity's ViewModel. */
-    fun setAssistantMode(enabled: Boolean, modelKey: String? = null) {
+    fun setAssistantMode(
+        enabled: Boolean,
+        modelKey: String? = null,
+        languageTag: String = "es"
+    ) {
         assistantModeEnabled = enabled
         assistantModelOverride = modelKey
             ?.takeIf { enabled && '|' in it && it.substringAfter('|').isNotBlank() }
+        assistantLanguageTag = if (enabled) {
+            CortexAssistantPrompt.normalizeLanguageTag(languageTag)
+        } else {
+            "es"
+        }
     }
 
     fun sendMessage() {
@@ -1405,7 +1416,11 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         val fullKey = effectiveSelectedModel()
 
         val enhancedPrompt = agentOrchestrator.buildPrompt(orchestrator).let { prompt ->
-            if (assistantModeEnabled) CortexAssistantPrompt.appendTo(prompt) else prompt
+            if (assistantModeEnabled) {
+                CortexAssistantPrompt.appendTo(prompt, assistantLanguageTag)
+            } else {
+                prompt
+            }
         }
         val agentWithEnhancedPrompt = orchestrator.copy(systemPrompt = enhancedPrompt)
         val workspacePath = fileRepository.getWorkspaceFolderPath(workspaceId)
@@ -2376,7 +2391,11 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         } == true) msgsFromDb else msgsFromDb + userMessage
 
         val enhancedPrompt = agentOrchestrator.buildPrompt(orchestrator).let { prompt ->
-            if (assistantModeEnabled) CortexAssistantPrompt.appendTo(prompt) else prompt
+            if (assistantModeEnabled) {
+                CortexAssistantPrompt.appendTo(prompt, assistantLanguageTag)
+            } else {
+                prompt
+            }
         }
         val agentWithEnhancedPrompt = orchestrator.copy(systemPrompt = enhancedPrompt)
         val workspacePath = fileRepository.getWorkspaceFolderPath(workspaceId)

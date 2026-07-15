@@ -42,6 +42,9 @@ También se puede usar **Probar** sin cambiar el asistente predeterminado.
   superficie de asistente; no alteran los chats normales.
 - El texto visible renderiza Markdown sencillo, mientras que TTS elimina sus marcadores antes de
   hablar para no pronunciar asteriscos, enlaces ni sintaxis de formato.
+- STT, TTS y el prompt usan el idioma elegido en Cortex, aunque Android esté configurado en otro
+  idioma. Al invocar el asistente comienza a escuchar cuando la actividad llega a estado reanudado;
+  después de hablar una respuesta vuelve a escuchar mientras el ciclo de voz siga activo.
 
 ## Flujo técnico
 

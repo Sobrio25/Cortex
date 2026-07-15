@@ -31,6 +31,7 @@ abstract class BaseSTTService(protected val context: Context) : STTService {
     protected var audioRecord: AudioRecord? = null
     protected var recordingJob: Job? = null
     protected val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val audioRecordLock = Any()
 
     companion object {
         const val SAMPLE_RATE = 16000
@@ -66,6 +67,7 @@ abstract class BaseSTTService(protected val context: Context) : STTService {
 
             if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
                 Log.e("BaseSTTService", "AudioRecord no se pudo inicializar")
+                stopCurrentAudioRecord(release = true)
                 return null
             }
 
@@ -118,25 +120,34 @@ abstract class BaseSTTService(protected val context: Context) : STTService {
 
             // Cleanup audio hardware (handles both auto-stop and manual stop)
             _isListening.value = false
-            try {
-                audioRecord?.stop()
-                audioRecord?.release()
-            } catch (e: Exception) {
-                Log.e("BaseSTTService", "Error deteniendo AudioRecord", e)
-            }
-            audioRecord = null
+            stopCurrentAudioRecord(release = true)
 
             return outputStream.toByteArray()
 
         } catch (e: Exception) {
             Log.e("BaseSTTService", "Error grabando audio", e)
             _isListening.value = false
-            try {
-                audioRecord?.stop()
-                audioRecord?.release()
-            } catch (e2: Exception) { /* ignore */ }
-            audioRecord = null
+            stopCurrentAudioRecord(release = true)
             return null
+        }
+    }
+
+    /** Serializes manual and silence-triggered cleanup so AudioRecord.stop() is idempotent. */
+    private fun stopCurrentAudioRecord(release: Boolean) {
+        synchronized(audioRecordLock) {
+            val record = audioRecord ?: return
+            try {
+                if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    record.stop()
+                }
+            } catch (error: IllegalStateException) {
+                Log.w("BaseSTTService", "AudioRecord ya estaba detenido")
+            }
+            if (release) {
+                runCatching { record.release() }
+                    .onFailure { Log.w("BaseSTTService", "No se pudo liberar AudioRecord", it) }
+                audioRecord = null
+            }
         }
     }
 
@@ -204,11 +215,7 @@ abstract class BaseSTTService(protected val context: Context) : STTService {
         _isListening.value = false
         // Calling stop() unblocks the read() call in startRecording() for immediate response.
         // startRecording() handles release() and cleanup after the loop exits.
-        try {
-            audioRecord?.stop()
-        } catch (e: Exception) {
-            Log.e("BaseSTTService", "Error deteniendo grabación", e)
-        }
+        stopCurrentAudioRecord(release = false)
         recordingJob?.join()
     }
 

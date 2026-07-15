@@ -25,7 +25,7 @@ object CortexAssistantPrompt {
     val SYSTEM_INSTRUCTIONS = """
 $MODE_MARKER
 This turn is being answered in Cortex's compact voice-assistant interface.
-- Answer in the user's language and lead with the direct result.
+- Answer in the configured assistant language declared below and lead with the direct result.
 - Keep the final user-facing answer to 1–3 short sentences and at most 45 words by default.
 - For instructions, use at most 3 short one-line bullets.
 - Do not repeat the request, add an introduction, narrate internal work, or include background the user did not ask for.
@@ -48,9 +48,22 @@ The two active built-in skills below are fully loaded for this assistant turn. A
         WeatherWidgetsBuiltin.instructions + "\n\n" +
         AndroidAppControlBuiltin.instructions
 
-    fun appendTo(prompt: String): String = when {
+    fun instructionsFor(languageTag: String): String = SYSTEM_INSTRUCTIONS + "\n\n" + """
+## CONFIGURED ASSISTANT LANGUAGE
+The user selected language tag `${normalizeLanguageTag(languageTag)}` in Cortex.
+Always answer in that configured language, regardless of the Android device language or runtime locale.
+Switch languages only when the user explicitly asks for another language in the current request.
+""".trimIndent()
+
+    fun appendTo(prompt: String, languageTag: String): String = when {
         prompt.contains(MODE_MARKER) -> prompt
-        prompt.isBlank() -> SYSTEM_INSTRUCTIONS
-        else -> prompt.trimEnd() + "\n\n" + SYSTEM_INSTRUCTIONS
+        prompt.isBlank() -> instructionsFor(languageTag)
+        else -> prompt.trimEnd() + "\n\n" + instructionsFor(languageTag)
     }
+
+    fun normalizeLanguageTag(languageTag: String): String = languageTag
+        .trim()
+        .replace('_', '-')
+        .takeIf(String::isNotBlank)
+        ?: "es"
 }

@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aiagents.app.data.local.AssistantPreferences
+import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.data.speech.AndroidTextToSpeechManager
 import com.aiagents.app.data.speech.ModelDownloader
@@ -21,13 +22,18 @@ import javax.inject.Inject
 
 @HiltViewModel
 class AssistantSettingsViewModel @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val preferences: AssistantPreferences,
+    private val securePreferences: SecurePreferences,
     private val repository: AgentRepository,
     private val sttManager: STTManager,
     private val textToSpeech: AndroidTextToSpeechManager
 ) : ViewModel() {
-    private val fallbackModelId = if (Locale.getDefault().language.equals("en", ignoreCase = true)) {
+    private val assistantLanguageTag = CortexAssistantPrompt.normalizeLanguageTag(
+        securePreferences.getAppLanguage()
+    )
+    private val assistantLocale = Locale.forLanguageTag(assistantLanguageTag)
+    private val fallbackModelId = if (assistantLanguageTag.substringBefore('-').equals("en", ignoreCase = true)) {
         "vosk-small-en"
     } else {
         "vosk-small-es"
@@ -58,6 +64,7 @@ class AssistantSettingsViewModel @Inject constructor(
     val availableModels: StateFlow<List<String>> = _availableModels.asStateFlow()
 
     init {
+        textToSpeech.refreshVoice(assistantLocale)
         viewModelScope.launch {
             repository.selectedModelsFlow.collect { selected ->
                 val models = selected.sorted()
@@ -102,7 +109,7 @@ class AssistantSettingsViewModel @Inject constructor(
 
     fun createInstallVoiceIntent(): Intent = textToSpeech.createInstallVoiceIntent()
 
-    fun refreshOfflineVoice() = textToSpeech.refreshVoice()
+    fun refreshOfflineVoice() = textToSpeech.refreshVoice(assistantLocale)
 
     fun dismissError() {
         _error.value = null

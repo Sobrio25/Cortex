@@ -35,13 +35,21 @@ class CortexAssistantPromptTest {
     @Test
     fun `assistant instructions survive an orchestrator prompt rebuild without duplication`() {
         val rebuiltPrompt = "## OPERATING MODEL\nUse tools when helpful."
-        val enriched = CortexAssistantPrompt.appendTo(rebuiltPrompt)
+        val enriched = CortexAssistantPrompt.appendTo(rebuiltPrompt, "es")
 
         assertTrue(enriched.startsWith(rebuiltPrompt))
-        assertTrue(enriched.contains(CortexAssistantPrompt.SYSTEM_INSTRUCTIONS))
+        assertTrue(enriched.contains("language tag `es`"))
         assertTrue(
-            CortexAssistantPrompt.appendTo(enriched).indexOf(CortexAssistantPrompt.MODE_MARKER) ==
+            CortexAssistantPrompt.appendTo(enriched, "es").indexOf(CortexAssistantPrompt.MODE_MARKER) ==
                 enriched.lastIndexOf(CortexAssistantPrompt.MODE_MARKER)
         )
+    }
+
+    @Test
+    fun `configured Cortex language overrides the Android runtime language`() {
+        val instructions = CortexAssistantPrompt.instructionsFor("es_MX")
+
+        assertTrue(instructions.contains("language tag `es-MX`"))
+        assertTrue(instructions.contains("regardless of the Android device language"))
     }
 }

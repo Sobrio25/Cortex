@@ -85,6 +85,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aiagents.app.data.repository.ContextCompactionPolicy
 import com.aiagents.app.data.local.AssistantPreferences
 import com.aiagents.app.data.speech.AndroidTextToSpeechManager
@@ -100,6 +103,8 @@ import com.aiagents.app.ui.theme.CortexColors
 import com.aiagents.app.ui.theme.CortexTheme
 import com.aiagents.app.ui.theme.cortexGlass
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 
 private enum class AssistantStage {
@@ -115,6 +120,7 @@ private enum class AssistantStage {
 fun CortexAssistantScreen(
     workspaceId: Long,
     cortexName: String,
+    assistantLanguageTag: String,
     textToSpeech: AndroidTextToSpeechManager,
     preferences: AssistantPreferences,
     onDismiss: () -> Unit,
@@ -122,6 +128,14 @@ fun CortexAssistantScreen(
     sttViewModel: STTViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val normalizedLanguageTag = remember(assistantLanguageTag) {
+        CortexAssistantPrompt.normalizeLanguageTag(assistantLanguageTag)
+    }
+    val assistantLocale = remember(normalizedLanguageTag) {
+        Locale.forLanguageTag(normalizedLanguageTag)
+    }
+    val invocationStartedAt = remember { System.currentTimeMillis() }
     val uiState by cortexViewModel.uiState.collectAsState()
     val messages by cortexViewModel.messages.collectAsState()
     val sttSettings by sttViewModel.currentSettings.collectAsState()
@@ -139,17 +153,33 @@ fun CortexAssistantScreen(
     // deliberately not saveable across assistant activity recreation/restoration.
     var expanded by remember { mutableStateOf(false) }
     var initialListeningRequested by remember { mutableStateOf(false) }
+    var voiceLoopActive by remember { mutableStateOf(false) }
+    var activityResumed by remember(lifecycleOwner) {
+        mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+    }
     var hasRecordPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
                 PackageManager.PERMISSION_GRANTED
         )
     }
-    var lastSpokenKey by remember { mutableStateOf("") }
+    var lastHandledResponseKey by remember { mutableStateOf("") }
 
-    DisposableEffect(cortexViewModel, assistantModel) {
-        cortexViewModel.setAssistantMode(true, assistantModel)
+    DisposableEffect(cortexViewModel, assistantModel, normalizedLanguageTag) {
+        cortexViewModel.setAssistantMode(true, assistantModel, normalizedLanguageTag)
         onDispose { cortexViewModel.setAssistantMode(false) }
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> activityResumed = true
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> activityResumed = false
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     val visibleMessages = remember(messages) {
@@ -168,6 +198,9 @@ fun CortexAssistantScreen(
     val settledResponse = latestResultMessage?.let { message ->
         message.weatherToolContent()?.toCompactWeatherSummary() ?: message.content
     }.orEmpty()
+    val latestResultKey = latestResultMessage?.let { message ->
+        "${message.id}:${message.timestamp}:${settledResponse.hashCode()}"
+    }
     val displayResponse = uiState.streamingContent
         ?.takeIf { it.isNotBlank() }
         ?: settledResponse
@@ -201,12 +234,23 @@ fun CortexAssistantScreen(
     }
 
     fun requestListening() {
+        initialListeningRequested = true
+        voiceLoopActive = true
         textToSpeech.stop()
         sttViewModel.dismissError()
         if (hasRecordPermission) {
             sttViewModel.startListening()
         } else {
             microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    fun toggleListening() {
+        if (isListening) {
+            voiceLoopActive = false
+            sttViewModel.stopListening()
+        } else {
+            requestListening()
         }
     }
 
@@ -217,19 +261,28 @@ fun CortexAssistantScreen(
         cortexViewModel.sendMessage()
     }
 
-    LaunchedEffect(workspaceId) {
+    LaunchedEffect(workspaceId, normalizedLanguageTag) {
         sttViewModel.prepareOfflineAssistant(
             workspaceId = workspaceId,
-            language = Locale.getDefault().language.ifBlank { "es" }
+            language = normalizedLanguageTag
         )
     }
 
-    LaunchedEffect(sttSettings, autoListen, initialListeningRequested) {
-        if (sttSettings != null && autoListen && !initialListeningRequested) {
-            initialListeningRequested = true
-            delay(280)
-            requestListening()
-        }
+    LaunchedEffect(
+        sttSettings?.updatedAt,
+        autoListen,
+        initialListeningRequested,
+        activityResumed,
+        uiState.isLoading,
+        isSpeaking
+    ) {
+        if (sttSettings == null || !autoListen || initialListeningRequested ||
+            !activityResumed || uiState.isLoading || isSpeaking
+        ) return@LaunchedEffect
+
+        // SpeechRecognizer is unreliable if started before the assistant activity reaches RESUMED.
+        delay(450)
+        if (activityResumed && !uiState.isLoading && !isSpeaking) requestListening()
     }
 
     LaunchedEffect(pendingTranscription) {
@@ -281,18 +334,31 @@ fun CortexAssistantScreen(
         }
     }
 
-    LaunchedEffect(
-        latestResultMessage?.id,
-        settledResponse,
-        uiState.isLoading,
-        speakResponses
-    ) {
+    LaunchedEffect(latestResultKey, uiState.isLoading, speakResponses, voiceLoopActive) {
         val response = settledResponse.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        val resultMessage = latestResultMessage ?: return@LaunchedEffect
+        if (resultMessage.timestamp < invocationStartedAt) return@LaunchedEffect
         if (uiState.isLoading) return@LaunchedEffect
-        val key = "${latestResultMessage?.id}:${latestResultMessage?.timestamp}:${response.hashCode()}"
-        if (speakResponses && key != lastSpokenKey) {
-            lastSpokenKey = key
-            textToSpeech.speak(response, Locale.getDefault())
+        val key = latestResultKey ?: return@LaunchedEffect
+        if (key == lastHandledResponseKey) return@LaunchedEffect
+        lastHandledResponseKey = key
+
+        if (speakResponses) {
+            textToSpeech.speak(response, assistantLocale)
+            val playbackStarted = withTimeoutOrNull(2_500) {
+                textToSpeech.isSpeaking.first { it }
+            } != null
+            if (playbackStarted) {
+                textToSpeech.isSpeaking.first { !it }
+            }
+        }
+
+        if (voiceLoopActive) {
+            // Avoid capturing the final syllable of Cortex's own TTS response.
+            delay(420)
+            if (activityResumed && !uiState.isLoading && !sttViewModel.isListening.value) {
+                requestListening()
+            }
         }
     }
 
@@ -324,9 +390,7 @@ fun CortexAssistantScreen(
                     error = error ?: ttsError,
                     onInputChange = cortexViewModel::updateInputText,
                     onSend = ::submitText,
-                    onMic = {
-                        if (isListening) sttViewModel.stopListening() else requestListening()
-                    },
+                    onMic = ::toggleListening,
                     onStopSpeaking = textToSpeech::stop,
                     onCollapse = { expanded = false },
                     onDismiss = onDismiss
@@ -339,9 +403,7 @@ fun CortexAssistantScreen(
                     transcription = transcription,
                     error = error,
                     isListening = isListening,
-                    onMic = {
-                        if (isListening) sttViewModel.stopListening() else requestListening()
-                    },
+                    onMic = ::toggleListening,
                     onExpand = { expanded = true },
                     onDismiss = onDismiss
                 )
