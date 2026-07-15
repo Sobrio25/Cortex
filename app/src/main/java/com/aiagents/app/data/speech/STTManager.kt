@@ -67,7 +67,12 @@ class STTManager @Inject constructor(
             language = settings.language,
             apiKey = settings.apiKey,
             cloudProvider = cloudProvider,
-            localEngine = localEngine
+            localEngine = localEngine,
+            voskModelId = if (settings.language.substringBefore('-').equals("en", ignoreCase = true)) {
+                "vosk-small-en"
+            } else {
+                "vosk-small-es"
+            }
         )
 
         initializeService(config)

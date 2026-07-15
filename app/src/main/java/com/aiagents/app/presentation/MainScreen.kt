@@ -18,6 +18,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.aiagents.app.presentation.agents.AgentsScreen
+import com.aiagents.app.presentation.assistant.AssistantSettingsScreen
 import com.aiagents.app.presentation.chat.ChatScreen
 import com.aiagents.app.presentation.drawer.AppDrawerContent
 import com.aiagents.app.presentation.drawer.DrawerViewModel
@@ -50,6 +51,7 @@ sealed class Screen(val route: String) {
     data object Memory : Screen("settings/memory")
     data object Skills : Screen("settings/skills")
     data object ScheduledTasks : Screen("settings/scheduled_tasks")
+    data object Assistant : Screen("settings/assistant")
     data object GoogleWorkspace : Screen("settings/google_workspace")
     data object WorkspaceDetail : Screen("workspace/{workspaceId}") {
         fun createRoute(workspaceId: Long) = "workspace/$workspaceId"
@@ -315,6 +317,9 @@ private fun MainAppContent(
                     onNavigateToScheduledTasks = {
                         navController.navigate(Screen.ScheduledTasks.route)
                     },
+                    onNavigateToAssistant = {
+                        navController.navigate(Screen.Assistant.route)
+                    },
                     onNavigateToMCP = { navController.navigate(Screen.MCP.route) },
                     onNavigateToGoogleWorkspace = {
                         navController.navigate(Screen.GoogleWorkspace.route)
@@ -365,6 +370,11 @@ private fun MainAppContent(
                             launchSingleTop = true
                         }
                     }
+                )
+            }
+            composable(Screen.Assistant.route) {
+                AssistantSettingsScreen(
+                    onBack = { navController.popBackStack() }
                 )
             }
             composable(Screen.GoogleWorkspace.route) {

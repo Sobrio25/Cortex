@@ -111,6 +111,43 @@
     <string name="settings_section_automation">Automatización</string>
     <string name="settings_scheduled_tasks_title">Tareas programadas</string>
     <string name="settings_scheduled_tasks_subtitle">Crear y administrar trabajos recurrentes del agente</string>
+    <string name="settings_assistant_title">Cortex como asistente</string>
+    <string name="settings_assistant_subtitle">Voz, invocación del sistema y procesamiento privado en el dispositivo</string>
+
+    <!-- Asistente Cortex -->
+    <string name="assistant_settings_title">Cortex como asistente</string>
+    <string name="assistant_hero_title">Cortex, siempre a mano</string>
+    <string name="assistant_hero_subtitle">Invoca una interfaz compacta de cristal y continúa por voz o texto.</string>
+    <string name="assistant_ready_badge">LISTO PARA INVOCAR</string>
+    <string name="assistant_setup_badge">CONFIGURACIÓN ÚNICA</string>
+    <string name="assistant_system_role_title">Asistente del sistema</string>
+    <string name="assistant_system_role_subtitle">Android controla el gesto usado para invocar al asistente predeterminado.</string>
+    <string name="assistant_role_active">Cortex es el asistente predeterminado</string>
+    <string name="assistant_role_inactive">Cortex aún no es el asistente predeterminado</string>
+    <string name="assistant_role_active_detail">Usa el gesto de asistente de tu dispositivo para abrirlo.</string>
+    <string name="assistant_role_inactive_detail">Elige Cortex una vez en el diálogo del sistema Android.</string>
+    <string name="assistant_enable_role">Usar Cortex</string>
+    <string name="assistant_change_role">Revisar</string>
+    <string name="assistant_try_now">Probar</string>
+    <string name="assistant_voice_title">Voz local y gratuita</string>
+    <string name="assistant_voice_subtitle">Sin API keys de voz, cuentas, cuotas ni cobros por minuto.</string>
+    <string name="assistant_voice_input">Reconocimiento de voz</string>
+    <string name="assistant_voice_android_local">El reconocimiento on-device de Android está disponible</string>
+    <string name="assistant_voice_vosk_ready">El modelo Vosk en español está listo sin conexión</string>
+    <string name="assistant_voice_vosk_needed">Este dispositivo necesita un modelo sin conexión</string>
+    <string name="assistant_download_vosk">Descargar modelo en español</string>
+    <string name="assistant_voice_output">Respuestas habladas</string>
+    <string name="assistant_tts_ready">Hay una voz embebida de Android lista</string>
+    <string name="assistant_tts_needed">Instala una voz offline para el idioma del sistema</string>
+    <string name="assistant_install_tts">Instalar voz offline</string>
+    <string name="assistant_behavior_title">Comportamiento de conversación</string>
+    <string name="assistant_behavior_subtitle">Elige cómo inicia y responde la experiencia compacta.</string>
+    <string name="assistant_auto_listen_title">Escuchar al invocarlo</string>
+    <string name="assistant_auto_listen_subtitle">Abrir el micrófono automáticamente cuando aparece la burbuja.</string>
+    <string name="assistant_speak_title">Leer respuestas en voz alta</string>
+    <string name="assistant_speak_subtitle">Usar la voz offline instalada en Android.</string>
+    <string name="assistant_privacy_title">La voz permanece en este dispositivo</string>
+    <string name="assistant_privacy_detail">El reconocimiento y la síntesis usan motores locales. Cortex seguirá usando el modelo elegido en la app; selecciona un modelo local si también quieres que la inferencia de IA sea completamente offline.</string>
 
     <!-- Tareas programadas -->
     <string name="scheduled_tasks_title">Tareas programadas</string>

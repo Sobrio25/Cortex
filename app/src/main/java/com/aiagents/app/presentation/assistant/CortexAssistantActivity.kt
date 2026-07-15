@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
 import com.aiagents.app.data.local.SecurePreferences
+import com.aiagents.app.data.local.AssistantPreferences
 import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.data.speech.AndroidTextToSpeechManager
 import com.aiagents.app.domain.model.Workspace
@@ -30,6 +31,7 @@ class CortexAssistantActivity : AppCompatActivity() {
     @Inject lateinit var repository: AgentRepository
     @Inject lateinit var textToSpeech: AndroidTextToSpeechManager
     @Inject lateinit var securePreferences: SecurePreferences
+    @Inject lateinit var assistantPreferences: AssistantPreferences
 
     private var workspaceId by mutableLongStateOf(0L)
 
@@ -49,6 +51,7 @@ class CortexAssistantActivity : AppCompatActivity() {
                         workspaceId = workspaceId,
                         cortexName = securePreferences.getCortexName() ?: "Cortex",
                         textToSpeech = textToSpeech,
+                        preferences = assistantPreferences,
                         onDismiss = ::finish
                     )
                 } else {

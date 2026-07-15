@@ -87,6 +87,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.aiagents.app.data.repository.ContextCompactionPolicy
+import com.aiagents.app.data.local.AssistantPreferences
 import com.aiagents.app.data.speech.AndroidTextToSpeechManager
 import com.aiagents.app.domain.model.Message
 import com.aiagents.app.domain.model.MessageRole
@@ -117,6 +118,7 @@ fun CortexAssistantScreen(
     workspaceId: Long,
     cortexName: String,
     textToSpeech: AndroidTextToSpeechManager,
+    preferences: AssistantPreferences,
     onDismiss: () -> Unit,
     cortexViewModel: WorkspaceDetailViewModel = hiltViewModel(),
     sttViewModel: STTViewModel = hiltViewModel()
@@ -131,6 +133,8 @@ fun CortexAssistantScreen(
     val sttError by sttViewModel.error.collectAsState()
     val isSpeaking by textToSpeech.isSpeaking.collectAsState()
     val ttsError by textToSpeech.error.collectAsState()
+    val autoListen by preferences.autoListen.collectAsState()
+    val speakResponses by preferences.speakResponses.collectAsState()
 
     var expanded by rememberSaveable { mutableStateOf(false) }
     var initialListeningRequested by rememberSaveable { mutableStateOf(false) }
@@ -192,8 +196,8 @@ fun CortexAssistantScreen(
         )
     }
 
-    LaunchedEffect(sttSettings, initialListeningRequested) {
-        if (sttSettings != null && !initialListeningRequested) {
+    LaunchedEffect(sttSettings, autoListen, initialListeningRequested) {
+        if (sttSettings != null && autoListen && !initialListeningRequested) {
             initialListeningRequested = true
             delay(280)
             requestListening()
@@ -207,12 +211,17 @@ fun CortexAssistantScreen(
         cortexViewModel.sendMessage()
     }
 
-    LaunchedEffect(latestAssistantMessage?.id, latestAssistantMessage?.content, uiState.isLoading) {
+    LaunchedEffect(
+        latestAssistantMessage?.id,
+        latestAssistantMessage?.content,
+        uiState.isLoading,
+        speakResponses
+    ) {
         val response = latestAssistantMessage?.content?.takeIf { it.isNotBlank() }
             ?: return@LaunchedEffect
         if (uiState.isLoading) return@LaunchedEffect
         val key = "${latestAssistantMessage.id}:${latestAssistantMessage.timestamp}:${response.hashCode()}"
-        if (key != lastSpokenKey) {
+        if (speakResponses && key != lastSpokenKey) {
             lastSpokenKey = key
             textToSpeech.speak(response, Locale.getDefault())
         }
@@ -761,4 +770,9 @@ private fun stageLabel(stage: AssistantStage, cortexName: String): String = when
     AssistantStage.SPEAKING -> "Respondiendo"
     AssistantStage.RESULT -> "Respuesta de $cortexName"
     AssistantStage.ERROR -> "Necesito tu atención"
+}
+
+@Composable
+fun CortexAssistantPreview(modifier: Modifier = Modifier) {
+    CortexOrb(stage = AssistantStage.READY, modifier = modifier)
 }

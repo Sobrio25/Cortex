@@ -111,6 +111,43 @@
     <string name="settings_section_automation">Automation</string>
     <string name="settings_scheduled_tasks_title">Scheduled tasks</string>
     <string name="settings_scheduled_tasks_subtitle">Create and manage recurring agent jobs</string>
+    <string name="settings_assistant_title">Cortex assistant</string>
+    <string name="settings_assistant_subtitle">Voice, system invocation, and private on-device processing</string>
+
+    <!-- Cortex assistant -->
+    <string name="assistant_settings_title">Cortex assistant</string>
+    <string name="assistant_hero_title">Cortex, within reach</string>
+    <string name="assistant_hero_subtitle">Invoke a compact glass interface, then continue by voice or text.</string>
+    <string name="assistant_ready_badge">READY TO INVOKE</string>
+    <string name="assistant_setup_badge">ONE-TIME SETUP</string>
+    <string name="assistant_system_role_title">System assistant</string>
+    <string name="assistant_system_role_subtitle">Android controls the gesture used to invoke your default assistant.</string>
+    <string name="assistant_role_active">Cortex is the default assistant</string>
+    <string name="assistant_role_inactive">Cortex is not the default assistant yet</string>
+    <string name="assistant_role_active_detail">Use your device’s assistant gesture to open it.</string>
+    <string name="assistant_role_inactive_detail">Choose Cortex once in the Android system dialog.</string>
+    <string name="assistant_enable_role">Use Cortex</string>
+    <string name="assistant_change_role">Review</string>
+    <string name="assistant_try_now">Try</string>
+    <string name="assistant_voice_title">Free, local voice</string>
+    <string name="assistant_voice_subtitle">No voice API keys, accounts, quotas, or per-minute charges.</string>
+    <string name="assistant_voice_input">Voice recognition</string>
+    <string name="assistant_voice_android_local">Android on-device recognition is available</string>
+    <string name="assistant_voice_vosk_ready">The Vosk language model is ready offline</string>
+    <string name="assistant_voice_vosk_needed">An offline model is required on this device</string>
+    <string name="assistant_download_vosk">Download offline model</string>
+    <string name="assistant_voice_output">Spoken responses</string>
+    <string name="assistant_tts_ready">An embedded Android voice is ready</string>
+    <string name="assistant_tts_needed">Install an offline voice for your system language</string>
+    <string name="assistant_install_tts">Install offline voice</string>
+    <string name="assistant_behavior_title">Conversation behavior</string>
+    <string name="assistant_behavior_subtitle">Choose how the compact experience starts and responds.</string>
+    <string name="assistant_auto_listen_title">Listen when invoked</string>
+    <string name="assistant_auto_listen_subtitle">Open the microphone automatically after the bubble appears.</string>
+    <string name="assistant_speak_title">Read responses aloud</string>
+    <string name="assistant_speak_subtitle">Use the installed offline Android voice.</string>
+    <string name="assistant_privacy_title">Voice stays on this device</string>
+    <string name="assistant_privacy_detail">Speech recognition and synthesis use local engines. Cortex still uses the model selected in the app; choose a local model if you also want AI inference to stay fully offline.</string>
 
     <!-- Scheduled tasks -->
     <string name="scheduled_tasks_title">Scheduled tasks</string>

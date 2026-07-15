@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.DeveloperBoard
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -54,6 +55,7 @@ fun SettingsScreen(
     onNavigateToMemory: () -> Unit,
     onNavigateToSkills: () -> Unit,
     onNavigateToScheduledTasks: () -> Unit,
+    onNavigateToAssistant: () -> Unit,
     onNavigateToMCP: () -> Unit,
     onNavigateToGoogleWorkspace: () -> Unit
 ) {
@@ -86,6 +88,12 @@ fun SettingsScreen(
                 SettingsSection(
                     title = stringResource(R.string.settings_section_automation),
                     entries = listOf(
+                        SettingsEntry(
+                            icon = Icons.Default.RecordVoiceOver,
+                            title = stringResource(R.string.settings_assistant_title),
+                            subtitle = stringResource(R.string.settings_assistant_subtitle),
+                            onClick = onNavigateToAssistant
+                        ),
                         SettingsEntry(
                             icon = Icons.Default.Alarm,
                             title = stringResource(R.string.settings_scheduled_tasks_title),
