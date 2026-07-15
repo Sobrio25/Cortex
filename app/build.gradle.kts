@@ -7,6 +7,8 @@ plugins {
     id("com.google.gms.google-services")
 }
 
+val cortexDebugKeystore = file("${System.getProperty("user.home")}/.android/cortex-debug.keystore")
+
 android {
     namespace = "com.aiagents.app"
     compileSdk = 35
@@ -24,7 +26,20 @@ android {
         }
     }
 
+    signingConfigs {
+        if (cortexDebugKeystore.exists()) {
+            create("cortexDebug") {
+                storeFile = cortexDebugKeystore
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
     buildTypes {
+        debug {
+            signingConfigs.findByName("cortexDebug")?.let { signingConfig = it }
+        }
         release {
             isMinifyEnabled = true
             proguardFiles(

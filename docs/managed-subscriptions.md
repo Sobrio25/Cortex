@@ -35,6 +35,9 @@ Google-backed Firebase UID after app data is cleared or the app is reinstalled.
   `googlePlayRtdn` Functions are deployed in `us-central1`.
 - The public API, anonymous authentication, free inference and both free fallbacks
   passed production smoke tests.
+- Local debug APKs use the untracked `~/.android/cortex-debug.keystore` so the
+  `com.aiagents.app` OAuth identity does not collide with other projects. Its SHA-1
+  and SHA-256 are registered in Firebase; release builds do not use this key.
 
 ## Remaining production setup
 
