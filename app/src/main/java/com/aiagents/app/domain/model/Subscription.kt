@@ -34,7 +34,7 @@ data class ManagedModel(
 data class UsageSnapshot(
     val plan: SubscriptionPlan = SubscriptionPlan.FREE,
     val freeTokensUsed: Long = 0,
-    val freeTokensLimit: Long = 2_000_000,
+    val freeTokensLimit: Long = 500_000,
     val spentMicros: Long = 0,
     val budgetMicros: Long = 0,
     val periodEndEpochMillis: Long? = null
@@ -54,9 +54,10 @@ object ManagedModelCatalog {
     val defaults = listOf(
         ManagedModel(AUTO, "Auto", SubscriptionPlan.FREE, 128_000),
         ManagedModel("deepseek-v4-flash", "DeepSeek V4 Flash", SubscriptionPlan.STARTER, 1_000_000),
+        ManagedModel("mimo-v2.5", "MiMo 2.5", SubscriptionPlan.STARTER, 1_100_000, true),
         ManagedModel("deepseek-v4-pro", "DeepSeek V4 Pro", SubscriptionPlan.PLUS, 1_000_000),
+        ManagedModel("mimo-v2.5-pro", "MiMo 2.5 Pro", SubscriptionPlan.PLUS, 1_100_000, true),
         ManagedModel("gpt-5.6-luna", "GPT-5.6 Luna", SubscriptionPlan.PRO, 1_000_000, true),
-        ManagedModel("mimo-v2.5-pro", "MiMo 2.5 Pro", SubscriptionPlan.PRO, 1_000_000),
         ManagedModel("kimi-k2.7-code", "Kimi K2.7 Code", SubscriptionPlan.PRO, 262_144, true),
         ManagedModel("minimax-m3", "MiniMax M3", SubscriptionPlan.PRO, 1_000_000, true),
         ManagedModel("grok-4.5", "Grok 4.5", SubscriptionPlan.PRO, 500_000, true),

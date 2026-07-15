@@ -16,8 +16,8 @@ class ToolSearchHandler @Inject constructor() {
         val CORE_TOOL_NAMES = setOf(
             // File operations
             "read_text_file", "read_image_file", "read_pdf_file", "write_file", "list_files",
-            // App control — always core so Cortex can manage the app
-            "app_control",
+            // App control and assistant identity are always available.
+            "app_control", AssistantIdentityToolHandler.TOOL_NAME,
             // Task planning — always core so agents can show progress
             "todo_write", "todo_read",
             // Scheduling — always core so agents can manage cron jobs
@@ -67,6 +67,7 @@ class ToolSearchHandler @Inject constructor() {
     private val registry = listOf(
         // App Control
         ToolEntry("app_control", "app_settings", "Control app settings: change model, toggle services, configure agents, display options", setOf("model", "change", "switch", "provider", "settings", "config", "configure", "service", "toggle", "enable", "disable", "display", "reasoning", "agent", "temperature", "personality", "modelo", "cambiar", "configurar", "servicio", "habilitar", "deshabilitar", "activar", "desactivar")),
+        ToolEntry(AssistantIdentityToolHandler.TOOL_NAME, "assistant_identity", "Change the configured assistant name when the user explicitly requests it", setOf("assistant", "name", "rename", "identity", "call you", "asistente", "nombre", "renombrar", "identidad", "llamarte")),
 
         // Task Planning
         ToolEntry("todo_write", "planning", "Create or update a task plan with progress tracking for complex multi-step tasks", setOf("todo", "plan", "task", "progress", "step", "checklist", "track", "tarea", "plan", "progreso", "paso", "lista")),

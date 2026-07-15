@@ -218,12 +218,28 @@ class SecurePreferences @Inject constructor(
     fun getPreferredUserName(): String? = encryptedPrefs.getString("USER_PREFERRED_NAME", null)
         ?.trim()?.takeIf { it.isNotEmpty() }
 
-    fun saveCortexName(name: String) {
-        encryptedPrefs.edit().putString("CORTEX_NAME", name.trim()).apply()
+    fun saveAssistantName(name: String) {
+        encryptedPrefs.edit().putString("ASSISTANT_NAME", name.trim()).apply()
     }
 
-    fun getCortexName(): String? = encryptedPrefs.getString("CORTEX_NAME", null)
-        ?.trim()?.takeIf { it.isNotEmpty() }
+    fun getAssistantName(): String? {
+        encryptedPrefs.getString("ASSISTANT_NAME", null)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { return it }
+
+        // One-time compatibility read for installations created before the assistant name
+        // became a first-class configurable identity.
+        val legacyName = encryptedPrefs.getString("CORTEX_NAME", null)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: return null
+        encryptedPrefs.edit()
+            .putString("ASSISTANT_NAME", legacyName)
+            .remove("CORTEX_NAME")
+            .apply()
+        return legacyName
+    }
 
     // Preferencia para mostrar/ocultar razonamiento de modelos
     fun setShowReasoning(enabled: Boolean) {

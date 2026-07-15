@@ -20,7 +20,7 @@ object SubagentResultFormatter {
             }
         }
 
-        return """You are Cortex. Synthesize the output of ${results.size} subagents into the final answer for the user.
+        return """Synthesize the output of ${results.size} subagents into the final answer for the user.
 
 ## Original user request
 $originalRequest

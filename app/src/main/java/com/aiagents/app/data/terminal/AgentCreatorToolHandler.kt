@@ -38,7 +38,7 @@ class AgentCreatorToolHandler @Inject constructor(
                             "name" to param("string", "Agent name (short, 1-2 words). Must be unique."),
                             "role" to param("string", "Short role description (e.g. 'Legal Advisor', 'Chef')"),
                             "systemPrompt" to param("string", "Full system prompt. Must include language rule and structured sections."),
-                            "whenToUse" to param("string", "CSV of keywords (Spanish+English) for Cortex delegation routing"),
+                            "whenToUse" to param("string", "CSV of keywords (Spanish+English) for delegation routing by the main assistant"),
                             "temperature" to param("number", "0.0-1.0. Low=precise, High=creative. Default: 0.5"),
                             "maxTokens" to param("integer", "Max response tokens. Default: 8192"),
                             "enableTerminal" to param("boolean", "Allow shell commands. Default: false"),
@@ -56,7 +56,7 @@ class AgentCreatorToolHandler @Inject constructor(
                 "type" to "function",
                 "function" to mapOf(
                     "name" to TOOL_DELETE,
-                    "description" to "Delete an existing agent by name. CRITICAL: You MUST ALWAYS ask the user for explicit confirmation before calling this tool. Use <ask_options> to confirm. Never delete Cortex or system agents.",
+                    "description" to "Delete an existing agent by name. CRITICAL: You MUST ALWAYS ask the user for explicit confirmation before calling this tool. Use <ask_options> to confirm. Never delete the main assistant or other system agents.",
                     "parameters" to mapOf(
                         "type" to "object",
                         "properties" to mapOf(
@@ -152,19 +152,13 @@ class AgentCreatorToolHandler @Inject constructor(
             "- **Temperature**: $temperature\n" +
             "- **Keywords**: $whenToUse\n" +
             "- **Personalidad**: sarcasm=$sarcasmLevel, creativity=$creativityLevel, formality=$formalityLevel, empathy=$empathyLevel, precision=$technicalPrecision\n\n" +
-            "El agente ya esta disponible en la lista de agentes y Cortex puede delegar tareas a el."
+            "El agente ya está disponible en la lista de agentes y el asistente principal puede delegarle tareas."
         )
     }
 
     private suspend fun deleteAgent(toolCallId: String, args: com.google.gson.JsonObject): AgentCreatorResult {
         val name = args.get("name")?.asString
             ?: return AgentCreatorResult(toolCallId, false, "Error: 'name' es requerido")
-
-        // Protect system agents and Cortex
-        val protectedNames = setOf("Cortex", "Agent Architect")
-        if (name in protectedNames) {
-            return AgentCreatorResult(toolCallId, false, "Error: No se puede eliminar el agente '$name' porque es un agente del sistema.")
-        }
 
         val existing = agentDao.getAgentByName(name)
             ?: return AgentCreatorResult(toolCallId, false, "Error: No existe un agente con el nombre '$name'")

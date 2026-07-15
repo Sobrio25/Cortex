@@ -36,7 +36,7 @@ class CortexForegroundService : Service() {
             }
 
             ACTION_START -> {
-                val agentName = intent.getStringExtra(EXTRA_AGENT_NAME).orEmpty().ifBlank { "Cortex" }
+                val agentName = intent.getStringExtra(EXTRA_AGENT_NAME).orEmpty().ifBlank { "Assistant" }
                 val activeTaskCount = intent.getIntExtra(EXTRA_ACTIVE_TASK_COUNT, 1).coerceAtLeast(1)
                 val startedAtMillis = intent.getLongExtra(
                     EXTRA_STARTED_AT_MILLIS,
@@ -73,7 +73,7 @@ class CortexForegroundService : Service() {
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(
                 if (activeTaskCount == 1) "$agentName está trabajando"
-                else "Cortex está ejecutando $activeTaskCount tareas"
+                else "$agentName está ejecutando $activeTaskCount tareas"
             )
             .setContentText("Puedes salir de la app; el trabajo continuará en segundo plano.")
             .setContentIntent(openAppPendingIntent())
@@ -119,10 +119,10 @@ class CortexForegroundService : Service() {
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Trabajo de Cortex",
+            "Trabajo del asistente",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Mantiene las tareas de Cortex activas cuando la app está en segundo plano"
+            description = "Mantiene las tareas del asistente activas cuando la app está en segundo plano"
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }

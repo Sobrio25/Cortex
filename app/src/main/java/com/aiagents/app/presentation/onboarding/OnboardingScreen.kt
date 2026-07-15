@@ -50,7 +50,7 @@ fun OnboardingScreen(
     val userName by viewModel.userName.collectAsState()
     val userNickname by viewModel.userNickname.collectAsState()
     val selectedLanguage by viewModel.selectedLanguage.collectAsState()
-    val cortexName by viewModel.cortexName.collectAsState()
+    val assistantName by viewModel.assistantName.collectAsState()
     val sarcasm by viewModel.sarcasmLevel.collectAsState()
     val creativity by viewModel.creativityLevel.collectAsState()
     val formality by viewModel.formalityLevel.collectAsState()
@@ -117,9 +117,9 @@ fun OnboardingScreen(
                         onNameChanged = { viewModel.setUserName(it) },
                         onNicknameChanged = { viewModel.setUserNickname(it) }
                     )
-                    1 -> CortexPersonalityStep(
-                        cortexName = cortexName,
-                        onCortexNameChange = { viewModel.setCortexName(it) },
+                    1 -> AssistantPersonalityStep(
+                        assistantName = assistantName,
+                        onAssistantNameChange = viewModel::setAssistantName,
                         sarcasm = sarcasm,
                         creativity = creativity,
                         formality = formality,
@@ -169,6 +169,7 @@ fun OnboardingScreen(
                 lastStep = lastStep,
                 isNextEnabled = when (currentStep) {
                     0 -> userName.isNotBlank()
+                    1 -> assistantName.isNotBlank()
                     2 -> managedPrivacyAccepted && googleSignedIn
                     else -> true
                 },
@@ -522,9 +523,9 @@ private fun LanguageCard(
 }
 
 @Composable
-private fun CortexPersonalityStep(
-    cortexName: String,
-    onCortexNameChange: (String) -> Unit,
+private fun AssistantPersonalityStep(
+    assistantName: String,
+    onAssistantNameChange: (String) -> Unit,
     sarcasm: Int,
     creativity: Int,
     formality: Int,
@@ -581,8 +582,8 @@ private fun CortexPersonalityStep(
         Spacer(modifier = Modifier.height(24.dp))
 
         OutlinedTextField(
-            value = cortexName,
-            onValueChange = onCortexNameChange,
+            value = assistantName,
+            onValueChange = onAssistantNameChange,
             label = { Text(stringResource(R.string.onboarding_cortex_name)) },
             placeholder = { Text(stringResource(R.string.onboarding_cortex_name_hint)) },
             singleLine = true,

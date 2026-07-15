@@ -22,6 +22,7 @@ import com.aiagents.app.data.model.TodoEntity
 import com.aiagents.app.data.model.MCPServerEntity
 import com.aiagents.app.data.model.STTSettingsEntity
 import com.aiagents.app.data.model.WorkspaceEntity
+import com.aiagents.app.data.orchestration.AgentOrchestrator
 import com.aiagents.app.domain.model.SkillCreatorBuiltin
 import com.aiagents.app.domain.model.AndroidAppControlBuiltin
 import com.aiagents.app.domain.model.WeatherWidgetsBuiltin
@@ -47,7 +48,7 @@ import com.aiagents.app.domain.model.WeatherWidgetsBuiltin
         SkillReviewEntity::class,
         SubagentExecutionEntity::class
     ],
-    version = 45,
+    version = 46,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -1116,6 +1117,24 @@ SIEMPRE usa la herramienta pubmed_search para buscar estudios científicos relev
                 // finance_transactions is intentionally left in place during
                 // schema migration. DatabaseModule copies it into the isolated
                 // FinanceDatabase on open and only then removes the legacy table.
+            }
+        }
+
+        /** Removes generated legacy identity text; the configured name is injected at runtime. */
+        val MIGRATION_45_46 = object : Migration(45, 46) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    UPDATE agents
+                    SET systemPrompt = ?
+                    WHERE role = 'Agent Orchestrator'
+                      AND (
+                          systemPrompt LIKE 'You are Cortex,%'
+                          OR systemPrompt LIKE 'Eres Cortex,%'
+                      )
+                    """.trimIndent(),
+                    arrayOf(AgentOrchestrator.DEFAULT_ORCHESTRATOR_PROMPT)
+                )
             }
         }
 

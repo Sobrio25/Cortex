@@ -16,7 +16,7 @@
     "providers": {
       "anonymous": true,
       "googleSignIn": {
-        "oAuthBrandDisplayName": "Cortex",
+        "oAuthBrandDisplayName": "AI Agents",
         "supportEmail": "gabo982@gmail.com"
       }
     }

@@ -4,7 +4,7 @@ The Android client and Firebase backend are linked to project `cortex-agents-ai`
 End users only see plan and model names. Gateway/provider identities are internal and
 must never be copied into onboarding, subscription UI, public API errors, or fallback notices.
 
-The free allowance is 2,000,000 combined input and output tokens per ISO week
+The free allowance is 500,000 combined input and output tokens per ISO week
 (Monday 00:00 UTC). Every inference operation is metered from upstream usage. A
 conservative reservation prevents concurrent requests from exceeding the allowance
 and is settled to actual usage when the response completes.

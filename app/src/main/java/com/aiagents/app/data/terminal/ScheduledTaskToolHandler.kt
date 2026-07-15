@@ -3,6 +3,7 @@ package com.aiagents.app.data.terminal
 import android.util.Log
 import com.aiagents.app.data.local.ConversationDao
 import com.aiagents.app.data.local.ScheduledTaskDao
+import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.model.ConversationEntity
 import com.aiagents.app.data.model.ScheduledTaskEntity
 import com.aiagents.app.data.scheduling.TaskSchedulerManager
@@ -30,7 +31,8 @@ data class ScheduledTaskToolResult(
 class ScheduledTaskToolHandler @Inject constructor(
     private val scheduledTaskDao: ScheduledTaskDao,
     private val conversationDao: ConversationDao,
-    private val schedulerManager: TaskSchedulerManager
+    private val schedulerManager: TaskSchedulerManager,
+    private val securePreferences: SecurePreferences
 ) {
     companion object {
         private const val TAG = "ScheduledTaskTool"
@@ -54,7 +56,7 @@ Actions:
       weekly: "MON,WED,FRI HH:mm" (e.g. "MON,FRI 08:30")
       interval: "30m", "2h", "1d"
     label (optional): Human-readable name
-    agent_name (optional): Agent to run (default: Cortex)
+    agent_name (optional): Agent to run (defaults to the configured main assistant)
 - "list": List all scheduled tasks
 - "delete": Delete a task. Params: id
 - "toggle": Enable/disable a task. Params: id, enabled (true/false)""",
@@ -145,7 +147,7 @@ Actions:
         Log.i(TAG, "Created scheduled task $id: '$label' ($scheduleType: $scheduleValue)")
 
         return ScheduledTaskToolResult(toolCallId, success = true,
-            content = "Scheduled task created (id: $id).\nLabel: $label\nSchedule: $scheduleType $scheduleValue\nNext run: $nextRunStr\nAgent: ${agentName ?: "Cortex"}\nChat: $linkedConversationId")
+            content = "Scheduled task created (id: $id).\nLabel: $label\nSchedule: $scheduleType $scheduleValue\nNext run: $nextRunStr\nAgent: ${agentName ?: securePreferences.getAssistantName() ?: "Assistant"}\nChat: $linkedConversationId")
     }
 
     private suspend fun resolveConversationId(

@@ -31,7 +31,7 @@ export function requireGoogleSignInForFree(plan: PlanId, signInProvider?: string
 }
 
 const db = () => getFirestore();
-export const FREE_TOKENS_LIMIT = 2_000_000;
+export const FREE_TOKENS_LIMIT = 500_000;
 
 /** ISO-8601 week in UTC. Weeks start on Monday and belong to the year of Thursday. */
 export function quotaPeriodKey(now: Date = new Date()): string {
@@ -123,7 +123,7 @@ export async function reserveFreeTokens(uid: string, requestedTokens: number): P
     const accountSnapshot = await transaction.get(accountRef);
     const account = normalize(accountSnapshot.data());
     if (account.freeTokensUsed + tokens > account.freeTokensLimit) {
-      throw new EntitlementError(429, "Alcanzaste tus 2 millones de tokens gratuitos de esta semana");
+      throw new EntitlementError(429, "Alcanzaste tus 500,000 tokens gratuitos de esta semana");
     }
     transaction.set(accountRef, {
       ...account,

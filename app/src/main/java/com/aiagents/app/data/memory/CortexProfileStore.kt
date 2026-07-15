@@ -38,7 +38,7 @@ class CortexProfileStore @Inject constructor(
         file = File(directory, SOUL_FILE_NAME),
         maxChars = HERMES_CONTEXT_FILE_MAX_CHARS,
         defaultContent = {
-            defaultSoul(securePreferences.getCortexName() ?: DEFAULT_AGENT_NAME)
+            defaultSoul(securePreferences.getAssistantName() ?: DEFAULT_AGENT_NAME)
         }
     )
     private val userDocument = ProfileDocument(
@@ -68,7 +68,7 @@ class CortexProfileStore @Inject constructor(
         preferredName: String
     ) = synchronized(lock) {
         val canonicalAgentName = agentName.trim().ifBlank { DEFAULT_AGENT_NAME }
-        securePreferences.saveCortexName(canonicalAgentName)
+        securePreferences.saveAssistantName(canonicalAgentName)
         _soulSnapshots.value = soulDocument.replace(
             defaultSoul(canonicalAgentName),
             expectedRevision = null
@@ -89,7 +89,7 @@ class CortexProfileStore @Inject constructor(
         preferredName: String?
     ) = synchronized(lock) {
         val canonicalAgentName = agentName.trim().ifBlank { DEFAULT_AGENT_NAME }
-        val storedAgentName = securePreferences.getCortexName() ?: DEFAULT_AGENT_NAME
+        val storedAgentName = securePreferences.getAssistantName() ?: DEFAULT_AGENT_NAME
         val currentSoul = soulDocument.reload()
         val generatedCandidates = setOf(
             defaultSoul(DEFAULT_AGENT_NAME),
@@ -109,7 +109,7 @@ class CortexProfileStore @Inject constructor(
         } else {
             _soulSnapshots.value = currentSoul
         }
-        securePreferences.saveCortexName(canonicalAgentName)
+        securePreferences.saveAssistantName(canonicalAgentName)
         val currentUser = userDocument.reload()
         val generatedUserCandidates = setOf(
             defaultUser(null, null),
@@ -133,6 +133,27 @@ class CortexProfileStore @Inject constructor(
         synchronized(lock) {
             soulDocument.replace(markdown, expectedRevision).also { _soulSnapshots.value = it.snapshot }
         }
+
+    /** Applies an explicit user-requested rename without discarding the rest of SOUL.md. */
+    fun renameIdentity(agentName: String) = synchronized(lock) {
+        val canonicalAgentName = singleLine(agentName).ifBlank { DEFAULT_AGENT_NAME }
+        securePreferences.saveAssistantName(canonicalAgentName)
+        val current = soulDocument.reload()
+        if (current.storageError != null || current.content.isBlank()) {
+            _soulSnapshots.value = soulDocument.replace(
+                defaultSoul(canonicalAgentName),
+                expectedRevision = current.revision
+            ).snapshot
+            return@synchronized
+        }
+
+        val updated = replaceIdentityName(current.content, canonicalAgentName)
+        _soulSnapshots.value = if (updated != current.content) {
+            soulDocument.replace(updated, expectedRevision = current.revision).snapshot
+        } else {
+            current
+        }
+    }
 
     fun replaceUser(markdown: String, expectedRevision: String? = null): CortexMemoryMutationResult =
         synchronized(lock) {
@@ -302,10 +323,16 @@ class CortexProfileStore @Inject constructor(
         const val USER_FILE_NAME = "USER.md"
         const val HERMES_USER_MAX_CHARS = 1_375
         const val HERMES_CONTEXT_FILE_MAX_CHARS = 20_000
-        const val DEFAULT_AGENT_NAME = "Cortex"
+        const val DEFAULT_AGENT_NAME = "Assistant"
         private const val DIRECTORY_NAME = "cortex_memory"
         private const val MAX_DOCUMENT_BYTES = 64 * 1024
         private const val MAX_DOCUMENT_UTF16_UNITS = 65_536
+
+        internal fun replaceIdentityName(markdown: String, agentName: String): String =
+            markdown.replaceFirst(
+                Regex("(?m)^You are [^,\\n]+,"),
+                Regex.escapeReplacement("You are $agentName,")
+            )
 
         internal fun defaultSoul(agentName: String): String {
             val safeAgent = singleLine(agentName).ifBlank { DEFAULT_AGENT_NAME }

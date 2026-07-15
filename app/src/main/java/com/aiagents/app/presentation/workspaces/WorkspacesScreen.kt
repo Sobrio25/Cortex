@@ -566,7 +566,7 @@ fun CreateWorkspaceDialog(
                 )
 
                 Text(
-                    text = "El agente Cortex será asignado por defecto. Puedes cambiarlo después entrando al workspace.",
+                    text = "El asistente principal será asignado por defecto. Puedes cambiarlo después entrando al workspace.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -676,7 +676,7 @@ class WeatherToolHandler @Inject constructor(
         val request = Request.Builder()
             .url(url)
             .header("Accept", "application/json")
-            .header("User-Agent", "Cortex-Android/0.2.0")
+            .header("User-Agent", "AIAgents-Android/0.3.0")
             .build()
         try {
             okHttpClient.newCall(request).execute().use { response ->

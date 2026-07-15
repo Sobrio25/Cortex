@@ -195,8 +195,8 @@ private fun PlanCard(
 ) {
     val features = when (plan) {
         SubscriptionPlan.FREE -> listOf(stringResource(R.string.plan_free_feature))
-        SubscriptionPlan.STARTER -> listOf("DeepSeek V4 Flash", stringResource(R.string.plan_fallback_feature))
-        SubscriptionPlan.PLUS -> listOf("DeepSeek V4 Pro", stringResource(R.string.plan_fallback_feature))
+        SubscriptionPlan.STARTER -> listOf("DeepSeek V4 Flash · MiMo 2.5", stringResource(R.string.plan_fallback_feature))
+        SubscriptionPlan.PLUS -> listOf("DeepSeek V4 Pro · MiMo 2.5 Pro", stringResource(R.string.plan_fallback_feature))
         SubscriptionPlan.PRO -> listOf(
             "GPT-5.6 Luna · DeepSeek V4 Pro · MiMo 2.5 Pro",
             "Kimi K2.7 Code · MiniMax M3 · Grok 4.5",

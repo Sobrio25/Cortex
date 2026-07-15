@@ -174,7 +174,7 @@ class UnifiedWebToolHandler @Inject constructor(
                 WebUrlPolicy.resolvePublic(currentUrl.host).also { pinnedDns[currentUrl.host] = it }
                 val request = Request.Builder()
                     .url(currentUrl)
-                    .header("User-Agent", "CortexAndroid/0.2.0 (+safe-web-fetch)")
+                    .header("User-Agent", "AIAgents-Android/0.3.0 (+safe-web-fetch)")
                     .header("Accept", "text/html,application/xhtml+xml,text/plain,application/json;q=0.8")
                     .build()
                 client.newCall(request).execute().use { response ->

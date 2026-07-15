@@ -100,10 +100,13 @@ fun AssistantSettingsScreen(
     val isDownloading by viewModel.isDownloading.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val error by viewModel.error.collectAsState()
+    val assistantName by viewModel.assistantName.collectAsState()
+    val isSavingName by viewModel.isSavingName.collectAsState()
     val onDeviceRecognition = viewModel.onDeviceRecognitionAvailable
     val systemRecognition = viewModel.systemRecognitionAvailable
 
     var roleHeld by remember { mutableStateOf(context.isAssistantRoleHeld()) }
+    var assistantNameDraft by remember(assistantName) { mutableStateOf(assistantName) }
     val assistantRoleLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
@@ -165,7 +168,32 @@ fun AssistantSettingsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
-                AssistantHero(roleHeld = roleHeld)
+                AssistantHero(roleHeld = roleHeld, assistantName = assistantName)
+            }
+
+            item {
+                SettingsCard(
+                    title = stringResource(R.string.assistant_identity_title),
+                    subtitle = stringResource(R.string.assistant_identity_subtitle)
+                ) {
+                    OutlinedTextField(
+                        value = assistantNameDraft,
+                        onValueChange = { assistantNameDraft = it },
+                        label = { Text(stringResource(R.string.assistant_identity_field)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        onClick = { viewModel.saveAssistantName(assistantNameDraft) },
+                        enabled = assistantNameDraft.isNotBlank() &&
+                            assistantNameDraft != assistantName &&
+                            !isSavingName,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.assistant_identity_save))
+                    }
+                }
             }
 
             item {
@@ -176,14 +204,14 @@ fun AssistantSettingsScreen(
                     AssistantStatusRow(
                         icon = if (roleHeld) Icons.Default.CheckCircle else Icons.Default.RecordVoiceOver,
                         title = if (roleHeld) {
-                            stringResource(R.string.assistant_role_active)
+                            stringResource(R.string.assistant_role_active, assistantName)
                         } else {
-                            stringResource(R.string.assistant_role_inactive)
+                            stringResource(R.string.assistant_role_inactive, assistantName)
                         },
                         detail = if (roleHeld) {
                             stringResource(R.string.assistant_role_active_detail)
                         } else {
-                            stringResource(R.string.assistant_role_inactive_detail)
+                            stringResource(R.string.assistant_role_inactive_detail, assistantName)
                         },
                         ready = roleHeld
                     )
@@ -198,7 +226,7 @@ fun AssistantSettingsScreen(
                         ) {
                             Text(
                                 if (roleHeld) stringResource(R.string.assistant_change_role)
-                                else stringResource(R.string.assistant_enable_role)
+                                else stringResource(R.string.assistant_enable_role, assistantName)
                             )
                         }
                         OutlinedButton(
@@ -431,7 +459,7 @@ private fun String.toAssistantModelLabel(): String {
 }
 
 @Composable
-private fun AssistantHero(roleHeld: Boolean) {
+private fun AssistantHero(roleHeld: Boolean, assistantName: String) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -450,7 +478,7 @@ private fun AssistantHero(roleHeld: Boolean) {
             CortexAssistantPreview(Modifier.size(80.dp))
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
-                    stringResource(R.string.assistant_hero_title),
+                    stringResource(R.string.assistant_hero_title, assistantName),
                     color = Color.White,
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.SemiBold

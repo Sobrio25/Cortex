@@ -162,7 +162,7 @@ fun MemoryScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        "$totalCount datos de baja prioridad o descartados de MEMORY.md en SQLite. Cortex los busca cuando hacen falta; los datos activos del Markdown no se duplican aqui.",
+                        "$totalCount datos de baja prioridad o descartados de MEMORY.md en SQLite. El asistente los busca cuando hacen falta; los datos activos del Markdown no se duplican aquí.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -376,7 +376,7 @@ private fun MarkdownMemoryCard(
             Text(
                 when (fileKind) {
                     ContextFileKind.SOUL ->
-                        "Define la identidad, valores y estilo estable del agente. El nombre configurado en onboarding vive aqui; Cortex es solo el valor inicial."
+                        "Define la identidad, valores y estilo estable del agente. El nombre configurado durante onboarding vive aquí y puede cambiarse en Configuración o por chat."
                     ContextFileKind.USER ->
                         "Perfil breve de la persona: nombre, como prefiere que la llamen y preferencias duraderas. El agente puede curarlo con la tool de memoria."
                     ContextFileKind.MEMORY ->

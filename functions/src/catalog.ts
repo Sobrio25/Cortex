@@ -30,9 +30,10 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
 const MODEL_LIST: ModelDefinition[] = [
   { id: "auto", displayName: "Auto", minimumPlan: "FREE", contextWindow: 128_000 },
   { id: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash", minimumPlan: "STARTER", vercelModel: "deepseek/deepseek-v4-flash", contextWindow: 1_000_000, inputMicrosPerToken: 0.14, outputMicrosPerToken: 0.28 },
+  { id: "mimo-v2.5", displayName: "MiMo 2.5", minimumPlan: "STARTER", vercelModel: "xiaomi/mimo-v2.5", contextWindow: 1_100_000, supportsVision: true, inputMicrosPerToken: 0.14, outputMicrosPerToken: 0.28 },
   { id: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro", minimumPlan: "PLUS", vercelModel: "deepseek/deepseek-v4-pro", contextWindow: 1_000_000, inputMicrosPerToken: 0.435, outputMicrosPerToken: 0.87 },
+  { id: "mimo-v2.5-pro", displayName: "MiMo 2.5 Pro", minimumPlan: "PLUS", vercelModel: "xiaomi/mimo-v2.5-pro", contextWindow: 1_100_000, supportsVision: true, inputMicrosPerToken: 0.435, outputMicrosPerToken: 0.87 },
   { id: "gpt-5.6-luna", displayName: "GPT-5.6 Luna", minimumPlan: "PRO", vercelModel: "openai/gpt-5.6-luna", contextWindow: 1_000_000, supportsVision: true, inputMicrosPerToken: 1, outputMicrosPerToken: 6 },
-  { id: "mimo-v2.5-pro", displayName: "MiMo 2.5 Pro", minimumPlan: "PRO", vercelModel: "xiaomi/mimo-v2.5-pro", contextWindow: 1_000_000, inputMicrosPerToken: 0.435, outputMicrosPerToken: 0.87 },
   { id: "kimi-k2.7-code", displayName: "Kimi K2.7 Code", minimumPlan: "PRO", vercelModel: "moonshotai/kimi-k2.7-code", contextWindow: 262_144, supportsVision: true, inputMicrosPerToken: 0.95, outputMicrosPerToken: 4 },
   { id: "minimax-m3", displayName: "MiniMax M3", minimumPlan: "PRO", vercelModel: "minimax/minimax-m3", contextWindow: 1_000_000, supportsVision: true, inputMicrosPerToken: 0.3, outputMicrosPerToken: 1.2 },
   { id: "grok-4.5", displayName: "Grok 4.5", minimumPlan: "PRO", vercelModel: "xai/grok-4.5", contextWindow: 500_000, supportsVision: true, inputMicrosPerToken: 2, outputMicrosPerToken: 6 },
@@ -67,15 +68,23 @@ export function resolveModel(plan: PlanId, requested: string, body: unknown): Mo
     if (!selected || planRank < PLANS[selected.minimumPlan].rank || planRank < PLANS.PRO.rank) return undefined;
     return selected;
   }
-  if (plan === "FREE") return undefined;
-  if (plan === "STARTER") return MODELS["deepseek-v4-flash"];
-  if (plan === "PLUS") return MODELS["deepseek-v4-pro"];
-
   const text = JSON.stringify(body).toLowerCase();
   const hasVision = text.includes("data:image/") || text.includes("image_data_uri");
   const isCode = /\b(code|código|program|debug|repository|gradle|kotlin|typescript|python)\b/.test(text);
   const isLongAutonomous = /\b(autonomous|autonom\w*|autónom\w*|long[- ]running|investiga a fondo|proyecto completo)\b/.test(text);
   const isComplex = /\b(reason|razona|analiza|prove|demuestra|strategy|estrategia|complex|complej)\b/.test(text);
+
+  if (plan === "FREE") return undefined;
+  if (plan === "STARTER") {
+    return hasVision || isCode || isComplex || isLongAutonomous
+      ? MODELS["mimo-v2.5"]
+      : MODELS["deepseek-v4-flash"];
+  }
+  if (plan === "PLUS") {
+    return hasVision || isCode || isComplex || isLongAutonomous
+      ? MODELS["mimo-v2.5-pro"]
+      : MODELS["deepseek-v4-pro"];
+  }
 
   if (plan === "ULTRA") {
     if (isLongAutonomous) return MODELS["claude-fable-5"];
@@ -97,14 +106,16 @@ export function paidFallbacks(plan: PlanId, failedModelId: string): ModelDefinit
   const failed = MODELS[failedModelId];
   const failedPrice = (failed?.inputMicrosPerToken ?? 0) + (failed?.outputMicrosPerToken ?? 0);
   const preferredIds = plan === "ULTRA"
-    ? ["claude-opus-4.8", "claude-sonnet-5", "glm-5.2", "deepseek-v4-pro", "deepseek-v4-flash"]
+    ? ["claude-opus-4.8", "claude-sonnet-5", "glm-5.2", "mimo-v2.5-pro", "deepseek-v4-pro", "mimo-v2.5", "deepseek-v4-flash"]
     : plan === "MAX"
-      ? ["claude-sonnet-5", "glm-5.2", "deepseek-v4-pro", "deepseek-v4-flash"]
+      ? ["claude-sonnet-5", "glm-5.2", "mimo-v2.5-pro", "deepseek-v4-pro", "mimo-v2.5", "deepseek-v4-flash"]
       : plan === "PRO"
-        ? ["deepseek-v4-pro", "deepseek-v4-flash"]
+        ? ["mimo-v2.5-pro", "deepseek-v4-pro", "mimo-v2.5", "deepseek-v4-flash"]
         : plan === "PLUS"
-          ? ["deepseek-v4-flash"]
-          : [];
+          ? ["mimo-v2.5-pro", "deepseek-v4-pro", "mimo-v2.5", "deepseek-v4-flash"]
+          : plan === "STARTER"
+            ? ["mimo-v2.5", "deepseek-v4-flash"]
+            : [];
   return preferredIds
     .filter((id) => id !== failedModelId)
     .map((id) => MODELS[id])

@@ -67,7 +67,7 @@ class AndroidTextToSpeechManager @Inject constructor(
             configureVoice(locale)
         }
         if (!_offlineVoiceAvailable.value) {
-            _error.value = "Descarga una voz sin conexión para escuchar a Cortex"
+            _error.value = "Descarga una voz sin conexión para escuchar al asistente"
             return
         }
 

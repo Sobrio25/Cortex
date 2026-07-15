@@ -38,8 +38,8 @@ class OnboardingViewModel @Inject constructor(
     private val deviceLanguage = if (Locale.getDefault().language == "es") "es" else "en"
     val selectedLanguage = savedStateHandle.getStateFlow("selectedLanguage", deviceLanguage)
 
-    // Cortex config
-    val cortexName = savedStateHandle.getStateFlow("cortexName", "Cortex")
+    // Assistant identity and personality configured explicitly by the user.
+    val assistantName = savedStateHandle.getStateFlow("assistantName", "")
     val sarcasmLevel = savedStateHandle.getStateFlow("sarcasm", 0)
     val creativityLevel = savedStateHandle.getStateFlow("creativity", 50)
     val formalityLevel = savedStateHandle.getStateFlow("formality", 50)
@@ -75,7 +75,7 @@ class OnboardingViewModel @Inject constructor(
         savedStateHandle["userNickname"] = nickname
     }
 
-    fun setCortexName(name: String) { savedStateHandle["cortexName"] = name }
+    fun setAssistantName(name: String) { savedStateHandle["assistantName"] = name }
     fun setSarcasm(value: Int) { savedStateHandle["sarcasm"] = value }
     fun setCreativity(value: Int) { savedStateHandle["creativity"] = value }
     fun setFormality(value: Int) { savedStateHandle["formality"] = value }
@@ -111,7 +111,13 @@ class OnboardingViewModel @Inject constructor(
     private var completing = false
 
     fun completeOnboarding() {
-        if (completing || !managedPrivacyAccepted.value || !_googleSignedIn.value) return
+        val chosenAssistantName = assistantName.value.trim()
+        if (
+            completing ||
+            chosenAssistantName.isBlank() ||
+            !managedPrivacyAccepted.value ||
+            !_googleSignedIn.value
+        ) return
         completing = true
         viewModelScope.launch {
             val name = userName.value.trim()
@@ -121,18 +127,16 @@ class OnboardingViewModel @Inject constructor(
             securePreferences.saveUserIdentity(name, nickname)
             securePreferences.enableManagedFreePlan()
 
-            // Update Cortex name, personality and prompt
-            val chosenCortexName = cortexName.value.trim().ifBlank { "Cortex" }
             cortexProfileStore.seedFromOnboarding(
-                agentName = chosenCortexName,
+                agentName = chosenAssistantName,
                 userName = name,
                 preferredName = nickname
             )
-            val cortex = agentRepository.getOrchestratorAgent()
-            if (cortex != null) {
+            val orchestrator = agentRepository.getOrchestratorAgent()
+            if (orchestrator != null) {
                 agentRepository.updateAgent(
-                    cortex.copy(
-                        name = chosenCortexName,
+                    orchestrator.copy(
+                        name = chosenAssistantName,
                         sarcasmLevel = sarcasmLevel.value,
                         creativityLevel = creativityLevel.value,
                         formalityLevel = formalityLevel.value,

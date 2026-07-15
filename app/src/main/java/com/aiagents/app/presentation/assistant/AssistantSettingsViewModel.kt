@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aiagents.app.data.local.AssistantPreferences
 import com.aiagents.app.data.local.SecurePreferences
+import com.aiagents.app.data.identity.AssistantIdentityManager
 import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.data.speech.AndroidTextToSpeechManager
 import com.aiagents.app.data.speech.ModelDownloader
@@ -16,9 +17,13 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.Locale
 import javax.inject.Inject
+import com.aiagents.app.domain.model.isOrchestrator
 
 @HiltViewModel
 class AssistantSettingsViewModel @Inject constructor(
@@ -26,6 +31,7 @@ class AssistantSettingsViewModel @Inject constructor(
     private val preferences: AssistantPreferences,
     private val securePreferences: SecurePreferences,
     private val repository: AgentRepository,
+    private val identityManager: AssistantIdentityManager,
     private val sttManager: STTManager,
     private val textToSpeech: AndroidTextToSpeechManager
 ) : ViewModel() {
@@ -45,6 +51,14 @@ class AssistantSettingsViewModel @Inject constructor(
     val speakResponses = preferences.speakResponses
     val assistantModel = preferences.modelKey
     val offlineVoiceAvailable = textToSpeech.offlineVoiceAvailable
+    val assistantName: StateFlow<String> = repository.getAllAgents()
+        .map { agents ->
+            agents.firstOrNull { it.isOrchestrator }?.name ?: identityManager.configuredName()
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, identityManager.configuredName())
+
+    private val _isSavingName = MutableStateFlow(false)
+    val isSavingName: StateFlow<Boolean> = _isSavingName.asStateFlow()
 
     private val _voskModelDownloaded = MutableStateFlow(
         VoskSTTService.isModelDownloaded(context, fallbackModelDirectory)
@@ -87,6 +101,18 @@ class AssistantSettingsViewModel @Inject constructor(
     fun setSpeakResponses(enabled: Boolean) = preferences.setSpeakResponses(enabled)
 
     fun setAssistantModel(modelKey: String) = preferences.setModel(modelKey)
+
+    fun saveAssistantName(name: String) {
+        if (_isSavingName.value) return
+        viewModelScope.launch {
+            _isSavingName.value = true
+            _error.value = null
+            identityManager.rename(name).onFailure {
+                _error.value = it.message ?: "No se pudo cambiar el nombre del asistente"
+            }
+            _isSavingName.value = false
+        }
+    }
 
     fun downloadSpanishVoiceModel() {
         if (_isDownloading.value) return

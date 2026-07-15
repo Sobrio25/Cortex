@@ -122,11 +122,11 @@ object AndroidAppControlBuiltin {
     """.trimIndent()
 }
 
-/** Built-in workflow that makes Cortex use the native weather cards consistently. */
+/** Built-in workflow that makes the configured assistant use native weather cards consistently. */
 object WeatherWidgetsBuiltin {
     const val SLUG = "weather-widgets"
     const val NAME = "Weather Widgets"
-    const val DESCRIPTION = "Consulta clima real y activa las tarjetas meteorológicas visuales nativas de Cortex."
+    const val DESCRIPTION = "Consulta clima real y activa las tarjetas meteorológicas visuales nativas de la app."
     const val WHEN_TO_USE =
         "clima,tiempo,temperatura,pronóstico,va a llover,lluvia,calidad del aire,weather,forecast,air quality"
     const val VERSION = 2

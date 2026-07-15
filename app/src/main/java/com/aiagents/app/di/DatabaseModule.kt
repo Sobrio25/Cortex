@@ -97,12 +97,13 @@ object DatabaseModule {
                 AppDatabase.MIGRATION_41_42,
                 AppDatabase.MIGRATION_42_43,
                 AppDatabase.MIGRATION_43_44,
-                AppDatabase.MIGRATION_44_45
+                AppDatabase.MIGRATION_44_45,
+                AppDatabase.MIGRATION_45_46
             )
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onCreate(db: SupportSQLiteDatabase) {
                     super.onCreate(db)
-                    insertDefaultCortex(db)
+                    insertDefaultAssistant(db)
                 }
 
                 override fun onOpen(db: SupportSQLiteDatabase) {
@@ -179,8 +180,8 @@ object DatabaseModule {
         Log.i(TAG, "Migrated $migratedRows finance rows to ${FinanceDatabase.DATABASE_NAME}")
     }
 
-    /** New installations start with Cortex only; task workers are created in memory on demand. */
-    private fun insertDefaultCortex(db: SupportSQLiteDatabase) {
+    /** New installations start with one configurable assistant; workers are created on demand. */
+    private fun insertDefaultAssistant(db: SupportSQLiteDatabase) {
         val now = System.currentTimeMillis()
         db.execSQL(
             """
@@ -192,12 +193,12 @@ object DatabaseModule {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent(),
             arrayOf<Any>(
-                "Cortex",
+                "Assistant",
                 "Agent Orchestrator",
-                AgentOrchestrator.DEFAULT_CORTEX_PROMPT,
+                AgentOrchestrator.DEFAULT_ORCHESTRATOR_PROMPT,
                 0.7,
                 8192,
-                "agents/cortex",
+                "agents/assistant",
                 1,
                 "",
                 now,

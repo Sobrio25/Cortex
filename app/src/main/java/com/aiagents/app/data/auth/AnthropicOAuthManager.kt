@@ -164,7 +164,7 @@ class AnthropicOAuthManager @Inject constructor(
      */
     private fun createApiKey(accessToken: String): String? {
         return try {
-            val body = """{"name":"Cortex"}"""
+            val body = """{"name":"AI Agents"}"""
                 .toRequestBody("application/json".toMediaType())
 
             val request = Request.Builder()

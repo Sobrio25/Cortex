@@ -375,7 +375,7 @@ fun WorkspaceDetailScreen(
                 title = {
                     Column {
                         Text(
-                            text = if (workspace?.name == "__global__") "Cortex" else workspace?.name ?: "Chat",
+                            text = if (workspace?.name == "__global__") activeAgent?.name ?: "Assistant" else workspace?.name ?: "Chat",
                             style = MaterialTheme.typography.titleLarge,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -511,6 +511,7 @@ fun WorkspaceDetailScreen(
             when (uiState.activeTab) {
                 WorkspaceTab.Chat -> {
                     ChatContent(
+                        assistantName = activeAgent?.name ?: "Assistant",
                         messages = ContextCompactionPolicy.visibleHistory(
                             messages,
                             includeInternalActions = uiState.showCommands
@@ -953,6 +954,7 @@ fun ModelSelectorCompact(
 
 @Composable
 fun ChatContent(
+    assistantName: String,
     messages: List<Message>,
     inputText: String,
     isLoading: Boolean,
@@ -1066,6 +1068,7 @@ fun ChatContent(
     Column(modifier = modifier) {
         if (messages.isEmpty()) {
             EmptyChatState(
+                assistantName = assistantName,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
@@ -2603,7 +2606,7 @@ private suspend fun downloadImageToGallery(context: Context, url: String, fileNa
 }
 
 @Composable
-fun EmptyChatState(modifier: Modifier = Modifier) {
+fun EmptyChatState(assistantName: String, modifier: Modifier = Modifier) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -2612,7 +2615,7 @@ fun EmptyChatState(modifier: Modifier = Modifier) {
         CortexMark(Modifier.size(82.dp))
         Spacer(modifier = Modifier.height(20.dp))
         Text(
-            text = "Cortex está listo",
+            text = "$assistantName está listo",
             style = MaterialTheme.typography.headlineSmall,
             color = MaterialTheme.colorScheme.onSurface
         )
@@ -3256,7 +3259,7 @@ private fun ContextCompactionDialog(
                 )
 
                 Text(
-                    text = "The conversation is approaching the model's context limit. Would you like to create a context checkpoint?\n\nYour complete chat will remain visible. Cortex will send the model a concise summary plus the latest messages, without deleting the transcript.",
+                    text = "The conversation is approaching the model's context limit. Would you like to create a context checkpoint?\n\nYour complete chat will remain visible. The assistant will send the model a concise summary plus the latest messages, without deleting the transcript.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -3287,7 +3290,7 @@ fun formatTime(timestamp: Long): String {
 }
 
 private val agentColorPalette = listOf(
-    CortexColors.Violet, // Cortex
+    CortexColors.Violet,
     Color(0xFF00BCD4), // Cyan
     Color(0xFF4CAF50), // Green
     Color(0xFFFFC107), // Amber
@@ -3300,7 +3303,6 @@ private val agentColorPalette = listOf(
 )
 
 fun agentColor(name: String): Color {
-    if (name.equals("Cortex", ignoreCase = true)) return agentColorPalette[0]
     val stableHash = name.lowercase(Locale.ROOT).hashCode() and Int.MAX_VALUE
     val index = (stableHash % (agentColorPalette.size - 1)) + 1
     return agentColorPalette[index]
@@ -3682,7 +3684,7 @@ fun CalendarPermissionDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "Cortex necesita acceder a tu calendario para:",
+                    text = "El asistente necesita acceder a tu calendario para:",
                     style = MaterialTheme.typography.bodyMedium
                 )
 
@@ -3761,7 +3763,7 @@ fun CameraPermissionDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "Cortex necesita acceder a tu cámara para:",
+                    text = "El asistente necesita acceder a tu cámara para:",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Column(

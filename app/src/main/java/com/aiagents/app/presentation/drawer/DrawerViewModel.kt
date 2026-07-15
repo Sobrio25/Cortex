@@ -6,6 +6,7 @@ import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.domain.model.Conversation
 import com.aiagents.app.domain.model.Workspace
+import com.aiagents.app.domain.model.isOrchestrator
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +41,18 @@ class DrawerViewModel @Inject constructor(
     /** Whether the user is in global chat mode (not inside a specific workspace). */
     private val _isGlobalMode = MutableStateFlow(true)
     val isGlobalMode: StateFlow<Boolean> = _isGlobalMode.asStateFlow()
+
+    val assistantName: StateFlow<String> = repository.getAllAgents()
+        .map { agents ->
+            agents.firstOrNull { it.isOrchestrator }?.name
+                ?: securePreferences.getAssistantName()
+                ?: "Assistant"
+        }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            securePreferences.getAssistantName() ?: "Assistant"
+        )
 
     /** All user-visible workspaces (excludes hidden system workspace). */
     val allWorkspaces: StateFlow<List<Workspace>> = repository.getAllWorkspaces()

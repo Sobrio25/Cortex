@@ -58,6 +58,7 @@ import com.aiagents.app.data.terminal.SystemAppToolHandler
 import com.aiagents.app.data.terminal.ShellExecutor
 import com.aiagents.app.data.terminal.ToolHandler
 import com.aiagents.app.data.terminal.AppControlToolHandler
+import com.aiagents.app.data.terminal.AssistantIdentityToolHandler
 import com.aiagents.app.data.terminal.ScheduledTaskToolHandler
 import com.aiagents.app.data.terminal.TodoToolHandler
 import com.aiagents.app.data.terminal.DelegationToolHandler
@@ -130,6 +131,7 @@ class AgentRepository @Inject constructor(
     private val weatherToolHandler: WeatherToolHandler,
     private val imageGenerationToolHandler: ImageGenerationToolHandler,
     private val appControlToolHandler: AppControlToolHandler,
+    private val assistantIdentityToolHandler: AssistantIdentityToolHandler,
     private val todoToolHandler: TodoToolHandler,
     private val scheduledTaskToolHandler: ScheduledTaskToolHandler,
     private val runtimeContextProvider: RuntimeContextProvider,
@@ -897,6 +899,8 @@ class AgentRepository @Inject constructor(
     fun isWeatherEnabled(): Boolean = securePreferences.isWeatherEnabled()
     fun isImageGenerationEnabled(): Boolean = securePreferences.isImageGenerationEnabled()
     fun getAppControlToolHandler(): AppControlToolHandler = appControlToolHandler
+
+    fun getAssistantIdentityToolHandler(): AssistantIdentityToolHandler = assistantIdentityToolHandler
     fun getTodoToolHandler(): TodoToolHandler = todoToolHandler
     fun getScheduledTaskToolHandler(): ScheduledTaskToolHandler = scheduledTaskToolHandler
 
@@ -1179,6 +1183,9 @@ class AgentRepository @Inject constructor(
             addAll(CodeExecutionHandler.getToolDefinitionsJson())
             addAll(PresentationToolHandler.getToolDefinitionsJson())
             addAll(AppControlToolHandler.getToolDefinitionsJson())
+            if (agent.isOrchestrator) {
+                addAll(AssistantIdentityToolHandler.getToolDefinitionsJson())
+            }
             addAll(TodoToolHandler.getToolDefinitionsJson())
             addAll(ScheduledTaskToolHandler.getToolDefinitionsJson())
             addAll(SkillToolHandler.getToolDefinitionsJson())
@@ -1438,7 +1445,7 @@ class AgentRepository @Inject constructor(
             return Result.failure(Exception("Describe el agente que quieres crear"))
         }
         val cortex = getOrchestratorAgent()
-            ?: return Result.failure(Exception("Cortex no está disponible"))
+            ?: return Result.failure(Exception("El asistente principal no está disponible"))
 
         // 2. Get a configured provider + model
         val selectedModels = securePreferences.getSelectedModels()

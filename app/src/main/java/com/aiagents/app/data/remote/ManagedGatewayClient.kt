@@ -24,7 +24,7 @@ private const val MANAGED_BASE_URL = "https://us-central1-cortex-agents-ai.cloud
 data class ManagedAccountResponse(
     val plan: String = "FREE",
     val freeTokensUsed: Long = 0,
-    val freeTokensLimit: Long = 2_000_000,
+    val freeTokensLimit: Long = 500_000,
     val spentMicros: Long = 0,
     val budgetMicros: Long = 0,
     val periodEndEpochMillis: Long? = null
@@ -81,6 +81,7 @@ class ManagedGatewayClient @Inject constructor(
             "logicalModel" to logicalModel,
             "messages" to messages,
             "systemPrompt" to systemPrompt,
+            "assistantName" to extractManagedAgentName(systemPrompt),
             "temperature" to temperature,
             "maxTokens" to maxTokens,
             "tools" to tools
@@ -125,6 +126,10 @@ class ManagedGatewayClient @Inject constructor(
         return digest.take(16).joinToString("") { "%02x".format(it) }
     }
 }
+
+internal fun extractManagedAgentName(systemPrompt: String): String? = Regex(
+    pattern = "(?m)^- Current agent: (.+?) \\([^\\r\\n]+\\)$"
+).find(systemPrompt)?.groupValues?.getOrNull(1)?.trim()?.takeIf(String::isNotBlank)
 
 class ManagedGatewayException(val statusCode: Int, override val message: String) : Exception(message)
 

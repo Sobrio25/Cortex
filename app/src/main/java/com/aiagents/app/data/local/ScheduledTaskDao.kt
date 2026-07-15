@@ -34,6 +34,9 @@ interface ScheduledTaskDao {
     @Query("UPDATE scheduled_tasks SET conversationId = :conversationId WHERE id = :id")
     suspend fun setConversationId(id: Long, conversationId: Long)
 
+    @Query("UPDATE scheduled_tasks SET agentName = :newName WHERE agentName = :oldName")
+    suspend fun renameAgent(oldName: String, newName: String)
+
     @Query("UPDATE scheduled_tasks SET lastRunAt = :time, lastResult = :result, runCount = runCount + 1, nextRunAt = :nextRun WHERE id = :id")
     suspend fun markExecuted(id: Long, time: Long, result: String?, nextRun: Long)
 

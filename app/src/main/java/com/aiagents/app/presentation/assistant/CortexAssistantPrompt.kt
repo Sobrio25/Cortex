@@ -3,7 +3,7 @@ package com.aiagents.app.presentation.assistant
 import com.aiagents.app.domain.model.AndroidAppControlBuiltin
 import com.aiagents.app.domain.model.WeatherWidgetsBuiltin
 
-/** System instructions added only while Cortex runs in the system-assistant surface. */
+/** System instructions added only while the configured agent runs as the system assistant. */
 object CortexAssistantPrompt {
     const val MODE_MARKER = "## VOICE ASSISTANT MODE"
 
@@ -24,7 +24,7 @@ object CortexAssistantPrompt {
 
     val SYSTEM_INSTRUCTIONS = """
 $MODE_MARKER
-This turn is being answered in Cortex's compact voice-assistant interface.
+This turn is being answered in the app's compact voice-assistant interface.
 - Answer in the configured assistant language declared below and lead with the direct result.
 - Keep the final user-facing answer to 1–2 short sentences and at most 30 words by default.
 - For instructions, use at most 3 short one-line bullets.
@@ -50,7 +50,7 @@ The two active built-in skills below are fully loaded for this assistant turn. A
 
     fun instructionsFor(languageTag: String): String = SYSTEM_INSTRUCTIONS + "\n\n" + """
 ## CONFIGURED ASSISTANT LANGUAGE
-The user selected language tag `${normalizeLanguageTag(languageTag)}` in Cortex.
+The user selected language tag `${normalizeLanguageTag(languageTag)}` in the app.
 Always answer in that configured language, regardless of the Android device language or runtime locale.
 Switch languages only when the user explicitly asks for another language in the current request.
 

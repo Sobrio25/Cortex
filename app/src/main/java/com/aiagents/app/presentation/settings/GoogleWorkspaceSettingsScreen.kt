@@ -298,7 +298,7 @@ fun GoogleWorkspaceSettingsScreen(
             item {
                 Text("Permisos", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "Selecciona solo los servicios que Cortex podrá usar. Google te mostrará el consentimiento antes de concederlos.",
+                    "Selecciona solo los servicios que el asistente podrá usar. Google te mostrará el consentimiento antes de concederlos.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -384,7 +384,7 @@ fun GoogleWorkspaceSettingsScreen(
                             "Habilita las APIs de Docs, Drive, Sheets, Slides, Calendar y Gmail que quieras usar. " +
                                 "Crea un cliente OAuth de tipo Android para el paquete com.aiagents.app con el SHA-1 de la firma, " +
                                 "configura la pantalla de consentimiento y agrega tu cuenta como usuario de prueba. " +
-                                "Cortex no pide ni guarda un Client Secret.",
+                                "La app no pide ni guarda un Client Secret.",
                             style = MaterialTheme.typography.bodySmall
                         )
                     }

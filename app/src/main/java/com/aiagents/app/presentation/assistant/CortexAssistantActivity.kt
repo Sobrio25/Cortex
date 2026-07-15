@@ -51,7 +51,7 @@ class CortexAssistantActivity : AppCompatActivity() {
                 if (workspaceId > 0L) {
                     CortexAssistantScreen(
                         workspaceId = workspaceId,
-                        cortexName = securePreferences.getCortexName() ?: "Cortex",
+                        cortexName = securePreferences.getAssistantName() ?: "Assistant",
                         assistantLanguageTag = securePreferences.getAppLanguage()
                             .ifBlank { Locale.getDefault().toLanguageTag() },
                         textToSpeech = textToSpeech,

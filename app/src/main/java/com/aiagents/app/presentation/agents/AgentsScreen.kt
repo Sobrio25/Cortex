@@ -572,7 +572,7 @@ fun CortexCard(
             IconButton(onClick = onCustomize) {
                 Icon(
                     imageVector = Icons.Default.Settings,
-                    contentDescription = "Personalizar Cortex",
+                    contentDescription = "Personalizar ${cortex.name}",
                     tint = MaterialTheme.colorScheme.primary
                 )
             }
@@ -597,7 +597,7 @@ fun CortexPersonalityDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                "🎨 Personalizar Cortex",
+                "🎨 Personalizar ${cortex.name}",
                 style = MaterialTheme.typography.titleLarge
             )
         },
@@ -609,7 +609,7 @@ fun CortexPersonalityDialog(
                     .padding(vertical = 8.dp)
             ) {
                 Text(
-                    "Ajusta la personalidad de Cortex según tus preferencias:",
+                    "Ajusta la personalidad de ${cortex.name} según tus preferencias:",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 16.dp)

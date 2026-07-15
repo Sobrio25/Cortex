@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Cortex</string>
+    <string name="app_name">Agentes IA</string>
     <string name="agents">Agentes</string>
     <string name="providers">Proveedores</string>
     <string name="settings">Configuración</string>
@@ -35,8 +35,8 @@
     <string name="error_connection">Error de conexión</string>
 
     <!-- Onboarding -->
-    <string name="onboarding_welcome_title">Bienvenido a Cortex</string>
-    <string name="onboarding_cortex_intro">¡Hola! Soy Cortex, tu coordinador de IA. Te ayudaré a configurar todo.</string>
+    <string name="onboarding_welcome_title">Bienvenido</string>
+    <string name="onboarding_cortex_intro">Configuremos tu asistente personal de IA.</string>
     <string name="onboarding_select_language">Selecciona tu idioma</string>
     <string name="onboarding_your_name">¿Cómo te llamas?</string>
     <string name="onboarding_your_nickname">¿Cómo te gusta que te digan?</string>
@@ -53,8 +53,8 @@
     <string name="onboarding_providers_desc">Conecta tus servicios de IA como OpenAI, Anthropic, Google AI, y más. Necesitas al menos un proveedor para empezar a chatear con tus agentes.</string>
     <string name="onboarding_configure_providers">Configurar Proveedores</string>
     <string name="onboarding_free_plan_title">Listo desde el primer mensaje</string>
-    <string name="onboarding_free_plan_desc">Inicia sesión con Google para activar el plan Gratis. Cortex elige automáticamente un modelo disponible, sin API keys ni configuración técnica.</string>
-    <string name="onboarding_free_plan_messages">2 millones de tokens de entrada y salida gratis por semana</string>
+    <string name="onboarding_free_plan_desc">Inicia sesión con Google para activar el plan Gratis. La app elige automáticamente un modelo disponible, sin API keys ni configuración técnica.</string>
+    <string name="onboarding_free_plan_messages">500,000 tokens de entrada y salida gratis por semana</string>
     <string name="onboarding_free_plan_no_config">Descarga, abre y empieza a usarlo. Después podrás agregar tus propios proveedores desde los ajustes avanzados.</string>
     <string name="google_sign_in_button">Continuar con Google</string>
     <string name="google_sign_in_required">El inicio con Google conserva tu consumo semanal en tu cuenta, incluso si reinstalas la app o borras sus datos.</string>
@@ -72,10 +72,10 @@
     <string name="onboarding_workspaces_desc">Organiza tus agentes en espacios de trabajo para diferentes proyectos. Cada espacio tiene su propio equipo de agentes trabajando juntos.</string>
     <string name="onboarding_setup_workspaces">Configurar Espacios</string>
 
-    <string name="onboarding_cortex_personality_title">Personalizar a Cortex</string>
-    <string name="onboarding_cortex_personality_desc">Ajusta la personalidad de Cortex según tu estilo. Siempre puedes cambiarlo después.</string>
+    <string name="onboarding_cortex_personality_title">Nombra a tu asistente</string>
+    <string name="onboarding_cortex_personality_desc">Elige un nombre y personalidad. Puedes cambiar ambos después en Configuración o directamente en el chat.</string>
     <string name="onboarding_cortex_name">Nombre del asistente</string>
-    <string name="onboarding_cortex_name_hint">Cortex</string>
+    <string name="onboarding_cortex_name_hint">Por ejemplo: Nova</string>
     <string name="onboarding_sarcasm">Sarcasmo</string>
     <string name="onboarding_sarcasm_low">Serio</string>
     <string name="onboarding_sarcasm_high">Mordaz</string>
@@ -116,7 +116,7 @@
     <string name="subscription_current_plan">Plan actual</string>
     <string name="subscription_choose_plan">Elegir plan</string>
     <string name="subscription_store_pending">Pendiente en Google Play</string>
-    <string name="plan_free_feature">2 millones de tokens de entrada y salida por semana con selección automática del modelo</string>
+    <string name="plan_free_feature">500,000 tokens de entrada y salida por semana con selección automática del modelo</string>
     <string name="plan_fallback_feature">Continuidad automática con modelos gratuitos al agotar el presupuesto</string>
     <string name="plan_auto_manual_feature">Modo Auto y selección manual de modelo</string>
     <string name="plan_everything_previous">Todo lo incluido en el plan anterior</string>
@@ -133,22 +133,26 @@
     <string name="settings_section_automation">Automatización</string>
     <string name="settings_scheduled_tasks_title">Tareas programadas</string>
     <string name="settings_scheduled_tasks_subtitle">Crear y administrar trabajos recurrentes del agente</string>
-    <string name="settings_assistant_title">Cortex como asistente</string>
+    <string name="settings_assistant_title">Asistente del sistema</string>
     <string name="settings_assistant_subtitle">Invocación del sistema y voz sin API keys</string>
 
-    <!-- Asistente Cortex -->
-    <string name="assistant_settings_title">Cortex como asistente</string>
-    <string name="assistant_hero_title">Cortex, siempre a mano</string>
+    <!-- Asistente del sistema configurable -->
+    <string name="assistant_settings_title">Asistente del sistema</string>
+    <string name="assistant_hero_title">%1$s, siempre a mano</string>
     <string name="assistant_hero_subtitle">Invoca una interfaz compacta de cristal y continúa por voz o texto.</string>
     <string name="assistant_ready_badge">LISTO PARA INVOCAR</string>
     <string name="assistant_setup_badge">CONFIGURACIÓN ÚNICA</string>
     <string name="assistant_system_role_title">Asistente del sistema</string>
     <string name="assistant_system_role_subtitle">Android controla el gesto usado para invocar al asistente predeterminado.</string>
-    <string name="assistant_role_active">Cortex es el asistente predeterminado</string>
-    <string name="assistant_role_inactive">Cortex aún no es el asistente predeterminado</string>
+    <string name="assistant_identity_title">Identidad del asistente</string>
+    <string name="assistant_identity_subtitle">Este nombre se usa en chats, prompts, modo de voz y notificaciones.</string>
+    <string name="assistant_identity_field">Nombre del asistente</string>
+    <string name="assistant_identity_save">Guardar nombre</string>
+    <string name="assistant_role_active">%1$s es el asistente predeterminado</string>
+    <string name="assistant_role_inactive">%1$s aún no es el asistente predeterminado</string>
     <string name="assistant_role_active_detail">Usa el gesto de asistente de tu dispositivo para abrirlo.</string>
-    <string name="assistant_role_inactive_detail">Elige Cortex una vez en el diálogo del sistema Android.</string>
-    <string name="assistant_enable_role">Usar Cortex</string>
+    <string name="assistant_role_inactive_detail">Elige %1$s una vez en el diálogo del sistema Android.</string>
+    <string name="assistant_enable_role">Usar %1$s</string>
     <string name="assistant_change_role">Revisar</string>
     <string name="assistant_try_now">Probar</string>
     <string name="assistant_model_title">Modelo y acciones del asistente</string>
@@ -168,7 +172,7 @@
     <string name="assistant_download_vosk">Descargar modelo en español</string>
     <string name="assistant_voice_output">Respuestas habladas</string>
     <string name="assistant_tts_ready">Hay una voz embebida de Android lista</string>
-    <string name="assistant_tts_needed">Instala una voz offline para el idioma configurado en Cortex</string>
+    <string name="assistant_tts_needed">Instala una voz offline para el idioma configurado del asistente</string>
     <string name="assistant_install_tts">Instalar voz offline</string>
     <string name="assistant_behavior_title">Comportamiento de conversación</string>
     <string name="assistant_behavior_subtitle">Elige cómo inicia y responde la experiencia compacta.</string>
@@ -177,7 +181,7 @@
     <string name="assistant_speak_title">Leer respuestas en voz alta</string>
     <string name="assistant_speak_subtitle">Usar la voz offline instalada en Android.</string>
     <string name="assistant_privacy_title">Primero local, siempre sin API keys de voz</string>
-    <string name="assistant_privacy_detail">El reconocimiento empieza en el dispositivo y puede usar el reconocedor del sistema Android si falta el idioma local. Descarga Vosk para garantizar la entrada offline. Cortex seguirá usando el modelo elegido en la app; selecciona un modelo local para una inferencia totalmente offline.</string>
+    <string name="assistant_privacy_detail">El reconocimiento empieza en el dispositivo y puede usar el reconocedor del sistema Android si falta el idioma local. Descarga Vosk para garantizar la entrada offline. El asistente usa el modelo elegido en la app; selecciona un modelo local para una inferencia totalmente offline.</string>
 
     <!-- Tareas programadas -->
     <string name="scheduled_tasks_title">Tareas programadas</string>
@@ -195,7 +199,7 @@
     <string name="scheduled_tasks_agent_value">Agente: %1$s</string>
     <string name="scheduled_tasks_next_run_value">Próxima ejecución: %1$s</string>
     <string name="scheduled_tasks_last_run_value">Última ejecución: %1$s</string>
-    <string name="scheduled_tasks_default_agent">Cortex (predeterminado)</string>
+    <string name="scheduled_tasks_default_agent">Asistente principal (predeterminado)</string>
     <string name="scheduled_tasks_unknown_workspace">Workspace desconocido</string>
     <string name="scheduled_tasks_global_workspace">General</string>
     <string name="scheduled_tasks_create_title">Nueva tarea programada</string>

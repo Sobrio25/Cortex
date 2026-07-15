@@ -36,6 +36,7 @@ fun AppDrawerContent(
     conversations: List<Conversation>,
     activeConversationId: Long?,
     isGlobalMode: Boolean,
+    assistantName: String,
     onNewChat: () -> Unit,
     onConversationClick: (Long) -> Unit,
     onDeleteConversation: (Long) -> Unit,
@@ -71,7 +72,7 @@ fun AppDrawerContent(
             CortexMark(Modifier.size(44.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    text = if (isGlobalMode) "Cortex" else activeWorkspace?.name ?: "Cortex",
+                    text = if (isGlobalMode) assistantName else activeWorkspace?.name ?: assistantName,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface

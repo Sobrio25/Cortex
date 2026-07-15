@@ -3,8 +3,8 @@ import test from "node:test";
 import { FREE_TOKENS_LIMIT, quotaPeriodKey, requireGoogleSignInForFree } from "./store";
 import { estimateFreeTokenReservation } from "./upstream";
 
-test("free allowance is two million tokens per ISO week", () => {
-  assert.equal(FREE_TOKENS_LIMIT, 2_000_000);
+test("free allowance is five hundred thousand tokens per ISO week", () => {
+  assert.equal(FREE_TOKENS_LIMIT, 500_000);
   assert.equal(quotaPeriodKey(new Date("2026-07-15T23:59:59Z")), "2026-W29");
 });
 

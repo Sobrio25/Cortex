@@ -244,7 +244,7 @@ private fun AutomaticReviewCard(
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                     Text(
-                        "Después de responder, Cortex puede guardar memoria y crear o mejorar skills activas.",
+                        "Después de responder, el asistente puede guardar memoria y crear o mejorar skills activas.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )

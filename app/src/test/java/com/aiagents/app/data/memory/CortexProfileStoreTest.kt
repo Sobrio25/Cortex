@@ -26,10 +26,29 @@ class CortexProfileStoreTest {
     }
 
     @Test
-    fun cortexRemainsTheDefaultWhenNoAgentNameWasProvided() {
+    fun genericAssistantRemainsTheDefaultWhenNoAgentNameWasProvided() {
         val soul = CortexProfileStore.defaultSoul("")
 
-        assertTrue(soul.contains("You are Cortex"))
+        assertTrue(soul.contains("You are Assistant"))
+        assertFalse(soul.contains("Cortex"))
         assertFalse(soul.contains("central agent orchestrator"))
+    }
+
+    @Test
+    fun renamePreservesCustomSoulPersonality() {
+        val soul = """
+            # SOUL.md
+
+            You are Clawdy, the ghost of a sarcastic turtle.
+
+            ## Tone
+            - Dry wit
+        """.trimIndent()
+
+        val renamed = CortexProfileStore.replaceIdentityName(soul, "Nova")
+
+        assertTrue(renamed.contains("You are Nova, the ghost of a sarcastic turtle."))
+        assertTrue(renamed.contains("## Tone\n- Dry wit"))
+        assertFalse(renamed.contains("You are Clawdy"))
     }
 }

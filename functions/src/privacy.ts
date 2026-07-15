@@ -21,7 +21,18 @@ const SAFE_TOOL_NAMES = new Set([
   "duckduckgo_search",
   "brave_web_search",
   "search_web",
+  "set_assistant_name",
 ]);
+
+function safeAssistantName(value: unknown): string {
+  const normalized = String(value ?? "")
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N} _.'’\-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 40);
+  return normalized || "Assistant";
+}
 
 export interface PrivacyResult {
   safe: boolean;
@@ -46,13 +57,14 @@ export function validateFreeRequest(body: any): PrivacyResult {
 }
 
 export function sanitizeForFree(body: any): any {
+  const assistantName = safeAssistantName(body?.assistantName);
   const tools = Array.isArray(body?.tools) ? body.tools.filter((tool: any) => {
     const name = tool?.function?.name;
     return typeof name === "string" && SAFE_TOOL_NAMES.has(name);
   }) : [];
   return {
     ...body,
-    systemPrompt: "Eres Cortex, un asistente útil. Responde en el idioma del usuario. No solicites ni reveles información personal, confidencial o sensible. Usa únicamente las herramientas públicas disponibles.",
+    systemPrompt: `Your configured name is "${assistantName}". This name is authoritative; never claim a product, project, default, or legacy name instead. Be helpful and answer in the user's language. Do not request or reveal personal, confidential, or sensitive information. Use only the public tools provided. If the user explicitly asks to rename you, call set_assistant_name.`,
     tools,
   };
 }

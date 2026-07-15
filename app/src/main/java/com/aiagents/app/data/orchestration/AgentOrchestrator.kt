@@ -30,7 +30,7 @@ class AgentOrchestrator @Inject constructor(
 ) {
     companion object {
         private const val TAG = "AgentOrchestrator"
-        internal const val DEFAULT_CORTEX_PROMPT =
+        internal const val DEFAULT_ORCHESTRATOR_PROMPT =
             "Complete the user's request directly and use available tools when they improve accuracy."
     }
     suspend fun buildPrompt(cortex: Agent): String = buildString {
@@ -38,7 +38,7 @@ class AgentOrchestrator @Inject constructor(
         val isGeneratedLegacyPrompt = storedPrompt.contains("{agents_list}") ||
             storedPrompt.contains("## DELEGATION PROTOCOL") ||
             storedPrompt.contains("central AI agent orchestration system", ignoreCase = true)
-        (if (isGeneratedLegacyPrompt) DEFAULT_CORTEX_PROMPT else storedPrompt)
+        (if (isGeneratedLegacyPrompt) DEFAULT_ORCHESTRATOR_PROMPT else storedPrompt)
             .trim()
             .takeIf(String::isNotBlank)
             ?.let { appendLine(it).appendLine() }

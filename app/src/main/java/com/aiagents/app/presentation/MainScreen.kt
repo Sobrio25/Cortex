@@ -170,6 +170,7 @@ private fun MainAppContent(
     val conversations by drawerViewModel.conversations.collectAsState()
     val activeConversationId by drawerViewModel.activeConversationId.collectAsState()
     val isGlobalMode by drawerViewModel.isGlobalMode.collectAsState()
+    val assistantName by drawerViewModel.assistantName.collectAsState()
 
     LaunchedEffect(scheduledTaskWorkspaceId, scheduledTaskConversationId) {
         val workspaceId = scheduledTaskWorkspaceId ?: return@LaunchedEffect
@@ -194,6 +195,7 @@ private fun MainAppContent(
                 conversations = conversations,
                 activeConversationId = activeConversationId,
                 isGlobalMode = isGlobalMode,
+                assistantName = assistantName,
                 onNewChat = {
                     scope.launch { drawerState.close() }
                     drawerViewModel.setActiveConversation(null)

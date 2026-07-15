@@ -7,6 +7,16 @@ import org.junit.Test
 
 class RuntimeContextProviderTest {
     @Test
+    fun configuredAssistantNameIsAuthoritative() {
+        val identity = RuntimeContextProvider.renderIdentity("Clawdy")
+
+        assertTrue(identity.contains(RuntimeContextProvider.IDENTITY_MARKER))
+        assertTrue(identity.contains("configured name for you is: Clawdy"))
+        assertTrue(identity.contains("authoritative"))
+        assertFalse(identity.contains("Cortex"))
+    }
+
+    @Test
     fun renderIncludesTimeAndroidAndCompactToolCountsWithoutUserIdentity() {
         val text = RuntimeContextProvider.render(
             RuntimeSnapshot(

@@ -32,6 +32,16 @@ test("manual selection never exceeds entitlement", () => {
 
 test("automatic routing follows task and plan", () => {
   assert.equal(resolveModel("STARTER", "auto", {})?.id, "deepseek-v4-flash");
+  assert.equal(resolveModel("STARTER", "auto", { prompt: "debug this Kotlin code" })?.id, "mimo-v2.5");
+  assert.equal(resolveModel("PLUS", "auto", {})?.id, "deepseek-v4-pro");
+  assert.equal(resolveModel("PLUS", "auto", { prompt: "analiza esta estrategia compleja" })?.id, "mimo-v2.5-pro");
   assert.equal(resolveModel("PRO", "auto", { prompt: "debug this Kotlin code" })?.id, "kimi-k2.7-code");
   assert.equal(resolveModel("ULTRA", "auto", { prompt: "proyecto autónomo completo" })?.id, "claude-fable-5");
+});
+
+test("MiMo tiers match Starter and Plus entitlements", () => {
+  assert.equal(MODELS["mimo-v2.5"].minimumPlan, "STARTER");
+  assert.equal(MODELS["mimo-v2.5"].vercelModel, "xiaomi/mimo-v2.5");
+  assert.equal(MODELS["mimo-v2.5-pro"].minimumPlan, "PLUS");
+  assert.equal(MODELS["mimo-v2.5-pro"].vercelModel, "xiaomi/mimo-v2.5-pro");
 });

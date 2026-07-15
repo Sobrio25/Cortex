@@ -44,10 +44,10 @@ class TaskCompletionNotifier @Inject constructor(
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Actividad de Cortex",
+            "Actividad del asistente",
             NotificationManager.IMPORTANCE_DEFAULT
         ).apply {
-            description = "Aprobaciones y estado final de las tareas de Cortex"
+            description = "Aprobaciones y estado final de las tareas del asistente"
         }
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(channel)
@@ -183,7 +183,11 @@ class TaskCompletionNotifier @Inject constructor(
         }
 
         if (pending == null) {
-            showDecisionFinished(workspaceId, "Cortex", "Esta solicitud ya no está activa")
+            showDecisionFinished(
+                workspaceId,
+                securePreferences.getAssistantName() ?: "Assistant",
+                "Esta solicitud ya no está activa"
+            )
             return
         }
 

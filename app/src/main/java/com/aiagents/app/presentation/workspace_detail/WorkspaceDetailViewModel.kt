@@ -55,6 +55,7 @@ import com.aiagents.app.data.terminal.PresentationToolHandler
 import com.aiagents.app.data.terminal.MemoryToolHandler
 import com.aiagents.app.data.terminal.CortexMemoryToolHandler
 import com.aiagents.app.data.terminal.AppControlToolHandler
+import com.aiagents.app.data.terminal.AssistantIdentityToolHandler
 import com.aiagents.app.data.terminal.ScheduledTaskToolHandler
 import com.aiagents.app.data.terminal.TodoToolHandler
 import com.aiagents.app.data.terminal.ToolSearchHandler
@@ -1984,6 +1985,11 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                     val result = handler.executeTool(toolCall.id, toolCall.function.arguments, wsId)
                     ToolResult(toolCall.id, AppControlToolHandler.TOOL_NAME, result.content)
                 }
+                AssistantIdentityToolHandler.TOOL_NAME -> {
+                    val result = repository.getAssistantIdentityToolHandler()
+                        .executeTool(toolCall.id, toolCall.function.arguments)
+                    ToolResult(toolCall.id, AssistantIdentityToolHandler.TOOL_NAME, result.content)
+                }
                 in TodoToolHandler.ALL_TOOL_NAMES -> {
                     val handler = repository.getTodoToolHandler()
                     val convId = _conversationId.value ?: 0L
@@ -2464,7 +2470,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             }
             if (chunk.done) {
                 toolCalls = chunk.toolCalls
-                Log.d("WorkspaceDetailVM", "Cortex stream done: toolCalls=${chunk.toolCalls?.size ?: 0}, names=${chunk.toolCalls?.joinToString { it.function.name } ?: "none"}")
+                Log.d("WorkspaceDetailVM", "Orchestrator stream done: toolCalls=${chunk.toolCalls?.size ?: 0}, names=${chunk.toolCalls?.joinToString { it.function.name } ?: "none"}")
             }
         }
 
@@ -2816,6 +2822,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         toolName == LEGACY_SUBTASK_TOOL_NAME -> "Migrando subtarea antigua..."
         toolName in DelegationToolHandler.ALL_TOOL_NAMES -> "Delegando a agente..."
         toolName == AppControlToolHandler.TOOL_NAME -> "Configurando app..."
+        toolName == AssistantIdentityToolHandler.TOOL_NAME -> "Actualizando nombre..."
         toolName in TodoToolHandler.ALL_TOOL_NAMES -> "Actualizando plan..."
         toolName == ScheduledTaskToolHandler.TOOL_NAME -> "Programando tarea..."
         else -> "Usando $toolName..."
@@ -3007,7 +3014,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                             handleAgentSelectionToolCall(agent, toolCall)
                             return
                         } else {
-                            Log.w("WorkspaceDetailVM", "Non-Cortex agent '${agent.name}' called select_agent, ignoring delegation")
+                            Log.w("WorkspaceDetailVM", "Non-orchestrator agent '${agent.name}' called select_agent, ignoring delegation")
                             val toolMessage = Message(
                                 role = MessageRole.TOOL,
                                 content = "You are already the selected agent. Proceed with the task directly.",
@@ -3200,6 +3207,10 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                         handleAppControlToolCall(agent, toolCall)
                     }
 
+                    AssistantIdentityToolHandler.TOOL_NAME -> {
+                        handleAssistantIdentityToolCall(agent, toolCall)
+                    }
+
                     in TodoToolHandler.ALL_TOOL_NAMES -> {
                         handleTodoToolCall(agent, toolCall)
                     }
@@ -3212,7 +3223,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                         // Non-orchestrator primary agent attempted to spawn children — block it.
                         val toolMessage = Message(
                             role = MessageRole.TOOL,
-                            content = "Only Cortex can delegate. Complete the task directly.",
+                            content = "Only the main orchestrator can delegate. Complete the task directly.",
                             toolResults = listOf(ToolResult(toolCallId = toolCall.id, name = toolCall.function.name, content = "Error: only the orchestrator agent can delegate tasks. Complete the task directly."))
                         )
                         repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
@@ -3399,6 +3410,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                 ToolSearchHandler.TOOL_NAME -> handleToolSearchCall(orchestrator, tc)
                 LEGACY_SUBTASK_TOOL_NAME -> handleSubtaskToolCall(orchestrator, tc)
                 AppControlToolHandler.TOOL_NAME -> handleAppControlToolCall(orchestrator, tc)
+                AssistantIdentityToolHandler.TOOL_NAME -> handleAssistantIdentityToolCall(orchestrator, tc)
                 ScheduledTaskToolHandler.TOOL_NAME -> handleScheduledTaskToolCall(orchestrator, tc)
                 in AgentCreatorToolHandler.ALL_TOOL_NAMES -> handleAgentCreatorToolCall(orchestrator, tc)
                 // These actions can pause for a permission/chooser and cannot safely be mixed.
@@ -3759,7 +3771,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
     }
 
     fun denyPermission() {
-        val agentName = _activeAgent.value?.name ?: "Cortex"
+        val agentName = _activeAgent.value?.name ?: "Assistant"
         clearPendingCommandPermission()
         taskCompletionNotifier.notifyPermissionDenied(workspaceId, agentName)
     }
@@ -4547,7 +4559,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
 
     private suspend fun handleMemoryToolCall(agent: Agent, toolCall: ToolCall) {
         if (toolCall.function.name !in MemoryToolHandler.READ_TOOL_NAMES) {
-            val content = "Direct SQLite writes are disabled. Cortex must use the unified 'memory' tool to choose active Markdown or secondary archive storage."
+            val content = "Direct SQLite writes are disabled. The main assistant must use the unified 'memory' tool to choose active Markdown or secondary archive storage."
             val toolMessage = Message(
                 role = MessageRole.TOOL,
                 content = content,
@@ -4838,6 +4850,19 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             role = MessageRole.TOOL,
             content = result.content,
             toolResults = listOf(ToolResult(result.toolCallId, toolCall.function.name, result.content))
+        )
+        repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
+    }
+
+    private suspend fun handleAssistantIdentityToolCall(agent: Agent, toolCall: ToolCall) {
+        val result = repository.getAssistantIdentityToolHandler()
+            .executeTool(toolCall.id, toolCall.function.arguments)
+        val toolMessage = Message(
+            role = MessageRole.TOOL,
+            content = result.content,
+            toolResults = listOf(
+                ToolResult(result.toolCallId, AssistantIdentityToolHandler.TOOL_NAME, result.content)
+            )
         )
         repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
     }

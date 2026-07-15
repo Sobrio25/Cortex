@@ -17,7 +17,7 @@ data class ScheduledTaskEntity(
     val id: Long = 0,
     val workspaceId: Long,
     val conversationId: Long? = null,     // chat where every execution is persisted
-    val agentName: String? = null,       // null = Cortex
+    val agentName: String? = null,       // null = configured main assistant
     val prompt: String,                   // what to execute
     val scheduleType: String,             // once, daily, weekly, interval
     val scheduleValue: String,            // "09:00", "MON,WED,FRI 09:00", "30m", ISO datetime

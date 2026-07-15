@@ -45,9 +45,10 @@ class RuntimeContextProvider @Inject constructor(
 
     companion object {
         const val MARKER = "## RUNTIME_CONTEXT"
-        const val SOUL_MARKER = "## CORTEX_SOUL"
-        const val USER_MARKER = "## CORTEX_USER"
-        const val MEMORY_MARKER = "## CORTEX_MEMORY"
+        const val IDENTITY_MARKER = "## ASSISTANT_IDENTITY"
+        const val SOUL_MARKER = "## ASSISTANT_SOUL"
+        const val USER_MARKER = "## ASSISTANT_USER"
+        const val MEMORY_MARKER = "## ASSISTANT_MEMORY"
         private const val MAX_FROZEN_CONTEXT_FILE_SESSIONS = 64
         private const val LEGACY_ORCHESTRATOR_SUFFIX =
             ", the central AI agent orchestration system. You coordinate specialized agents to execute complex tasks."
@@ -68,6 +69,13 @@ class RuntimeContextProvider @Inject constructor(
                 appendLine("- Personal finance is enabled with isolated storage. Before a financial action, call search_tools with query 'personal finance' or 'finanzas' to load the required finance_* tools.")
             }
             append("Only claim an action or integration after its tool is exposed and succeeds.")
+        }
+
+        fun renderIdentity(agentName: String): String = buildString {
+            appendLine(IDENTITY_MARKER)
+            appendLine("The user's configured name for you is: $agentName")
+            appendLine("Treat this runtime value as authoritative. Never replace it with a product, project, default, or legacy name.")
+            append("If the user explicitly asks to change it, call set_assistant_name and use the updated name afterward.")
         }
 
         fun renderMemory(snapshot: CortexMemorySnapshot): String = buildString {
@@ -211,6 +219,8 @@ class RuntimeContextProvider @Inject constructor(
             }
         }
         return buildString {
+            append(renderIdentity(agentName))
+            append("\n\n")
             if (contextFiles != null) {
                 append(renderSoul(contextFiles.soul, agentName))
                 append("\n\n")

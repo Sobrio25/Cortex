@@ -171,7 +171,7 @@ class ModelDownloadWorker @AssistedInject constructor(
 
         val requestBuilder = Request.Builder()
             .url(modelUrl)
-            .header("User-Agent", "Cortex-Android/0.2.0")
+            .header("User-Agent", "AIAgents-Android/0.3.0")
             .header("Accept", "*/*")
             .header("Accept-Encoding", "identity")
 
