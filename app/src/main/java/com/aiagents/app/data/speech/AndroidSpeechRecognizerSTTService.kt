@@ -2,6 +2,7 @@ package com.aiagents.app.data.speech
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -15,11 +16,13 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * STT service using Android's built-in SpeechRecognizer.
- * Free, no API key required. Uses Google's servers when online.
+ * Free and API-keyless. When [onDeviceOnly] is true it never selects the
+ * network recognizer and is therefore suitable for the Cortex assistant.
  * Does NOT extend BaseSTTService because SpeechRecognizer manages its own audio.
  */
 class AndroidSpeechRecognizerSTTService(
-    private val context: Context
+    private val context: Context,
+    private val onDeviceOnly: Boolean = false
 ) : STTService {
 
     private val _isListening = MutableStateFlow(false)
@@ -46,7 +49,12 @@ class AndroidSpeechRecognizerSTTService(
 
     override suspend fun startListening(language: String) {
         withContext(Dispatchers.Main) {
-            if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+            val isAvailable = if (onDeviceOnly) {
+                isOnDeviceRecognitionAvailable(context)
+            } else {
+                SpeechRecognizer.isRecognitionAvailable(context)
+            }
+            if (!isAvailable) {
                 _transcription.value = "Error: Reconocimiento de voz no disponible en este dispositivo"
                 return@withContext
             }
@@ -62,7 +70,11 @@ class AndroidSpeechRecognizerSTTService(
                 speechRecognizer = null
                 delay(150)
             }
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
+            speechRecognizer = if (onDeviceOnly && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+            } else {
+                SpeechRecognizer.createSpeechRecognizer(context)
+            }
 
             speechRecognizer?.setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) {
@@ -92,6 +104,8 @@ class AndroidSpeechRecognizerSTTService(
                         SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Reconocedor ocupado"
                         SpeechRecognizer.ERROR_SERVER -> "Error del servidor"
                         SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Timeout - no se detecto habla"
+                        SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED -> "Idioma no compatible"
+                        SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> "Idioma no descargado"
                         else -> "Error desconocido ($error)"
                     }
                     Log.e(TAG, "Error: $errorMessage")
@@ -131,6 +145,9 @@ class AndroidSpeechRecognizerSTTService(
                 }
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                if (onDeviceOnly) {
+                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                }
             }
 
             speechRecognizer?.startListening(intent)
@@ -139,14 +156,13 @@ class AndroidSpeechRecognizerSTTService(
 
     override suspend fun stopListening() {
         withContext(Dispatchers.Main) {
-            _isListening.value = false
             try {
+                // Let the recognizer produce its final result. onResults/onError owns the
+                // isListening transition; cancelling here would discard the last phrase.
                 speechRecognizer?.stopListening()
-                speechRecognizer?.cancel()
-                speechRecognizer?.destroy()
-                speechRecognizer = null
             } catch (e: Exception) {
                 Log.e(TAG, "Error al detener", e)
+                _isListening.value = false
             }
         }
     }
@@ -170,5 +186,10 @@ class AndroidSpeechRecognizerSTTService(
 
     companion object {
         private const val TAG = "AndroidSpeechSTT"
+
+        fun isOnDeviceRecognitionAvailable(context: Context): Boolean {
+            return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+        }
     }
 }

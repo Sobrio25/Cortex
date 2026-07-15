@@ -113,6 +113,13 @@ class STTManager @Inject constructor(
     }
 
     private fun createLocalService(config: STTConfig): STTService {
+        if (
+            config.localEngine == STTConfig.LocalSTTEngine.AUTO &&
+            AndroidSpeechRecognizerSTTService.isOnDeviceRecognitionAvailable(context)
+        ) {
+            return AndroidSpeechRecognizerSTTService(context, onDeviceOnly = true)
+        }
+
         val modelInfo = ModelDownloader.getVoskModelInfo(config.voskModelId)
         val dirName = modelInfo?.dirName ?: "vosk-model-small-es"
         val modelPath = VoskSTTService.getModelPath(context, dirName)
@@ -135,6 +142,9 @@ class STTManager @Inject constructor(
             localEngine = STTConfig.LocalSTTEngine.AUTO
         )
     }
+
+    fun isOnDeviceRecognitionAvailable(): Boolean =
+        AndroidSpeechRecognizerSTTService.isOnDeviceRecognitionAvailable(context)
 
     private fun releaseService() {
         _currentService.value?.release()

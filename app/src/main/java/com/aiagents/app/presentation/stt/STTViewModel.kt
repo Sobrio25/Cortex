@@ -198,10 +198,14 @@ class STTViewModel @Inject constructor(
                 _isListening.value = false
 
                 // Read the transcription result directly from the service StateFlow.
-                val result = service.transcription.value.takeIf { it.isNotBlank() }
+                val result = service.transcription.value.takeIf {
+                    it.isNotBlank() && !it.startsWith("Error:", ignoreCase = true)
+                }
                 if (!result.isNullOrBlank()) {
                     _transcription.value = result
                     _pendingTranscription.value = result
+                } else if (service.transcription.value.startsWith("Error:", ignoreCase = true)) {
+                    _error.value = service.transcription.value.removePrefix("Error:").trim()
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Normal cancellation

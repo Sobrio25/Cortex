@@ -31,6 +31,13 @@
 
     <!-- Queries para detectar apps instaladas (Android 11+) -->
     <queries>
+        <!-- Required on Android 11+ to discover speech recognition and TTS services. -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
         <!-- Spotify -->
         <package android:name="com.spotify.music" />
         <!-- Google Keep -->
