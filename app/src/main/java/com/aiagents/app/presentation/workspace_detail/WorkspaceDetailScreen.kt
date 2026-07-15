@@ -155,6 +155,7 @@ fun WorkspaceDetailScreen(
 ) {
     val workspace by viewModel.workspace.collectAsState()
     val activeAgent by viewModel.activeAgent.collectAsState()
+    val currentConversationId by viewModel.conversationId.collectAsState()
     val selectedModel by viewModel.selectedModel.collectAsState()
     val agents by viewModel.agents.collectAsState()
     val messages by viewModel.messages.collectAsState()
@@ -166,9 +167,13 @@ fun WorkspaceDetailScreen(
     val subagentExecutions by viewModel.subagentExecutions.collectAsState()
     val context = LocalContext.current
 
-    // Sync conversationId from navigation into ViewModel
-    LaunchedEffect(conversationId) {
-        viewModel.setConversationId(conversationId)
+    // A generic `chat` route starts without an ID and creates one after the first
+    // message. When this destination is recomposed after visiting Settings, that
+    // null route argument must not erase the conversation the ViewModel created.
+    LaunchedEffect(conversationId, currentConversationId, viewModel) {
+        conversationId
+            ?.takeIf { it > 0L && it != currentConversationId }
+            ?.let(viewModel::setConversationId)
     }
 
     // STT state

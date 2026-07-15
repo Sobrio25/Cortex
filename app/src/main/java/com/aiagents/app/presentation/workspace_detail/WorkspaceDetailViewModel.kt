@@ -234,7 +234,7 @@ class WorkspaceDetailViewModel @Inject constructor(
     private val codeExecutionHandler: CodeExecutionHandler,
     private val todoDao: com.aiagents.app.data.local.TodoDao,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
-    savedStateHandle: SavedStateHandle
+    private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
     @Volatile
@@ -1307,7 +1307,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                     repository.addMessage(workspaceId, convId, userMessage, agent.id)
                 } catch (e: android.database.sqlite.SQLiteConstraintException) {
                     Log.e("WorkspaceDetailVM", "FK constraint inserting message, resetting conversation", e)
-                    _conversationId.value = null
+                    updateConversationId(null)
                     val newConvId = ensureConversation(text)
                     repository.addMessage(workspaceId, newConvId, userMessage, agent.id)
                 }
@@ -3955,20 +3955,25 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                 return existing
             }
             // Conversation was deleted — fall through to create a new one
-            _conversationId.value = null
+            updateConversationId(null)
         }
         if (workspaceId <= 0) return null
         val title = firstMessageText?.take(50)?.trim()?.ifBlank { "Nuevo chat" } ?: "Nuevo chat"
         val id = repository.createConversation(
             Conversation(workspaceId = workspaceId, title = title)
         )
-        _conversationId.value = id
+        updateConversationId(id)
         return id
     }
 
     fun setConversationId(id: Long?) {
-        _conversationId.value = id
+        updateConversationId(id)
         _uiState.value = _uiState.value.copy(inputText = "")
+    }
+
+    private fun updateConversationId(id: Long?) {
+        _conversationId.value = id
+        savedStateHandle["conversationId"] = id
     }
 
     fun clearChat() {
@@ -5032,7 +5037,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
      */
     fun onConversationResumed(conversationId: Long) {
         // Update our local tracking
-        _conversationId.value = conversationId
+        updateConversationId(conversationId)
         
         val fullKey = effectiveSelectedModel()
         val modelId = extractModelId(fullKey).ifBlank { return }
@@ -5064,7 +5069,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
      * Triggers extraction from all inactive conversations.
      */
     fun onNewConversationStarted() {
-        _conversationId.value = null
+        updateConversationId(null)
         triggerInactiveConversationsExtraction()
     }
 
