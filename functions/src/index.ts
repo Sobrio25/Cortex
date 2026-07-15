@@ -8,9 +8,10 @@ import { onMessagePublished } from "firebase-functions/v2/pubsub";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { verifyAndGrantPurchase, tokenHash } from "./billing";
 import { paidFallbacks } from "./catalog";
+import { prepareConsentedFreeRequest } from "./consent";
 import { calculateCost, callFree, callPaid, estimateFreeTokenReservation } from "./upstream";
-import { sanitizeForFree, validateFreeRequest } from "./privacy";
 import {
+  acceptFreeDataConsent,
   EntitlementError,
   authorizeOperation,
   findPurchaseBinding,
@@ -18,6 +19,7 @@ import {
   publicModels,
   recordCost,
   reserveFreeTokens,
+  requireFreeDataConsent,
   revokePlan,
   settleFreeTokens,
 } from "./store";
@@ -67,6 +69,16 @@ app.get("/v1/models", asyncRoute(async (req, res) => {
   res.json(publicModels(account.plan));
 }));
 
+app.post("/v1/free-data-consent", asyncRoute(async (req, res) => {
+  const authenticated = req as AuthenticatedRequest;
+  res.json(await acceptFreeDataConsent(
+    authenticated.uid,
+    authenticated.signInProvider,
+    req.body?.accepted,
+    req.body?.version,
+  ));
+}));
+
 app.post("/v1/turns/start", asyncRoute(async (req, res) => {
   const account = await getAccount((req as AuthenticatedRequest).uid);
   res.json({ accepted: true, plan: account.plan, freeTokensUsed: account.freeTokensUsed });
@@ -91,13 +103,12 @@ app.post("/v1/inference/chat", asyncRoute(async (req, res) => {
   };
 
   const runFree = async () => {
-    const privacy = validateFreeRequest(req.body);
-    if (!privacy.safe) throw new EntitlementError(422, privacy.reason ?? "Esta solicitud no puede usar la ruta gratuita");
-    const safeBody = sanitizeForFree(req.body);
-    const reservation = await reserveFreeTokens(uid, estimateFreeTokenReservation(safeBody));
+    requireFreeDataConsent(true, authorization.account.freeDataConsentVersion);
+    const consentedBody = prepareConsentedFreeRequest(req.body);
+    const reservation = await reserveFreeTokens(uid, estimateFreeTokenReservation(consentedBody));
     let upstreamCompleted = false;
     try {
-      const result = await callFree(safeBody, freeSecrets, authorization.account.plan === "PLUS");
+      const result = await callFree(consentedBody, freeSecrets, authorization.account.plan === "PLUS");
       upstreamCompleted = true;
       await settleFreeTokens(
         uid,

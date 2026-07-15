@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FREE_TOKENS_LIMIT, quotaPeriodKey, requireGoogleSignInForFree } from "./store";
+import {
+  FREE_TOKENS_LIMIT,
+  quotaPeriodKey,
+  requireFreeDataConsent,
+  requireGoogleSignInForFree,
+} from "./store";
+import { FREE_DATA_CONSENT_VERSION } from "./consent";
 import { estimateFreeTokenReservation } from "./upstream";
 
 test("free allowance is five hundred thousand tokens per ISO week", () => {
@@ -28,4 +34,10 @@ test("free plan requires a Google-backed Firebase session", () => {
   assert.throws(() => requireGoogleSignInForFree("FREE", "anonymous"), /Google/);
   assert.doesNotThrow(() => requireGoogleSignInForFree("FREE", "google.com"));
   assert.doesNotThrow(() => requireGoogleSignInForFree("PRO", "anonymous"));
+});
+
+test("free inference requires the current disclosure acceptance", () => {
+  assert.throws(() => requireFreeDataConsent(true, 0), /aviso/);
+  assert.doesNotThrow(() => requireFreeDataConsent(true, FREE_DATA_CONSENT_VERSION));
+  assert.doesNotThrow(() => requireFreeDataConsent(false, 0));
 });

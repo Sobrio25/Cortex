@@ -10,6 +10,7 @@ import com.aiagents.app.data.auth.FirebaseAuthManager
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.memory.CortexProfileStore
 import com.aiagents.app.data.repository.AgentRepository
+import com.aiagents.app.data.repository.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,7 +27,8 @@ class OnboardingViewModel @Inject constructor(
     private val securePreferences: SecurePreferences,
     private val agentRepository: AgentRepository,
     private val cortexProfileStore: CortexProfileStore,
-    private val firebaseAuthManager: FirebaseAuthManager
+    private val firebaseAuthManager: FirebaseAuthManager,
+    private val subscriptionRepository: SubscriptionRepository
 ) : ViewModel() {
 
     val currentStep = savedStateHandle.getStateFlow("currentStep", 0)
@@ -62,6 +64,15 @@ class OnboardingViewModel @Inject constructor(
     private val _onboardingCompleted = MutableStateFlow(securePreferences.isOnboardingCompleted())
     val onboardingCompleted: StateFlow<Boolean> = _onboardingCompleted.asStateFlow()
 
+    init {
+        if (firebaseAuthManager.isGoogleSignedIn) {
+            viewModelScope.launch {
+                runCatching { syncAccountConsent() }
+                    .onFailure { _googleSignInError.value = it.message }
+            }
+        }
+    }
+
     fun setLanguage(language: String) {
         savedStateHandle["selectedLanguage"] = language
         securePreferences.setAppLanguage(language)
@@ -83,7 +94,7 @@ class OnboardingViewModel @Inject constructor(
     fun setTechnicalPrecision(value: Int) { savedStateHandle["technical"] = value }
     fun setManagedPrivacyAccepted(accepted: Boolean) {
         savedStateHandle["managedPrivacyAccepted"] = accepted
-        securePreferences.setManagedPrivacyAccepted(accepted)
+        _googleSignInError.value = null
     }
 
     fun signInWithGoogle(activity: Activity) {
@@ -91,12 +102,46 @@ class OnboardingViewModel @Inject constructor(
         viewModelScope.launch {
             _googleSignInLoading.value = true
             _googleSignInError.value = null
-            runCatching { firebaseAuthManager.signInWithGoogle(activity) }
-                .onSuccess { _googleSignedIn.value = firebaseAuthManager.isGoogleSignedIn }
+            runCatching {
+                firebaseAuthManager.signInWithGoogle(activity)
+                _googleSignedIn.value = firebaseAuthManager.isGoogleSignedIn
+                syncAccountConsent()
+            }
                 .onFailure {
                     _googleSignInError.value = it.message ?: "No se pudo iniciar sesión con Google"
                 }
             _googleSignInLoading.value = false
+        }
+    }
+
+    fun acceptFreeDataDisclosure(onAccepted: () -> Unit) {
+        if (
+            _googleSignInLoading.value ||
+            !managedPrivacyAccepted.value ||
+            !_googleSignedIn.value
+        ) return
+        viewModelScope.launch {
+            _googleSignInLoading.value = true
+            _googleSignInError.value = null
+            subscriptionRepository.acceptFreeDataConsent()
+                .onSuccess {
+                    securePreferences.enableManagedFreePlan()
+                    savedStateHandle["managedPrivacyAccepted"] = true
+                    onAccepted()
+                }
+                .onFailure {
+                    _googleSignInError.value = it.message
+                        ?: "No se pudo registrar la aceptación del aviso"
+                }
+            _googleSignInLoading.value = false
+        }
+    }
+
+    private suspend fun syncAccountConsent() {
+        subscriptionRepository.refresh().getOrThrow()
+        if (subscriptionRepository.usage.value.hasCurrentFreeDataConsent) {
+            securePreferences.enableManagedFreePlan()
+            savedStateHandle["managedPrivacyAccepted"] = true
         }
     }
 

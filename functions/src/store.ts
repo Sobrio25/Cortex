@@ -1,5 +1,6 @@
 import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
 import { MODELS, PLANS, PlanId, ModelDefinition, resolveModel } from "./catalog";
+import { FREE_DATA_CONSENT_VERSION, hasCurrentFreeDataConsent } from "./consent";
 
 export interface AccountState {
   plan: PlanId;
@@ -10,6 +11,8 @@ export interface AccountState {
   budgetMicros: number;
   periodEndEpochMillis?: number;
   productId?: string;
+  freeDataConsentVersion: number;
+  freeDataConsentRequiredVersion: number;
 }
 
 export interface OperationAuthorization {
@@ -27,6 +30,15 @@ export class EntitlementError extends Error {
 export function requireGoogleSignInForFree(plan: PlanId, signInProvider?: string): void {
   if (plan === "FREE" && signInProvider !== "google.com") {
     throw new EntitlementError(403, "Inicia sesión con Google para usar el plan Gratis");
+  }
+}
+
+export function requireFreeDataConsent(useFree: boolean, acceptedVersion: unknown): void {
+  if (useFree && !hasCurrentFreeDataConsent(acceptedVersion)) {
+    throw new EntitlementError(
+      428,
+      "Lee y acepta el aviso sobre el procesamiento de datos antes de usar el plan Gratis",
+    );
   }
 }
 
@@ -61,6 +73,8 @@ function normalize(raw: FirebaseFirestore.DocumentData | undefined): AccountStat
     budgetMicros: PLANS[plan].budgetMicros,
     periodEndEpochMillis: plan === "FREE" ? undefined : periodEndEpochMillis,
     productId: plan === "FREE" ? undefined : raw?.productId,
+    freeDataConsentVersion: Number(raw?.freeDataConsentVersion ?? 0),
+    freeDataConsentRequiredVersion: FREE_DATA_CONSENT_VERSION,
   };
 }
 
@@ -95,6 +109,7 @@ export async function authorizeOperation(
 
     const useFree = account.plan === "FREE" || account.spentMicros >= account.budgetMicros;
     if (account.plan === "FREE") requireGoogleSignInForFree(account.plan, signInProvider);
+    requireFreeDataConsent(useFree, account.freeDataConsentVersion);
     const model = useFree ? undefined : resolveModel(account.plan, requestedModel, requestBody);
     if (!useFree && !model) throw new EntitlementError(403, "Este modelo no está incluido en tu plan");
 
@@ -105,6 +120,34 @@ export async function authorizeOperation(
       createdAt: turnSnapshot.exists ? turnSnapshot.data()?.createdAt : FieldValue.serverTimestamp(),
     }, { merge: true });
     return { account, useFree, model };
+  });
+}
+
+export async function acceptFreeDataConsent(
+  uid: string,
+  signInProvider: string | undefined,
+  accepted: unknown,
+  version: unknown,
+): Promise<AccountState> {
+  if (signInProvider !== "google.com") {
+    throw new EntitlementError(403, "Inicia sesión con Google para activar el plan Gratis");
+  }
+  if (accepted !== true || Number(version) !== FREE_DATA_CONSENT_VERSION) {
+    throw new EntitlementError(400, "Debes confirmar que leíste el aviso vigente del plan Gratis");
+  }
+
+  const accountRef = db().collection("accounts").doc(uid);
+  return db().runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(accountRef);
+    const account = normalize(snapshot.data());
+    const next = { ...account, freeDataConsentVersion: FREE_DATA_CONSENT_VERSION };
+    const existingAcceptedAt = snapshot.data()?.freeDataConsentAcceptedAt;
+    transaction.set(accountRef, {
+      ...next,
+      freeDataConsentAcceptedAt: existingAcceptedAt ?? FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return next;
   });
 }
 

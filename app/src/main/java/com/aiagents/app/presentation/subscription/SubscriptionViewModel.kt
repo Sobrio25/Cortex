@@ -47,6 +47,7 @@ class SubscriptionViewModel @Inject constructor(
             repository.refresh().onFailure {
                 _uiState.value = SubscriptionUiState(false, it.message)
             }.onSuccess {
+                applyAccountConsent()
                 _uiState.value = SubscriptionUiState(false)
             }
         }
@@ -68,26 +69,13 @@ class SubscriptionViewModel @Inject constructor(
         billing.restorePurchases()
     }
 
-    fun signInWithGoogleAndEnableFreePlan(activity: Activity) {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(loading = true, message = null)
-            runCatching { firebaseAuthManager.signInWithGoogle(activity) }
-                .onSuccess {
-                    _googleSignedIn.value = firebaseAuthManager.isGoogleSignedIn
-                    securePreferences.enableManagedFreePlan()
-                    _privacyAccepted.value = true
-                    repository.refresh().onFailure { error ->
-                        _uiState.value = SubscriptionUiState(false, error.message)
-                    }.onSuccess {
-                        _uiState.value = SubscriptionUiState(false)
-                    }
-                }
-                .onFailure {
-                    _uiState.value = SubscriptionUiState(
-                        loading = false,
-                        message = it.message ?: "No se pudo iniciar sesión con Google"
-                    )
-                }
+    private fun applyAccountConsent() {
+        val accepted = repository.usage.value.hasCurrentFreeDataConsent
+        _privacyAccepted.value = accepted
+        if (accepted) {
+            securePreferences.enableManagedFreePlan()
+        } else {
+            securePreferences.setManagedPrivacyAccepted(false)
         }
     }
 

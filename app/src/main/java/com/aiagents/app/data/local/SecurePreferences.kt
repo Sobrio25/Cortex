@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.aiagents.app.domain.model.MoonshotEndpointType
+import com.aiagents.app.domain.model.FREE_DATA_CONSENT_VERSION
 import com.aiagents.app.domain.model.OpenCodeVariantType
 import com.aiagents.app.domain.model.ProviderType
 import com.aiagents.app.domain.model.WebSearchProvider
@@ -171,11 +172,18 @@ class SecurePreferences @Inject constructor(
     }
 
     fun setManagedPrivacyAccepted(accepted: Boolean) {
-        encryptedPrefs.edit().putBoolean("MANAGED_PRIVACY_ACCEPTED", accepted).apply()
+        encryptedPrefs.edit().also { editor ->
+            if (accepted) {
+                editor.putInt("MANAGED_FREE_DATA_CONSENT_VERSION", FREE_DATA_CONSENT_VERSION)
+            } else {
+                editor.remove("MANAGED_FREE_DATA_CONSENT_VERSION")
+            }
+            editor.remove("MANAGED_PRIVACY_ACCEPTED")
+        }.apply()
     }
 
     fun isManagedPrivacyAccepted(): Boolean =
-        encryptedPrefs.getBoolean("MANAGED_PRIVACY_ACCEPTED", false)
+        encryptedPrefs.getInt("MANAGED_FREE_DATA_CONSENT_VERSION", 0) >= FREE_DATA_CONSENT_VERSION
 
     fun enableManagedFreePlan() {
         setManagedPrivacyAccepted(true)

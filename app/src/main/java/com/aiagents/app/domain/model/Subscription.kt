@@ -1,5 +1,7 @@
 package com.aiagents.app.domain.model
 
+const val FREE_DATA_CONSENT_VERSION = 1
+
 enum class SubscriptionPlan(
     val productId: String?,
     val displayName: String,
@@ -37,8 +39,13 @@ data class UsageSnapshot(
     val freeTokensLimit: Long = 500_000,
     val spentMicros: Long = 0,
     val budgetMicros: Long = 0,
-    val periodEndEpochMillis: Long? = null
+    val periodEndEpochMillis: Long? = null,
+    val freeDataConsentVersion: Int = 0,
+    val freeDataConsentRequiredVersion: Int = FREE_DATA_CONSENT_VERSION
 ) {
+    val hasCurrentFreeDataConsent: Boolean
+        get() = freeDataConsentVersion >= freeDataConsentRequiredVersion
+
     val remainingPercentage: Int
         get() = if (budgetMicros <= 0) {
             if (freeTokensLimit <= 0) 0 else

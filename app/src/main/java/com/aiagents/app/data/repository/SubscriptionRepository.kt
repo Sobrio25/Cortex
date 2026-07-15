@@ -1,6 +1,7 @@
 package com.aiagents.app.data.repository
 
 import com.aiagents.app.data.remote.ManagedGatewayClient
+import com.aiagents.app.data.remote.FreeDataConsentRequest
 import com.aiagents.app.data.remote.PurchaseVerificationRequest
 import com.aiagents.app.domain.model.ManagedModel
 import com.aiagents.app.domain.model.ManagedModelCatalog
@@ -31,6 +32,12 @@ class SubscriptionRepository @Inject constructor(
 
     suspend fun verifyPurchase(productId: String, purchaseToken: String): Result<Unit> = runCatching {
         val account = gateway.verifyPurchase(PurchaseVerificationRequest(productId, purchaseToken))
+        _usage.value = account
+        _models.value = ManagedModelCatalog.availableFor(account.plan)
+    }
+
+    suspend fun acceptFreeDataConsent(): Result<Unit> = runCatching {
+        val account = gateway.acceptFreeDataConsent(FreeDataConsentRequest())
         _usage.value = account
         _models.value = ManagedModelCatalog.availableFor(account.plan)
     }

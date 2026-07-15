@@ -3,6 +3,7 @@ package com.aiagents.app.data.remote
 import com.aiagents.app.data.auth.FirebaseAuthManager
 import com.aiagents.app.domain.model.ManagedModel
 import com.aiagents.app.domain.model.ManagedModelCatalog
+import com.aiagents.app.domain.model.FREE_DATA_CONSENT_VERSION
 import com.aiagents.app.domain.model.SubscriptionPlan
 import com.aiagents.app.domain.model.ToolCall
 import com.aiagents.app.domain.model.UsageSnapshot
@@ -27,7 +28,9 @@ data class ManagedAccountResponse(
     val freeTokensLimit: Long = 500_000,
     val spentMicros: Long = 0,
     val budgetMicros: Long = 0,
-    val periodEndEpochMillis: Long? = null
+    val periodEndEpochMillis: Long? = null,
+    val freeDataConsentVersion: Int = 0,
+    val freeDataConsentRequiredVersion: Int = FREE_DATA_CONSENT_VERSION
 ) {
     fun toDomain() = UsageSnapshot(
         plan = SubscriptionPlan.fromId(plan),
@@ -35,7 +38,9 @@ data class ManagedAccountResponse(
         freeTokensLimit = freeTokensLimit,
         spentMicros = spentMicros,
         budgetMicros = budgetMicros,
-        periodEndEpochMillis = periodEndEpochMillis
+        periodEndEpochMillis = periodEndEpochMillis,
+        freeDataConsentVersion = freeDataConsentVersion,
+        freeDataConsentRequiredVersion = freeDataConsentRequiredVersion
     )
 }
 
@@ -43,6 +48,11 @@ data class PurchaseVerificationRequest(
     val productId: String,
     val purchaseToken: String,
     val packageName: String = "com.aiagents.app"
+)
+
+data class FreeDataConsentRequest(
+    val accepted: Boolean = true,
+    val version: Int = FREE_DATA_CONSENT_VERSION
 )
 
 @Singleton
@@ -64,6 +74,13 @@ class ManagedGatewayClient @Inject constructor(
 
     suspend fun verifyPurchase(request: PurchaseVerificationRequest): UsageSnapshot {
         val response = authenticatedPost("/v1/billing/google-play/verify", gson.toJson(request))
+        return gson.fromJson(response, ManagedAccountResponse::class.java).toDomain()
+    }
+
+    suspend fun acceptFreeDataConsent(
+        request: FreeDataConsentRequest = FreeDataConsentRequest()
+    ): UsageSnapshot {
+        val response = authenticatedPost("/v1/free-data-consent", gson.toJson(request))
         return gson.fromJson(response, ManagedAccountResponse::class.java).toDomain()
     }
 

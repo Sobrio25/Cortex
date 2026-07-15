@@ -6,7 +6,8 @@
     "node": "22"
   },
   "scripts": {
-    "build": "tsc",
+    "clean": "node -e \"require('node:fs').rmSync('lib', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc",
     "test": "npm run build && node --test lib/**/*.test.js",
     "serve": "npm run build && firebase emulators:start --only functions,firestore"
   },

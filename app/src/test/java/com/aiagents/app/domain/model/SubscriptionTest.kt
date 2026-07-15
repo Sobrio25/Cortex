@@ -36,4 +36,13 @@ class SubscriptionTest {
             ).remainingPercentage
         )
     }
+
+    @Test
+    fun freeDataConsentMustMatchTheCurrentDisclosureVersion() {
+        assertFalse(UsageSnapshot(freeDataConsentVersion = 0).hasCurrentFreeDataConsent)
+        assertTrue(
+            UsageSnapshot(freeDataConsentVersion = FREE_DATA_CONSENT_VERSION)
+                .hasCurrentFreeDataConsent
+        )
+    }
 }

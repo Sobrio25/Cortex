@@ -53,7 +53,7 @@
     <string name="onboarding_providers_desc">Conecta tus servicios de IA como OpenAI, Anthropic, Google AI, y más. Necesitas al menos un proveedor para empezar a chatear con tus agentes.</string>
     <string name="onboarding_configure_providers">Configurar Proveedores</string>
     <string name="onboarding_free_plan_title">Listo desde el primer mensaje</string>
-    <string name="onboarding_free_plan_desc">Inicia sesión con Google para activar el plan Gratis. La app elige automáticamente un modelo disponible, sin API keys ni configuración técnica.</string>
+    <string name="onboarding_free_plan_desc">Inicia sesión con Google y lee el aviso sobre datos para activar el plan Gratis. La app elige automáticamente un modelo disponible, sin API keys ni configuración técnica.</string>
     <string name="onboarding_free_plan_messages">500,000 tokens de entrada y salida gratis por semana</string>
     <string name="onboarding_free_plan_no_config">Descarga, abre y empieza a usarlo. Después podrás agregar tus propios proveedores desde los ajustes avanzados.</string>
     <string name="google_sign_in_button">Continuar con Google</string>
@@ -110,9 +110,10 @@
     <string name="subscription_title">Plan y consumo</string>
     <string name="subscription_free_usage">%1$s de %2$s tokens usados esta semana</string>
     <string name="subscription_budget_remaining">Queda %1$d%% del presupuesto de inferencia del periodo</string>
-    <string name="managed_privacy_notice">Las solicitudes de IA pueden procesarse mediante proveedores externos. Algunos proveedores pueden almacenar las entradas y respuestas o utilizarlas para mejorar sus servicios. No envíes información personal, confidencial o sensible.</string>
+    <string name="managed_privacy_title">Antes de usar el plan Gratis</string>
+    <string name="managed_privacy_notice">El plan Gratis puede enviar tus mensajes, archivos adjuntos, resultados de herramientas y respuestas de IA a proveedores externos. Esos proveedores pueden almacenar esta información, revisarla por seguridad o usarla para mejorar sus servicios según sus propias políticas. La app no puede garantizar que los datos enviados permanezcan privados y, después de que aceptes, no inspeccionará ni bloqueará automáticamente contenido sensible. Tú decides qué compartir. Evita enviar contraseñas, claves API, datos bancarios, documentos confidenciales o información personal que no quieras que procesen terceros.</string>
+    <string name="managed_privacy_acknowledgement">He leído y comprendo que los datos que envíe con el plan Gratis pueden ser procesados y almacenados por proveedores externos.</string>
     <string name="subscription_restore">Restaurar compras</string>
-    <string name="subscription_accept_privacy">Aceptar y continuar con Google</string>
     <string name="subscription_current_plan">Plan actual</string>
     <string name="subscription_choose_plan">Elegir plan</string>
     <string name="subscription_store_pending">Pendiente en Google Play</string>

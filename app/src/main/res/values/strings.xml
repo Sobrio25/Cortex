@@ -53,7 +53,7 @@
     <string name="onboarding_providers_desc">Connect your AI services like OpenAI, Anthropic, Google AI, and more. You need at least one provider to start chatting with your agents.</string>
     <string name="onboarding_configure_providers">Configure Providers</string>
     <string name="onboarding_free_plan_title">Ready from the first message</string>
-    <string name="onboarding_free_plan_desc">Sign in with Google to activate the free plan. The app automatically chooses an available model, with no API keys or technical setup.</string>
+    <string name="onboarding_free_plan_desc">Sign in with Google and read the data notice to activate the free plan. The app automatically chooses an available model, with no API keys or technical setup.</string>
     <string name="onboarding_free_plan_messages">500,000 free input and output tokens every week</string>
     <string name="onboarding_free_plan_no_config">Download, open, and start using it. You can add your own providers later from advanced settings.</string>
     <string name="google_sign_in_button">Continue with Google</string>
@@ -110,9 +110,10 @@
     <string name="subscription_title">Plan and usage</string>
     <string name="subscription_free_usage">%1$s of %2$s tokens used this week</string>
     <string name="subscription_budget_remaining">%1$d%% of this period’s inference budget remains</string>
-    <string name="managed_privacy_notice">AI requests may be processed by external providers. Some providers may store inputs and responses or use them to improve their services. Do not send personal, confidential, or sensitive information.</string>
+    <string name="managed_privacy_title">Before using the Free plan</string>
+    <string name="managed_privacy_notice">The Free plan may send your messages, attachments, tool results, and AI responses to external providers. Those providers may store this information, review it for safety, or use it to improve their services under their own policies. The app cannot guarantee that submitted data will remain private and, after you accept, it will not automatically inspect or block sensitive content. You decide what to share. Avoid sending passwords, API keys, banking data, confidential documents, or personal information you do not want processed by third parties.</string>
+    <string name="managed_privacy_acknowledgement">I have read and understand that data I submit with the Free plan may be processed and stored by external providers.</string>
     <string name="subscription_restore">Restore purchases</string>
-    <string name="subscription_accept_privacy">Accept and continue with Google</string>
     <string name="subscription_current_plan">Current plan</string>
     <string name="subscription_choose_plan">Choose plan</string>
     <string name="subscription_store_pending">Pending in Google Play</string>

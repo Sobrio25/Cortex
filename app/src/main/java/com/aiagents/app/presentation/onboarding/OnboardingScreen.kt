@@ -170,13 +170,15 @@ fun OnboardingScreen(
                 isNextEnabled = when (currentStep) {
                     0 -> userName.isNotBlank()
                     1 -> assistantName.isNotBlank()
-                    2 -> managedPrivacyAccepted && googleSignedIn
+                    2 -> managedPrivacyAccepted && googleSignedIn && !googleSignInLoading
                     else -> true
                 },
                 onBack = { viewModel.previousStep() },
                 onNext = {
                     if (currentStep == lastStep) {
                         onComplete()
+                    } else if (currentStep == 2) {
+                        viewModel.acceptFreeDataDisclosure(viewModel::nextStep)
                     } else {
                         viewModel.nextStep()
                     }
@@ -302,19 +304,29 @@ private fun ManagedFreePlanStep(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
             )
         ) {
-            Row(
-                Modifier.padding(14.dp),
-                verticalAlignment = Alignment.Top
-            ) {
-                Checkbox(
-                    checked = privacyAccepted,
-                    onCheckedChange = onPrivacyAcceptedChange
+            Column(Modifier.padding(16.dp)) {
+                Text(
+                    stringResource(R.string.managed_privacy_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
                 )
                 Text(
                     stringResource(R.string.managed_privacy_notice),
-                    Modifier.padding(start = 8.dp, top = 10.dp),
+                    Modifier.padding(top = 8.dp),
                     style = MaterialTheme.typography.bodySmall
                 )
+                Row(verticalAlignment = Alignment.Top) {
+                    Checkbox(
+                        checked = privacyAccepted,
+                        onCheckedChange = onPrivacyAcceptedChange
+                    )
+                    Text(
+                        stringResource(R.string.managed_privacy_acknowledgement),
+                        Modifier.padding(start = 8.dp, top = 12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
         }
     }

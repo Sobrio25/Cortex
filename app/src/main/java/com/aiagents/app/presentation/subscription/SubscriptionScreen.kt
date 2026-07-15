@@ -94,32 +94,6 @@ fun SubscriptionScreen(
                 )
             }
 
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
-                    )
-                ) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text(
-                            text = stringResource(R.string.managed_privacy_notice),
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        if (!managedReady) {
-                            Button(
-                                onClick = {
-                                    activity?.let(viewModel::signInWithGoogleAndEnableFreePlan)
-                                },
-                                enabled = activity != null && !uiState.loading,
-                                modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
-                            ) {
-                                Text(stringResource(R.string.subscription_accept_privacy))
-                            }
-                        }
-                    }
-                }
-            }
-
             items(SubscriptionPlan.entries) { plan ->
                 PlanCard(
                     plan = plan,
