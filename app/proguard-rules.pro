@@ -37,3 +37,8 @@
 # Vosk (lightweight offline STT)
 -keep class org.vosk.** { *; }
 -dontwarn org.vosk.**
+
+# JNA is used by Vosk through JNI. Native code resolves fields such as
+# com.sun.jna.Pointer.peer by name, so they must not be renamed by R8.
+-keep class com.sun.jna.** { *; }
+-dontwarn com.sun.jna.**
