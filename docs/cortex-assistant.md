@@ -45,6 +45,9 @@ También se puede usar **Probar** sin cambiar el asistente predeterminado.
 - STT, TTS y el prompt usan el idioma elegido en Cortex, aunque Android esté configurado en otro
   idioma. Al invocar el asistente comienza a escuchar cuando la actividad llega a estado reanudado;
   después de hablar una respuesta vuelve a escuchar mientras el ciclo de voz siga activo.
+- Las respuestas generales se limitan a 30 palabras. Cálculos y datos puntuales devuelven sólo el
+  resultado; clima y acciones del teléfono muestran el resultado verificado de la herramienta y
+  descartan cualquier explicación redundante generada después.
 
 ## Flujo técnico
 

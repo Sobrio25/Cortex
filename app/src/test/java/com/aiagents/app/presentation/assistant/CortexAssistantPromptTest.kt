@@ -10,8 +10,8 @@ class CortexAssistantPromptTest {
     fun `assistant prompt enforces a brief final response`() {
         val prompt = CortexAssistantPrompt.SYSTEM_INSTRUCTIONS
 
-        assertTrue(prompt.contains("at most 45 words"))
-        assertTrue(prompt.contains("1–3 short sentences"))
+        assertTrue(prompt.contains("at most 30 words"))
+        assertTrue(prompt.contains("1–2 short sentences"))
         assertTrue(prompt.contains("ALWAYS-READY PHONE CAPABILITIES"))
     }
 
@@ -51,5 +51,8 @@ class CortexAssistantPromptTest {
 
         assertTrue(instructions.contains("language tag `es-MX`"))
         assertTrue(instructions.contains("regardless of the Android device language"))
+        assertTrue(instructions.contains("mathematical operation"))
+        assertTrue(instructions.contains("at most 12 words"))
+        assertTrue(instructions.contains("Timer, alarm, reminder"))
     }
 }

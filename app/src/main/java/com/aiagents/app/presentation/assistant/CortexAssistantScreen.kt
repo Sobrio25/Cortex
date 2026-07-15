@@ -91,7 +91,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aiagents.app.data.repository.ContextCompactionPolicy
 import com.aiagents.app.data.local.AssistantPreferences
 import com.aiagents.app.data.speech.AndroidTextToSpeechManager
-import com.aiagents.app.data.terminal.WeatherToolHandler
 import com.aiagents.app.domain.model.Message
 import com.aiagents.app.domain.model.MessageRole
 import com.aiagents.app.presentation.stt.STTViewModel
@@ -182,22 +181,26 @@ fun CortexAssistantScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val visibleMessages = remember(messages) {
-        ContextCompactionPolicy.visibleHistory(messages, includeInternalActions = true).filter {
-            it.role == MessageRole.USER ||
-                (it.role == MessageRole.ASSISTANT && it.toolCalls.isEmpty()) ||
-                it.weatherToolContent() != null
-        }
+    val visibleMessages = remember(messages, assistantLocale) {
+        CortexAssistantResponsePolicy.prepareVisible(
+            messages = ContextCompactionPolicy.visibleHistory(
+                messages,
+                includeInternalActions = true
+            ).filter {
+                it.role == MessageRole.USER ||
+                    (it.role == MessageRole.ASSISTANT && it.toolCalls.isEmpty()) ||
+                    CortexAssistantResponsePolicy.isDirectResult(it)
+            },
+            locale = assistantLocale
+        )
     }
     val latestAssistantMessage = visibleMessages.lastOrNull {
         it.role == MessageRole.ASSISTANT && it.content.isNotBlank()
     }
-    val latestWeatherMessage = visibleMessages.lastOrNull { it.weatherToolContent() != null }
-    val latestResultMessage = listOfNotNull(latestAssistantMessage, latestWeatherMessage)
+    val latestDirectResult = visibleMessages.lastOrNull(CortexAssistantResponsePolicy::isDirectResult)
+    val latestResultMessage = listOfNotNull(latestAssistantMessage, latestDirectResult)
         .maxByOrNull(Message::timestamp)
-    val settledResponse = latestResultMessage?.let { message ->
-        message.weatherToolContent()?.toCompactWeatherSummary() ?: message.content
-    }.orEmpty()
+    val settledResponse = latestResultMessage?.content.orEmpty()
     val latestResultKey = latestResultMessage?.let { message ->
         "${message.id}:${message.timestamp}:${settledResponse.hashCode()}"
     }
@@ -722,7 +725,7 @@ private fun ExpandedAssistantPanel(
 
 @Composable
 private fun AssistantMessage(message: Message) {
-    message.weatherToolContent()
+    CortexAssistantResponsePolicy.weatherContent(message)
         ?.let(::extractWeatherDataJson)
         ?.let { weatherJson ->
             WeatherResultCard(
@@ -777,18 +780,6 @@ private fun AssistantMessage(message: Message) {
         }
     }
 }
-
-private fun Message.weatherToolContent(): String? = toolResults.firstOrNull { result ->
-    result.name in WeatherToolHandler.ALL_TOOL_NAMES && extractWeatherDataJson(result.content) != null
-}?.content
-
-private fun String.toCompactWeatherSummary(): String =
-    substringBefore("<!--WEATHER_DATA:")
-        .lineSequence()
-        .map(String::trim)
-        .filter(String::isNotBlank)
-        .take(4)
-        .joinToString("\n")
 
 @Composable
 private fun EmptyAssistantConversation(cortexName: String) {
