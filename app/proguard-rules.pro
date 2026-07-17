@@ -9,6 +9,10 @@
 -keepattributes Signature, InnerClasses, EnclosingMethod
 -keep class com.aiagents.app.data.remote.** { *; }
 
+# Google Workspace discovery documents are decoded reflectively by Gson. Preserve the DTO
+# hierarchy and its field names so Gmail/Drive/Calendar tools behave the same after R8.
+-keep class com.aiagents.app.data.google.discovery.** { *; }
+
 # Tool handlers deserialize LLM arguments with Gson. R8 must not merge or abstract their DTOs
 # (for example ExecuteCommandArgs), otherwise valid tool calls fail only in release builds.
 -keep class com.aiagents.app.data.terminal.** { *; }
@@ -42,3 +46,9 @@
 # com.sun.jna.Pointer.peer by name, so they must not be renamed by R8.
 -keep class com.sun.jna.** { *; }
 -dontwarn com.sun.jna.**
+# Optional voice module entry point and Sherpa JNI surface.
+-keep class com.aiagents.app.voice.SherpaVoiceFeature { public <init>(); *; }
+-keep class com.k2fsa.sherpa.onnx.** { *; }
+-keepclasseswithmembernames,includedescriptorclasses class * {
+    native <methods>;
+}

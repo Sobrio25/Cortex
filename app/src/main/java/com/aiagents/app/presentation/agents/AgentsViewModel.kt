@@ -2,6 +2,8 @@ package com.aiagents.app.presentation.agents
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aiagents.app.data.diagnostics.AppErrorReporter
+import com.aiagents.app.data.diagnostics.ErrorReportContext
 import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.domain.model.Agent
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -32,7 +34,8 @@ data class AutoCreateState(
 
 @HiltViewModel
 class AgentsViewModel @Inject constructor(
-    private val repository: AgentRepository
+    private val repository: AgentRepository,
+    private val errorReporter: AppErrorReporter
 ) : ViewModel() {
 
     val agents: StateFlow<List<Agent>> = repository.getAllAgents()
@@ -84,7 +87,12 @@ class AgentsViewModel @Inject constructor(
                     _autoCreateState.value = AutoCreateState(result = msg)
                 }
                 .onFailure { e ->
-                    _autoCreateState.value = AutoCreateState(error = e.message ?: "Error desconocido")
+                    _autoCreateState.value = AutoCreateState(
+                        error = errorReporter.present(
+                            e,
+                            ErrorReportContext("agents", "agent_auto_create")
+                        ).displayMessage
+                    )
                 }
         }
     }

@@ -4,7 +4,6 @@ import android.content.Context
 import android.util.Log
 import com.aiagents.app.domain.service.STTConfig
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.MediaType.Companion.toMediaType
@@ -19,8 +18,13 @@ import java.util.concurrent.TimeUnit
 class WhisperCloudSTTService(
     context: Context,
     private val apiKey: String,
-    private val provider: STTConfig.CloudSTTProvider
+    private val provider: STTConfig.CloudSTTProvider,
+    private val remoteEndpointUrl: String = "",
+    private val remoteModel: String = "whisper-1",
+    private val selfHostedVoiceApi: SelfHostedVoiceApi? = null
 ) : BaseSTTService(context) {
+
+    private var requestedLanguage: String = "auto"
     
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -28,15 +32,16 @@ class WhisperCloudSTTService(
         .build()
     
     override suspend fun startListening(language: String) {
+        requestedLanguage = language
         _transcription.value = ""
-        _isListening.value = true
-
-        recordingJob = serviceScope.launch {
-            val audioData = startRecording()
-            if (audioData != null && audioData.isNotEmpty()) {
-                val result = transcribeAudio(audioData)
-                _transcription.value = result.getOrDefault("")
-            }
+        startRecordingSession { audioData ->
+            val result = transcribeAudio(audioData)
+            _transcription.value = result.fold(
+                onSuccess = { it.trim() },
+                onFailure = { error ->
+                    "Error: ${error.message ?: "No se pudo transcribir el audio"}"
+                }
+            )
         }
     }
     
@@ -45,6 +50,19 @@ class WhisperCloudSTTService(
         
         val result = when (provider) {
             STTConfig.CloudSTTProvider.WHISPER_API -> transcribeWithOpenAI(tempFile)
+            STTConfig.CloudSTTProvider.SELF_HOSTED -> {
+                selfHostedVoiceApi?.transcribe(
+                    audioFile = tempFile,
+                    config = RemoteSttConfig(
+                        endpointUrl = remoteEndpointUrl,
+                        model = remoteModel,
+                        apiKey = apiKey
+                    ),
+                    language = requestedLanguage
+                ) ?: Result.failure(
+                    IllegalStateException("Cliente de voz autohospedada no disponible")
+                )
+            }
             STTConfig.CloudSTTProvider.ASSEMBLY_AI -> transcribeWithAssemblyAI(tempFile)
             STTConfig.CloudSTTProvider.DEEPGRAM -> transcribeWithDeepgram(tempFile)
             STTConfig.CloudSTTProvider.GOOGLE_SPEECH -> transcribeWithGoogle(tempFile)
@@ -71,7 +89,12 @@ class WhisperCloudSTTService(
                     audioFile.asRequestBody("audio/wav".toMediaType())
                 )
                 .addFormDataPart("model", "whisper-1")
-                .addFormDataPart("language", "es")
+                .apply {
+                    val languageCode = requestedLanguage.substringBefore('-')
+                    if (languageCode.isNotBlank() && languageCode != "auto") {
+                        addFormDataPart("language", languageCode)
+                    }
+                }
                 .build()
             
             val request = Request.Builder()

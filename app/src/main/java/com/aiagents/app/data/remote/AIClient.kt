@@ -4,6 +4,8 @@ import android.content.Context
 import com.aiagents.app.data.local.LocalLLMClient
 import com.aiagents.app.data.local.LocalModelRepository
 import com.aiagents.app.data.local.SecurePreferences
+import com.aiagents.app.data.telemetry.AppUsageSink
+import com.aiagents.app.data.telemetry.UsageTrackingAIClient
 import com.aiagents.app.domain.model.ProviderType
 import com.aiagents.app.domain.model.ToolCall
 import com.aiagents.app.domain.model.NvidiaProviderConfig
@@ -16,7 +18,8 @@ class AIClientFactory(
     private val localModelRepository: LocalModelRepository? = null,
     private val context: Context? = null,
     private val securePreferences: SecurePreferences? = null,
-    private val managedAIClient: ManagedAIClient? = null
+    private val managedAIClient: ManagedAIClient? = null,
+    private val appUsageSink: AppUsageSink? = null
 ) {
     fun createClient(
         providerType: ProviderType,
@@ -67,8 +70,14 @@ class AIClientFactory(
                 LocalLLMClient(context, localModelRepository)
             }
         }
-        val providerId = modelsDevProviderId(providerType, baseUrl) ?: return client
-        return ModelsDevBackedClient(client, ModelsDevCatalog(okHttpClient), providerId)
+        val catalogBackedClient = modelsDevProviderId(providerType, baseUrl)?.let { providerId ->
+            ModelsDevBackedClient(client, ModelsDevCatalog(okHttpClient), providerId)
+        } ?: client
+        return if (providerType != ProviderType.MANAGED && appUsageSink != null) {
+            UsageTrackingAIClient(catalogBackedClient, appUsageSink, providerType)
+        } else {
+            catalogBackedClient
+        }
     }
 }
 
@@ -126,10 +135,14 @@ interface AIClient {
                 emit(StreamingChunk(
                     done = true,
                     toolCalls = response.toolCalls,
-                    finishReason = response.finishReason
+                    finishReason = response.finishReason,
+                    usage = response.usage
                 ))
             }.onFailure { error ->
-                emit(StreamingChunk(error = error.message ?: "Unknown error"))
+                emit(StreamingChunk(
+                    error = error.message ?: "Unknown error",
+                    errorStatusCode = (error as? ManagedGatewayException)?.statusCode
+                ))
             }
         }
     }
@@ -146,7 +159,9 @@ data class StreamingChunk(
     val toolCalls: List<ToolCall>? = null,
     val finishReason: String? = null,
     val done: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val errorStatusCode: Int? = null,
+    val usage: TokenUsage? = null
 )
 
 data class ChatMessage(
@@ -166,7 +181,17 @@ data class ChatResponseWithTools(
     val content: String?,
     val toolCalls: List<ToolCall>?,
     val finishReason: String?,
-    val reasoning: String? = null
+    val reasoning: String? = null,
+    val usage: TokenUsage? = null
+)
+
+/** Provider-reported usage. Absence means the app must label its token count as estimated. */
+data class TokenUsage(
+    val inputTokens: Long,
+    val outputTokens: Long,
+    val totalTokens: Long? = null,
+    val cachedInputTokens: Long = 0,
+    val reasoningTokens: Long = 0
 )
 
 /**

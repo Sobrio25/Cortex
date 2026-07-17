@@ -29,7 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
@@ -37,7 +37,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
@@ -47,13 +46,16 @@ import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -69,14 +71,26 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aiagents.app.R
+import com.aiagents.app.data.speech.AssistantSttMode
+import com.aiagents.app.data.speech.AssistantTtsMode
+import com.aiagents.app.data.speech.GoogleTtsVoice
+import com.aiagents.app.data.speech.Qwen3TtsVoiceSkill
+import com.aiagents.app.data.speech.RemoteSttConfig
+import com.aiagents.app.data.speech.RemoteTtsAudioMode
+import com.aiagents.app.data.speech.RemoteTtsApiFlavor
+import com.aiagents.app.data.speech.RemoteTtsConfig
+import com.aiagents.app.data.speech.SelfHostedVoiceApi
+import com.aiagents.app.data.speech.VoiceCatalog
+import com.aiagents.app.data.speech.VoiceFeatureInstallState
 import com.aiagents.app.ui.theme.CortexColors
 
 private val AssistantPurple = CortexColors.Violet
@@ -95,34 +109,52 @@ fun AssistantSettingsScreen(
     val speakResponses by viewModel.speakResponses.collectAsState()
     val assistantModel by viewModel.assistantModel.collectAsState()
     val availableModels by viewModel.availableModels.collectAsState()
-    val offlineVoiceAvailable by viewModel.offlineVoiceAvailable.collectAsState()
-    val voskDownloaded by viewModel.voskModelDownloaded.collectAsState()
-    val isDownloading by viewModel.isDownloading.collectAsState()
-    val downloadProgress by viewModel.downloadProgress.collectAsState()
+    val sttMode by viewModel.sttMode.collectAsState()
+    val ttsMode by viewModel.ttsMode.collectAsState()
+    val selectedGoogleVoiceId by viewModel.selectedGoogleVoiceId.collectAsState()
+    val remoteSttConfig by viewModel.remoteSttConfig.collectAsState()
+    val remoteTtsConfig by viewModel.remoteTtsConfig.collectAsState()
+    val googleVoices by viewModel.googleVoices.collectAsState()
+    val voiceAssets by viewModel.voiceAssets.collectAsState()
+    val voiceFeatureState by viewModel.voiceFeatureState.collectAsState()
     val error by viewModel.error.collectAsState()
     val assistantName by viewModel.assistantName.collectAsState()
+    val assistantSoul by viewModel.assistantSoul.collectAsState()
     val isSavingName by viewModel.isSavingName.collectAsState()
     val onDeviceRecognition = viewModel.onDeviceRecognitionAvailable
     val systemRecognition = viewModel.systemRecognitionAvailable
 
     var roleHeld by remember { mutableStateOf(context.isAssistantRoleHeld()) }
     var assistantNameDraft by remember(assistantName) { mutableStateOf(assistantName) }
-    val assistantRoleLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        roleHeld = context.isAssistantRoleHeld()
+    var assistantSoulDraft by remember(assistantSoul.revision) {
+        mutableStateOf(assistantSoul.content)
     }
     val installVoiceLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
-        viewModel.refreshOfflineVoice()
+        viewModel.refreshGoogleVoices()
+    }
+    val voiceConfirmationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) {
+        viewModel.refreshGoogleVoices()
+    }
+    val voicePackPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        viewModel.resumeVoicePackInstall()
+    }
+    val assistantRoleLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        roleHeld = context.isAssistantRoleHeld()
     }
 
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 roleHeld = context.isAssistantRoleHeld()
-                viewModel.refreshOfflineVoice()
+                viewModel.refreshGoogleVoices()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -198,6 +230,36 @@ fun AssistantSettingsScreen(
 
             item {
                 SettingsCard(
+                    title = stringResource(R.string.assistant_soul_title),
+                    subtitle = stringResource(R.string.assistant_soul_subtitle)
+                ) {
+                    OutlinedTextField(
+                        value = assistantSoulDraft,
+                        onValueChange = { assistantSoulDraft = it },
+                        label = { Text("ASSISTANT_SOUL.md") },
+                        minLines = 6,
+                        maxLines = 12,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        onClick = {
+                            viewModel.saveAssistantSoul(
+                                assistantSoulDraft,
+                                assistantSoul.revision
+                            )
+                        },
+                        enabled = assistantSoulDraft.isNotBlank() &&
+                            assistantSoulDraft != assistantSoul.content,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.assistant_soul_save))
+                    }
+                }
+            }
+
+            item {
+                SettingsCard(
                     title = stringResource(R.string.assistant_system_role_title),
                     subtitle = stringResource(R.string.assistant_system_role_subtitle)
                 ) {
@@ -265,60 +327,132 @@ fun AssistantSettingsScreen(
 
             item {
                 SettingsCard(
-                    title = stringResource(R.string.assistant_voice_title),
-                    subtitle = stringResource(R.string.assistant_voice_subtitle)
+                    title = "Voz y audio",
+                    subtitle = "Nada se descarga ni se activa hasta que tu lo elijas"
                 ) {
-                    AssistantStatusRow(
+                    VoiceSectionHeader(
                         icon = Icons.Default.Mic,
-                        title = stringResource(R.string.assistant_voice_input),
-                        detail = when {
-                            onDeviceRecognition -> stringResource(R.string.assistant_voice_android_local)
-                            voskDownloaded -> stringResource(R.string.assistant_voice_vosk_ready)
-                            systemRecognition -> stringResource(R.string.assistant_voice_android_system)
-                            else -> stringResource(R.string.assistant_voice_vosk_needed)
-                        },
-                        ready = onDeviceRecognition || voskDownloaded || systemRecognition
+                        title = "Entrada de voz (STT)",
+                        subtitle = "Elige como quieres que Cortex te escuche"
                     )
-                    if (!voskDownloaded) {
-                        Spacer(Modifier.height(10.dp))
-                        Button(
-                            onClick = viewModel::downloadSpanishVoiceModel,
-                            enabled = !isDownloading,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Default.Download, contentDescription = null)
-                            Text(stringResource(R.string.assistant_download_vosk))
-                        }
-                        if (isDownloading) {
-                            LinearProgressIndicator(
-                                progress = { downloadProgress },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 10.dp)
-                            )
-                        }
-                    }
+                    VoiceChoiceCard(
+                        title = "Sin reconocimiento de voz",
+                        description = "Puedes seguir escribiendo normalmente",
+                        badge = "0 MB",
+                        selected = sttMode == AssistantSttMode.NONE,
+                        available = true,
+                        onSelect = { viewModel.selectSttMode(AssistantSttMode.NONE) }
+                    )
+                    VoiceChoiceCard(
+                        title = "Reconocimiento de Android",
+                        description = when {
+                            onDeviceRecognition -> "Disponible en el dispositivo; Android administra sus datos"
+                            systemRecognition -> "Disponible mediante el servicio de reconocimiento del sistema"
+                            else -> "No disponible en este dispositivo"
+                        },
+                        badge = "Sistema",
+                        selected = sttMode == AssistantSttMode.ANDROID,
+                        available = onDeviceRecognition || systemRecognition,
+                        onSelect = { viewModel.selectSttMode(AssistantSttMode.ANDROID) }
+                    )
+                    DownloadableVoiceCard(
+                        title = "Whisper Tiny",
+                        description = "Privado, multilingue y completamente offline",
+                        badge = "111 MB",
+                        selected = sttMode == AssistantSttMode.WHISPER_TINY,
+                        state = voiceAssets[VoiceCatalog.WHISPER_TINY_ID] ?: VoiceAssetUiState(),
+                        moduleState = voiceFeatureState,
+                        onSelect = { viewModel.selectSttMode(AssistantSttMode.WHISPER_TINY) },
+                        onDownload = { viewModel.downloadAsset(VoiceCatalog.WHISPER_TINY_ID) },
+                        onDelete = { viewModel.deleteAsset(VoiceCatalog.WHISPER_TINY_ID) }
+                    )
+                    RemoteSttServerCard(
+                        selected = sttMode == AssistantSttMode.REMOTE_SERVER,
+                        config = remoteSttConfig,
+                        onSelect = { viewModel.selectSttMode(AssistantSttMode.REMOTE_SERVER) },
+                        onSave = viewModel::saveRemoteSttConfig
+                    )
 
-                    Spacer(Modifier.height(16.dp))
-                    AssistantStatusRow(
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(12.dp))
+
+                    VoiceSectionHeader(
                         icon = Icons.Default.GraphicEq,
-                        title = stringResource(R.string.assistant_voice_output),
-                        detail = if (offlineVoiceAvailable) {
-                            stringResource(R.string.assistant_tts_ready)
-                        } else {
-                            stringResource(R.string.assistant_tts_needed)
-                        },
-                        ready = offlineVoiceAvailable
+                        title = "Salida de voz (TTS)",
+                        subtitle = "Elige la voz con la que responde Cortex"
                     )
-                    if (!offlineVoiceAvailable) {
-                        Spacer(Modifier.height(10.dp))
-                        OutlinedButton(
+                    VoiceChoiceCard(
+                        title = "Sin voz",
+                        description = "Las respuestas solo apareceran en pantalla",
+                        badge = "0 MB",
+                        selected = ttsMode == AssistantTtsMode.NONE,
+                        available = true,
+                        onSelect = { viewModel.selectTtsMode(AssistantTtsMode.NONE) }
+                    )
+                    GoogleTtsCard(
+                        selected = ttsMode == AssistantTtsMode.GOOGLE,
+                        voices = googleVoices,
+                        selectedVoiceId = selectedGoogleVoiceId,
+                        onSelect = { viewModel.selectTtsMode(AssistantTtsMode.GOOGLE) },
+                        onVoiceSelected = viewModel::selectGoogleVoice,
+                        onPreview = viewModel::previewGoogleVoice,
+                        onManageVoices = {
+                            installVoiceLauncher.launch(viewModel.createInstallVoiceIntent())
+                        }
+                    )
+                    RemoteTtsServerCard(
+                        selected = ttsMode == AssistantTtsMode.REMOTE_SERVER,
+                        config = remoteTtsConfig,
+                        onSelect = { viewModel.selectTtsMode(AssistantTtsMode.REMOTE_SERVER) },
+                        onSave = { viewModel.saveRemoteTtsConfig(it) },
+                        onPreview = { viewModel.saveRemoteTtsConfig(it, preview = true) }
+                    )
+                    DownloadableVoiceCard(
+                        title = "Piper · Ald",
+                        description = "Espanol de Mexico, voz offline de calidad media",
+                        badge = "20 MB",
+                        selected = ttsMode == AssistantTtsMode.PIPER_ALD,
+                        state = voiceAssets[VoiceCatalog.PIPER_ALD_ID] ?: VoiceAssetUiState(),
+                        moduleState = voiceFeatureState,
+                        onSelect = { viewModel.selectTtsMode(AssistantTtsMode.PIPER_ALD) },
+                        onDownload = { viewModel.downloadAsset(VoiceCatalog.PIPER_ALD_ID) },
+                        onPreview = { viewModel.previewPiperVoice(AssistantTtsMode.PIPER_ALD) },
+                        onDelete = { viewModel.deleteAsset(VoiceCatalog.PIPER_ALD_ID) }
+                    )
+                    DownloadableVoiceCard(
+                        title = "Piper · Claude",
+                        description = "Espanol de Mexico, voz offline de calidad alta",
+                        badge = "20 MB",
+                        selected = ttsMode == AssistantTtsMode.PIPER_CLAUDE,
+                        state = voiceAssets[VoiceCatalog.PIPER_CLAUDE_ID] ?: VoiceAssetUiState(),
+                        moduleState = voiceFeatureState,
+                        onSelect = { viewModel.selectTtsMode(AssistantTtsMode.PIPER_CLAUDE) },
+                        onDownload = { viewModel.downloadAsset(VoiceCatalog.PIPER_CLAUDE_ID) },
+                        onPreview = { viewModel.previewPiperVoice(AssistantTtsMode.PIPER_CLAUDE) },
+                        onDelete = { viewModel.deleteAsset(VoiceCatalog.PIPER_CLAUDE_ID) }
+                    )
+
+                    if (voiceFeatureState.requiresConfirmation) {
+                        Button(
                             onClick = {
-                                installVoiceLauncher.launch(viewModel.createInstallVoiceIntent())
+                                viewModel.confirmVoiceFeatureInstall(voiceConfirmationLauncher)
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(stringResource(R.string.assistant_install_tts))
+                            Text("Confirmar instalacion de Cortex Voice Pack")
+                        }
+                    }
+                    if (voiceFeatureState.requiresInstallPermission) {
+                        Button(
+                            onClick = {
+                                viewModel.createVoicePackInstallPermissionIntent()?.let(
+                                    voicePackPermissionLauncher::launch
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Permitir instalacion de Cortex Voice Pack")
                         }
                     }
                 }
@@ -331,16 +465,26 @@ fun AssistantSettingsScreen(
                 ) {
                     PreferenceSwitch(
                         title = stringResource(R.string.assistant_auto_listen_title),
-                        subtitle = stringResource(R.string.assistant_auto_listen_subtitle),
+                        subtitle = if (sttMode == AssistantSttMode.NONE) {
+                            "Elige primero una opcion de entrada de voz"
+                        } else {
+                            stringResource(R.string.assistant_auto_listen_subtitle)
+                        },
                         checked = autoListen,
-                        onCheckedChange = viewModel::setAutoListen
+                        onCheckedChange = viewModel::setAutoListen,
+                        enabled = sttMode != AssistantSttMode.NONE
                     )
                     Spacer(Modifier.height(8.dp))
                     PreferenceSwitch(
                         title = stringResource(R.string.assistant_speak_title),
-                        subtitle = stringResource(R.string.assistant_speak_subtitle),
+                        subtitle = if (ttsMode == AssistantTtsMode.NONE) {
+                            "Elige primero una opcion de salida de voz"
+                        } else {
+                            stringResource(R.string.assistant_speak_subtitle)
+                        },
                         checked = speakResponses,
-                        onCheckedChange = viewModel::setSpeakResponses
+                        onCheckedChange = viewModel::setSpeakResponses,
+                        enabled = ttsMode != AssistantTtsMode.NONE
                     )
                 }
             }
@@ -385,6 +529,669 @@ fun AssistantSettingsScreen(
                             modifier = Modifier.padding(16.dp),
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VoiceSectionHeader(
+    icon: ImageVector,
+    title: String,
+    subtitle: String
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .background(AssistantPurple.copy(alpha = 0.14f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = AssistantPurple)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+    Spacer(Modifier.height(4.dp))
+}
+
+@Composable
+private fun VoiceChoiceCard(
+    title: String,
+    description: String,
+    badge: String,
+    selected: Boolean,
+    available: Boolean,
+    onSelect: () -> Unit
+) {
+    Card(
+        onClick = onSelect,
+        enabled = available,
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            RadioButton(selected = selected, onClick = onSelect, enabled = available)
+            Column(Modifier.weight(1f)) {
+                Text(title, fontWeight = FontWeight.Medium)
+                Text(
+                    description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                badge,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (available) AssistantMint else MaterialTheme.colorScheme.error
+            )
+        }
+    }
+}
+
+@Composable
+private fun DownloadableVoiceCard(
+    title: String,
+    description: String,
+    badge: String,
+    selected: Boolean,
+    state: VoiceAssetUiState,
+    moduleState: VoiceFeatureInstallState,
+    onSelect: () -> Unit,
+    onDownload: () -> Unit,
+    onPreview: (() -> Unit)? = null,
+    onDelete: () -> Unit
+) {
+    val moduleInstalling = state.downloading && moduleState.installing && !moduleState.installed
+    val busy = state.downloading
+    val progress = if (moduleInstalling) moduleState.progress else state.progress
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                RadioButton(
+                    selected = selected,
+                    onClick = onSelect,
+                    enabled = state.installed
+                )
+                Column(Modifier.weight(1f)) {
+                    Text(title, fontWeight = FontWeight.Medium)
+                    Text(
+                        description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    if (state.installed) "Instalado" else badge,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (state.installed) AssistantMint else AssistantCyan
+                )
+            }
+
+            if (busy) {
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    if (moduleInstalling) {
+                        "Preparando Cortex Voice Pack... ${(progress * 100).toInt()}%"
+                    } else {
+                        "Descargando... ${(progress * 100).toInt()}%"
+                    },
+                    style = MaterialTheme.typography.bodySmall
+                )
+            } else if (state.installed) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (onPreview != null) {
+                        TextButton(onClick = onPreview) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null)
+                            Text("Probar")
+                        }
+                    }
+                    TextButton(onClick = onDelete) {
+                        Icon(Icons.Default.Delete, contentDescription = null)
+                        Text("Eliminar")
+                    }
+                }
+            } else {
+                Button(
+                    onClick = onDownload,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null)
+                    Text("Descargar · $badge")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RemoteSttServerCard(
+    selected: Boolean,
+    config: RemoteSttConfig,
+    onSelect: () -> Unit,
+    onSave: (RemoteSttConfig) -> Unit
+) {
+    var endpointUrl by remember(config.endpointUrl) { mutableStateOf(config.endpointUrl) }
+    var model by remember(config.model) { mutableStateOf(config.model) }
+    var apiKey by remember(config.apiKey) { mutableStateOf(config.apiKey) }
+    val configured = SelfHostedVoiceApi.isConfigured(config)
+
+    VoiceServerCard(
+        title = "Whisper en servidor propio",
+        description = "Compatible con POST multipart de OpenAI para audio/transcriptions",
+        selected = selected,
+        configured = configured,
+        onSelect = onSelect
+    ) {
+        OutlinedTextField(
+            value = endpointUrl,
+            onValueChange = { endpointUrl = it },
+            label = { Text("URL del endpoint STT") },
+            placeholder = { Text("http://192.168.1.20:8000/v1/audio/transcriptions") },
+            supportingText = { Text("En un telefono usa la IP LAN del servidor, no localhost") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = model,
+            onValueChange = { model = it },
+            label = { Text("Modelo Whisper") },
+            placeholder = { Text("whisper-1") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        VoiceServerApiKeyField(apiKey = apiKey, onApiKeyChange = { apiKey = it })
+        HttpEndpointNotice(endpointUrl)
+        Button(
+            onClick = { onSave(RemoteSttConfig(endpointUrl, model, apiKey)) },
+            enabled = endpointUrl.isNotBlank() && model.isNotBlank(),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Guardar y usar servidor STT")
+        }
+    }
+}
+
+@Composable
+private fun RemoteTtsServerCard(
+    selected: Boolean,
+    config: RemoteTtsConfig,
+    onSelect: () -> Unit,
+    onSave: (RemoteTtsConfig) -> Unit,
+    onPreview: (RemoteTtsConfig) -> Unit
+) {
+    var endpointUrl by remember(config.endpointUrl) { mutableStateOf(config.endpointUrl) }
+    var model by remember(config.model) { mutableStateOf(config.model) }
+    var voice by remember(config.voice) { mutableStateOf(config.voice) }
+    var apiKey by remember(config.apiKey) { mutableStateOf(config.apiKey) }
+    var apiFlavor by remember(config.apiFlavor) { mutableStateOf(config.apiFlavor) }
+    var language by remember(config.language) { mutableStateOf(config.language) }
+    var voiceDescription by remember(config.voiceDescription) {
+        mutableStateOf(config.voiceDescription)
+    }
+    var adaptiveStyle by remember(config.adaptiveStyle) { mutableStateOf(config.adaptiveStyle) }
+    var audioMode by remember(config.audioMode) { mutableStateOf(config.audioMode) }
+    var pcmSampleRate by remember(config.pcmSampleRate) {
+        mutableStateOf(config.pcmSampleRate.toString())
+    }
+    val configured = SelfHostedVoiceApi.isConfigured(config)
+    val draft = {
+        RemoteTtsConfig(
+            endpointUrl = endpointUrl,
+            model = model,
+            voice = voice,
+            apiKey = apiKey,
+            apiFlavor = apiFlavor,
+            language = language,
+            voiceDescription = voiceDescription,
+            adaptiveStyle = adaptiveStyle,
+            audioMode = audioMode,
+            pcmSampleRate = pcmSampleRate.toIntOrNull() ?: 24_000
+        )
+    }
+    val qwenSkillActive = Qwen3TtsVoiceSkill.isActive(draft())
+    val requiresVoice = Qwen3TtsVoiceSkill.requiresVoice(draft())
+    val draftComplete = endpointUrl.isNotBlank() && model.isNotBlank() &&
+        (!requiresVoice || voice.isNotBlank())
+
+    VoiceServerCard(
+        title = "TTS en servidor propio",
+        description = "Compatible con audio/speech de OpenAI: WAV completo o PCM por streaming",
+        selected = selected,
+        configured = configured,
+        onSelect = onSelect
+    ) {
+        OutlinedTextField(
+            value = endpointUrl,
+            onValueChange = { endpointUrl = it },
+            label = { Text("URL del endpoint TTS") },
+            placeholder = { Text("http://192.168.1.20:8000/v1/audio/speech") },
+            supportingText = {
+                Text(
+                    if (Qwen3TtsVoiceSkill.resolveApiFlavor(draft()) ==
+                        RemoteTtsApiFlavor.QWEN3_VOICE_DESIGN
+                    ) {
+                        "Usa el endpoint Voice Design del servidor, por ejemplo /v1/audio/speech/design"
+                    } else {
+                        if (audioMode == RemoteTtsAudioMode.STREAMING_PCM) {
+                            "El servidor debe devolver PCM16 mono sin cabecera"
+                        } else {
+                            "El servidor puede devolver WAV o MP3"
+                        }
+                    }
+                )
+            },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = model,
+            onValueChange = { model = it },
+            label = { Text("Modelo TTS") },
+            placeholder = { Text("tts-1") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        TtsApiFlavorSelector(selected = apiFlavor, onSelected = { apiFlavor = it })
+        TtsAudioModeSelector(selected = audioMode, onSelected = { audioMode = it })
+        if (audioMode == RemoteTtsAudioMode.STREAMING_PCM) {
+            OutlinedTextField(
+                value = pcmSampleRate,
+                onValueChange = { value -> pcmSampleRate = value.filter(Char::isDigit).take(5) },
+                label = { Text("Frecuencia PCM") },
+                supportingText = {
+                    Text("PCM16 mono sin cabecera; Speaches y OpenAI usan normalmente 24000 Hz")
+                },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        if (requiresVoice) {
+            OutlinedTextField(
+                value = voice,
+                onValueChange = { voice = it },
+                label = { Text(if (qwenSkillActive) "Speaker de Qwen" else "Voz") },
+                placeholder = { Text(if (qwenSkillActive) "Ryan" else "alloy") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        if (qwenSkillActive) {
+            Text(
+                "Skill expresiva Qwen3-TTS activa: estos datos se agregan a cada solicitud de voz.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AssistantMint
+            )
+            OutlinedTextField(
+                value = language,
+                onValueChange = { language = it },
+                label = { Text("Idioma para Qwen") },
+                placeholder = { Text("Spanish o Auto") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = voiceDescription,
+                onValueChange = { voiceDescription = it },
+                label = { Text("Descripcion de voz") },
+                supportingText = {
+                    Text("Identidad estable: timbre, edad aparente, acento y personalidad")
+                },
+                minLines = 3,
+                maxLines = 5,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Adaptar tono automaticamente", fontWeight = FontWeight.Medium)
+                    Text(
+                        "Cortex agrega un tono calmado, empatico, entusiasta o didactico segun la respuesta.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = adaptiveStyle, onCheckedChange = { adaptiveStyle = it })
+            }
+        }
+        VoiceServerApiKeyField(apiKey = apiKey, onApiKeyChange = { apiKey = it })
+        HttpEndpointNotice(endpointUrl)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = { onSave(draft()) },
+                enabled = draftComplete,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Guardar y usar")
+            }
+            OutlinedButton(
+                onClick = { onPreview(draft()) },
+                enabled = draftComplete
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null)
+                Text("Probar")
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TtsAudioModeSelector(
+    selected: RemoteTtsAudioMode,
+    onSelected: (RemoteTtsAudioMode) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val labels = mapOf(
+        RemoteTtsAudioMode.BUFFERED_WAV to "WAV completo",
+        RemoteTtsAudioMode.STREAMING_PCM to "PCM streaming · baja latencia"
+    )
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = labels.getValue(selected),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Entrega de audio") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            RemoteTtsAudioMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = { Text(labels.getValue(mode)) },
+                    onClick = {
+                        onSelected(mode)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TtsApiFlavorSelector(
+    selected: RemoteTtsApiFlavor,
+    onSelected: (RemoteTtsApiFlavor) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val labels = mapOf(
+        RemoteTtsApiFlavor.AUTO to "Automatico por nombre del modelo",
+        RemoteTtsApiFlavor.OPENAI to "OpenAI compatible",
+        RemoteTtsApiFlavor.QWEN3_CUSTOM_VOICE to "Qwen3-TTS · CustomVoice",
+        RemoteTtsApiFlavor.QWEN3_VOICE_DESIGN to "Qwen3-TTS · VoiceDesign"
+    )
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = labels.getValue(selected),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Tipo de API TTS") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            RemoteTtsApiFlavor.entries.forEach { flavor ->
+                DropdownMenuItem(
+                    text = { Text(labels.getValue(flavor)) },
+                    onClick = {
+                        onSelected(flavor)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VoiceServerCard(
+    title: String,
+    description: String,
+    selected: Boolean,
+    configured: Boolean,
+    onSelect: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                RadioButton(
+                    selected = selected,
+                    onClick = onSelect,
+                    enabled = configured
+                )
+                Column(Modifier.weight(1f)) {
+                    Text(title, fontWeight = FontWeight.Medium)
+                    Text(
+                        description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    if (configured) "Configurado" else "Servidor",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (configured) AssistantMint else AssistantCyan
+                )
+            }
+            content()
+        }
+    }
+}
+
+@Composable
+private fun VoiceServerApiKeyField(
+    apiKey: String,
+    onApiKeyChange: (String) -> Unit
+) {
+    OutlinedTextField(
+        value = apiKey,
+        onValueChange = onApiKeyChange,
+        label = { Text("Token Bearer (opcional)") },
+        supportingText = { Text("Se guarda cifrado en el dispositivo") },
+        visualTransformation = PasswordVisualTransformation(),
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun HttpEndpointNotice(endpointUrl: String) {
+    if (endpointUrl.trim().startsWith("http://", ignoreCase = true)) {
+        Text(
+            "HTTP sin cifrar solo se recomienda dentro de una red local de confianza. Para acceso remoto usa HTTPS.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.tertiary
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GoogleTtsCard(
+    selected: Boolean,
+    voices: List<GoogleTtsVoice>,
+    selectedVoiceId: String,
+    onSelect: () -> Unit,
+    onVoiceSelected: (String) -> Unit,
+    onPreview: (String) -> Unit,
+    onManageVoices: () -> Unit
+) {
+    val installedVoices = voices.filter { it.installed }
+    val selectedVoice = installedVoices.firstOrNull { it.id == selectedVoiceId }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                RadioButton(
+                    selected = selected,
+                    onClick = onSelect,
+                    enabled = installedVoices.isNotEmpty()
+                )
+                Column(Modifier.weight(1f)) {
+                    Text("Google TTS", fontWeight = FontWeight.Medium)
+                    Text(
+                        "Voces administradas por Android; no aumentan el APK de Cortex",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    "Sistema",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AssistantCyan
+                )
+            }
+
+            if (installedVoices.isNotEmpty()) {
+                var expanded by remember { mutableStateOf(false) }
+                ExposedDropdownMenuBox(
+                    expanded = expanded,
+                    onExpandedChange = { expanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = selectedVoice?.displayName ?: "Elige una voz instalada",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Voz de Google") },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                        },
+                        modifier = Modifier
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                            .fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false }
+                    ) {
+                        installedVoices.forEach { voice ->
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(voice.displayName)
+                                        Text(
+                                            voice.languageTag,
+                                            style = MaterialTheme.typography.labelSmall
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    onVoiceSelected(voice.id)
+                                    expanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            } else {
+                Text(
+                    "No hay una voz local instalada para este idioma.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onManageVoices,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null)
+                    Text("Administrar voces")
+                }
+                if (selectedVoice != null) {
+                    OutlinedButton(onClick = { onPreview(selectedVoice.id) }) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                        Text("Probar")
                     }
                 }
             }
@@ -572,7 +1379,8 @@ private fun PreferenceSwitch(
     title: String,
     subtitle: String,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -587,7 +1395,11 @@ private fun PreferenceSwitch(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled
+        )
     }
 }
 

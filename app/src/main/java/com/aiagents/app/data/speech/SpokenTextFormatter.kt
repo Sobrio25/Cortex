@@ -3,6 +3,9 @@ package com.aiagents.app.data.speech
 /** Makes model output pleasant and safe to send to an Android TTS engine. */
 object SpokenTextFormatter {
     private val fencedCode = Regex("```[\\s\\S]*?```")
+    private val structuredPayload = Regex(
+        "(?s)\\s*(?:WEATHER_DATA|CALENDAR_DATA|REMINDER_DATA|TASK_DATA)\\s*\\{.*$"
+    )
     private val markdownImage = Regex("!\\[([^]]*)]\\([^)]+\\)")
     private val markdownLink = Regex("\\[([^]]+)]\\([^)]+\\)")
     private val inlineCode = Regex("`([^`]+)`")
@@ -19,13 +22,20 @@ object SpokenTextFormatter {
     private val taskCheckbox = Regex("(?i)\\[[ x]]\\s*")
     private val horizontalRule = Regex("(?m)^\\s*[-*_]{3,}\\s*$")
     private val htmlTag = Regex("<[^>]+>")
-    private val rawUrl = Regex("https?://[^\\s)>]+")
+    private val rawUrl = Regex(
+        "(?i)\\b(?:https?://|www\\.)[^\\s<>\\(\\)\\[\\]\\{\\}]+"
+    )
     private val remainingMarkdownEmphasis = Regex("[*_~]")
+    private val markdownTablePipe = Regex("\\s*\\|\\s*")
+    private val markdownTableDivider = Regex(
+        "(?m)^\\s*\\|?(?:\\s*:?-{3,}:?\\s*\\|)+\\s*$"
+    )
     private val repeatedWhitespace = Regex("[ \\t]+")
     private val repeatedBlankLines = Regex("\\n{3,}")
 
-    fun clean(text: String): String = text
-        .replace(fencedCode, " Código omitido. ")
+    fun clean(text: String): String = removeEmoji(text)
+        .replace(structuredPayload, "")
+        .replace(fencedCode, " ")
         .replace(markdownImage, "$1")
         .replace(markdownLink, "$1")
         .replace(inlineCode, "$1")
@@ -42,7 +52,9 @@ object SpokenTextFormatter {
         .replace(orderedList, "$1. ")
         .replace(taskCheckbox, "")
         .replace(htmlTag, "")
-        .replace(rawUrl, "enlace")
+        .replace(rawUrl, "")
+        .replace(markdownTableDivider, "")
+        .replace(markdownTablePipe, " ")
         .replace(remainingMarkdownEmphasis, "")
         .replace(repeatedWhitespace, " ")
         .replace(repeatedBlankLines, "\n\n")
@@ -57,18 +69,36 @@ object SpokenTextFormatter {
         var remaining = cleanText
         while (remaining.length > maxLength) {
             val window = remaining.take(maxLength)
-            val boundary = maxOf(
-                window.lastIndexOf(". "),
-                window.lastIndexOf("? "),
-                window.lastIndexOf("! "),
-                window.lastIndexOf("; "),
-                window.lastIndexOf(", "),
-                window.lastIndexOf(' ')
-            ).takeIf { it >= maxLength / 2 } ?: maxLength
+            val punctuationBoundary = listOf(". ", "? ", "! ", "; ", ", ")
+                .maxOf { delimiter -> window.lastIndexOf(delimiter) }
+                .takeIf { it >= maxLength / 2 }
+                ?.plus(1)
+            val wordBoundary = window.lastIndexOf(' ').takeIf { it >= maxLength / 2 }
+            val boundary = punctuationBoundary ?: wordBoundary ?: maxLength
             chunks += remaining.take(boundary).trim()
             remaining = remaining.drop(boundary).trimStart()
         }
         if (remaining.isNotBlank()) chunks += remaining
         return chunks
     }
+
+    private fun removeEmoji(text: String): String {
+        val output = StringBuilder(text.length)
+        var index = 0
+        while (index < text.length) {
+            val codePoint = text.codePointAt(index)
+            if (!isEmojiCodePoint(codePoint)) output.appendCodePoint(codePoint)
+            index += Character.charCount(codePoint)
+        }
+        return output.toString()
+    }
+
+    private fun isEmojiCodePoint(codePoint: Int): Boolean =
+        codePoint in 0x1F000..0x1FAFF ||
+            codePoint in 0x2600..0x27BF ||
+            codePoint in 0x2300..0x23FF ||
+            codePoint == 0x200D ||
+            codePoint == 0x20E3 ||
+            codePoint == 0xFE0E ||
+            codePoint == 0xFE0F
 }

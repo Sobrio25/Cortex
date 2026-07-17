@@ -28,6 +28,19 @@ class WeatherCardTest {
     }
 
     @Test
+    fun `forecast schema exposes exact relative and calendar date selection`() {
+        @Suppress("UNCHECKED_CAST")
+        val function = WeatherToolHandler.getToolDefinitionsJson()[1].getValue("function") as Map<String, Any>
+        @Suppress("UNCHECKED_CAST")
+        val parameters = function.getValue("parameters") as Map<String, Any>
+        @Suppress("UNCHECKED_CAST")
+        val properties = parameters.getValue("properties") as Map<String, Any>
+
+        assertTrue("day_offset" in properties)
+        assertTrue("target_date" in properties)
+    }
+
+    @Test
     fun `weather marker extraction supports multiline payloads`() {
         val content = """Resultado
             <!--WEATHER_DATA:{

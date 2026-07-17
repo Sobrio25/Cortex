@@ -1,8 +1,10 @@
 package com.aiagents.app.data.terminal
 
+import com.aiagents.app.BuildConfig
 import com.aiagents.app.data.location.DeviceLocationResult
 import com.aiagents.app.data.location.LocationErrorCode
 import com.aiagents.app.data.location.LocationProvider
+import com.aiagents.app.domain.model.formatTemperatureValue
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -86,6 +88,16 @@ class WeatherToolHandler @Inject constructor(
                         "description" to "Number of forecast days (default 3, range 1-5)",
                         "minimum" to 1,
                         "maximum" to 5
+                    ),
+                    "day_offset" to mapOf(
+                        "type" to "integer",
+                        "description" to "Exact relative day: 0=today, 1=tomorrow, up to 4. When present, return only that day.",
+                        "minimum" to 0,
+                        "maximum" to 4
+                    ),
+                    "target_date" to mapOf(
+                        "type" to "string",
+                        "description" to "Exact local calendar date in yyyy-MM-dd. When present, return only that date. Prefer day_offset for today/tomorrow."
                     )
                 )
             ),
@@ -262,8 +274,8 @@ class WeatherToolHandler @Inject constructor(
             appendLine("🌤️ Clima actual en **${displayLocation(target.displayName, country)}**")
             appendLine()
             appendLine("**${condition.description}**")
-            appendLine("🌡️ ${formatNumber(temp)}${units.temperatureSymbol} · mín. ${formatNumber(minTemp)}${units.temperatureSymbol} · máx. ${formatNumber(maxTemp)}${units.temperatureSymbol}")
-            appendLine("🤔 Sensación: ${formatNumber(feelsLike)}${units.temperatureSymbol}")
+            appendLine("🌡️ ${formatTemperatureValue(temp)}${units.temperatureSymbol} · mín. ${formatTemperatureValue(minTemp)}${units.temperatureSymbol} · máx. ${formatTemperatureValue(maxTemp)}${units.temperatureSymbol}")
+            appendLine("🤔 Sensación: ${formatTemperatureValue(feelsLike)}${units.temperatureSymbol}")
             appendLine("💧 Humedad: $humidity%")
             if (precipitationMm > 0.0) appendLine("🌧️ Precipitación: ${formatNumber(precipitationMm)} mm")
             appendLine("💨 Viento: ${formatNumber(windSpeed)} ${units.speedUnit} ${getWindDirection(windDeg)}")
@@ -323,9 +335,17 @@ class WeatherToolHandler @Inject constructor(
         operation = "forecast",
         ttlMillis = FORECAST_CACHE_TTL_MS
     ) { args, target ->
-        val days = args.optionalInt("days")?.coerceIn(1, 5) ?: 3
+        val selection = try {
+            WeatherForecastSelection.resolve(
+                days = args.optionalInt("days"),
+                dayOffset = args.optionalInt("day_offset"),
+                targetDate = args.optionalString("target_date")
+            )
+        } catch (error: IllegalArgumentException) {
+            throw WeatherFailure(WeatherErrorCode.INVALID_ARGUMENT, error.message.orEmpty())
+        }
         val units = resolveUnits(args.optionalString("units"), target.countryCode)
-        val url = forecastUrl.toHttpUrl().newBuilder()
+        val urlBuilder = forecastUrl.toHttpUrl().newBuilder()
             .addQueryParameter("latitude", target.latitude.toString())
             .addQueryParameter("longitude", target.longitude.toString())
             .addQueryParameter("hourly", "relative_humidity_2m")
@@ -337,9 +357,15 @@ class WeatherToolHandler @Inject constructor(
             .addQueryParameter("wind_speed_unit", units.openMeteoWindUnit)
             .addQueryParameter("precipitation_unit", "mm")
             .addQueryParameter("timezone", "auto")
-            .addQueryParameter("forecast_days", days.toString())
             .addQueryParameter("timeformat", "unixtime")
-            .build()
+        if (selection.targetDate != null) {
+            urlBuilder
+                .addQueryParameter("start_date", selection.targetDate)
+                .addQueryParameter("end_date", selection.targetDate)
+        } else {
+            urlBuilder.addQueryParameter("forecast_days", selection.queryDays.toString())
+        }
+        val url = urlBuilder.build()
         val json = getJsonObject(url.toString())
         val daily = json.objectOrNull("daily")
             ?: throw WeatherFailure(WeatherErrorCode.INVALID_RESPONSE, "Open-Meteo no devolvió pronóstico.")
@@ -347,7 +373,7 @@ class WeatherToolHandler @Inject constructor(
             ?: throw WeatherFailure(WeatherErrorCode.INVALID_RESPONSE, "El pronóstico recibido está vacío.")
         val timezoneOffset = json.intOrNull("utc_offset_seconds") ?: 0
         val humiditiesByDate = hourlyHumidityByDate(json.objectOrNull("hourly"), timezoneOffset)
-        val summaries = (0 until minOf(days, time.size())).mapNotNull { index ->
+        val allSummaries = (0 until time.size()).mapNotNull { index ->
             val epoch = time.longAtOrNull(index) ?: return@mapNotNull null
             val rawMin = daily.arrayOrNull("temperature_2m_min").doubleAtOrNull(index) ?: return@mapNotNull null
             val rawMax = daily.arrayOrNull("temperature_2m_max").doubleAtOrNull(index) ?: return@mapNotNull null
@@ -355,6 +381,7 @@ class WeatherToolHandler @Inject constructor(
             val condition = describeWmoCode(wmoCode, isDay = true)
             ForecastDaySummary(
                 epochSeconds = epoch,
+                isoDate = formatDateKey(epoch, timezoneOffset),
                 minTemp = units.convertTemperature(rawMin),
                 maxTemp = units.convertTemperature(rawMax),
                 avgHumidity = humiditiesByDate[formatDateKey(epoch, timezoneOffset)]
@@ -366,8 +393,13 @@ class WeatherToolHandler @Inject constructor(
                 description = condition.description
             )
         }
+        val selectedIndices = selection.selectedIndices(allSummaries.map(ForecastDaySummary::isoDate))
+        val summaries = selectedIndices.map(allSummaries::get)
         if (summaries.isEmpty()) {
-            throw WeatherFailure(WeatherErrorCode.INVALID_RESPONSE, "El pronóstico recibido está vacío.")
+            throw WeatherFailure(
+                WeatherErrorCode.INVALID_RESPONSE,
+                "No se encontró pronóstico para el día solicitado."
+            )
         }
 
         val country = target.countryName ?: target.countryCode.orEmpty()
@@ -379,7 +411,7 @@ class WeatherToolHandler @Inject constructor(
             summaries.forEach { summary ->
                 appendLine("**${formatDateLabel(summary.epochSeconds, timezoneOffset)}**")
                 appendLine("  ${getWeatherEmoji(summary.description)} ${summary.description}")
-                appendLine("  Mín. ${formatNumber(summary.minTemp)}${units.temperatureSymbol} · máx. ${formatNumber(summary.maxTemp)}${units.temperatureSymbol} · lluvia ${summary.maxPop}%")
+                appendLine("  Mín. ${formatTemperatureValue(summary.minTemp)}${units.temperatureSymbol} · máx. ${formatTemperatureValue(summary.maxTemp)}${units.temperatureSymbol} · lluvia ${summary.maxPop}%")
                 if (summary.avgHumidity > 0) appendLine("  Humedad promedio: ${summary.avgHumidity}%")
             }
             air?.let { appendLine("🌬️ Calidad del aire actual: ${it.aqi}/5 (${it.label})") }
@@ -400,6 +432,8 @@ class WeatherToolHandler @Inject constructor(
             put("source", SOURCE_NAME)
             put("locationSource", target.source.serialized)
             put("isStale", target.locationIsStale)
+            selection.dayOffset?.let { put("dayOffset", it) }
+            put("requestedDate", selection.targetDate ?: summaries.singleOrNull()?.isoDate.orEmpty())
             air?.let {
                 put("aqi", it.aqi)
                 put("aqiLabel", it.label)
@@ -408,6 +442,7 @@ class WeatherToolHandler @Inject constructor(
                 summaries.forEach { summary ->
                     put(JSONObject().apply {
                         put("date", formatDateLabel(summary.epochSeconds, timezoneOffset))
+                        put("isoDate", summary.isoDate)
                         put("minTemp", summary.minTemp)
                         put("maxTemp", summary.maxTemp)
                         put("avgHumidity", summary.avgHumidity)
@@ -486,11 +521,15 @@ class WeatherToolHandler @Inject constructor(
             val target = resolveLocation(args)
             val unitKey = args.optionalString("units").orEmpty().lowercase(Locale.ROOT)
             val daysKey = args.optionalInt("days")?.coerceIn(1, 5) ?: 0
+            val dayOffsetKey = args.optionalInt("day_offset")?.coerceIn(0, 4)?.toString().orEmpty()
+            val targetDateKey = args.optionalString("target_date").orEmpty()
             val cacheKey = listOf(
                 operation,
                 coordinateBucket(target.latitude, target.longitude),
                 unitKey,
-                daysKey.toString()
+                daysKey.toString(),
+                dayOffsetKey,
+                targetDateKey
             ).joinToString("|")
             val now = System.currentTimeMillis()
             val cached = responseCache[cacheKey]
@@ -676,7 +715,7 @@ class WeatherToolHandler @Inject constructor(
         val request = Request.Builder()
             .url(url)
             .header("Accept", "application/json")
-            .header("User-Agent", "AIAgents-Android/0.3.0")
+            .header("User-Agent", "AIAgents-Android/${BuildConfig.VERSION_NAME}")
             .build()
         try {
             okHttpClient.newCall(request).execute().use { response ->
@@ -1038,6 +1077,7 @@ class WeatherToolHandler @Inject constructor(
 
     private data class ForecastDaySummary(
         val epochSeconds: Long,
+        val isoDate: String,
         val minTemp: Double,
         val maxTemp: Double,
         val avgHumidity: Int,

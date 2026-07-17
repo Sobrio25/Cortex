@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.util.Log
+import com.aiagents.app.BuildConfig
 import androidx.core.app.NotificationCompat
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
@@ -171,7 +172,7 @@ class ModelDownloadWorker @AssistedInject constructor(
 
         val requestBuilder = Request.Builder()
             .url(modelUrl)
-            .header("User-Agent", "AIAgents-Android/0.3.0")
+            .header("User-Agent", "AIAgents-Android/${BuildConfig.VERSION_NAME}")
             .header("Accept", "*/*")
             .header("Accept-Encoding", "identity")
 

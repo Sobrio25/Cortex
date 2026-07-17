@@ -2,25 +2,45 @@ package com.aiagents.app.data.speech
 
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioTrack
+import android.media.MediaPlayer
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
+import android.util.Log
+import com.aiagents.app.data.local.AssistantPreferences
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import java.io.File
 import java.util.Locale
-import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * API-keyless speech synthesis backed by an embedded Android TTS voice.
- * Network-only voices are deliberately excluded so assistant replies stay local.
+ * Routes assistant speech to Google TTS, downloaded Piper voices, or a user-owned server.
+ * No voice or model is selected automatically.
  */
 @Singleton
 class AndroidTextToSpeechManager @Inject constructor(
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context,
+    private val preferences: AssistantPreferences,
+    private val selfHostedVoiceApi: SelfHostedVoiceApi
 ) {
     private val _isReady = MutableStateFlow(false)
     val isReady: StateFlow<Boolean> = _isReady.asStateFlow()
@@ -31,24 +51,35 @@ class AndroidTextToSpeechManager @Inject constructor(
     private val _offlineVoiceAvailable = MutableStateFlow(false)
     val offlineVoiceAvailable: StateFlow<Boolean> = _offlineVoiceAvailable.asStateFlow()
 
+    private val _googleVoices = MutableStateFlow<List<GoogleTtsVoice>>(emptyList())
+    val googleVoices: StateFlow<List<GoogleTtsVoice>> = _googleVoices.asStateFlow()
+
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val playbackTracker = SpeechPlaybackTracker()
+    private val requestCounter = AtomicLong(0L)
+
     private var engine: TextToSpeech? = null
     private var selectedLocale: Locale = Locale.getDefault()
-    private var pendingSpeech: Pair<String, Locale>? = null
-    private var finalUtteranceId: String? = null
+    private var activeRequest: SpeechPlaybackRequest? = null
+    private var piperJob: Job? = null
+    private var piperTrack: AudioTrack? = null
+    private var remoteJob: Job? = null
+    private var remotePlayer: MediaPlayer? = null
+    private var remoteAudioFile: File? = null
+    private var remotePcmTrack: AudioTrack? = null
 
     init {
         engine = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                configureVoice(selectedLocale)
-                pendingSpeech?.also { (text, locale) ->
-                    pendingSpeech = null
-                    speak(text, locale)
-                }
+                attachGooglePlaybackListener()
+                refreshVoice(selectedLocale)
+                _isReady.value = true
             } else {
-                _error.value = "No se pudo iniciar la voz de Android"
+                _error.value = "No se pudo iniciar Google TTS"
             }
         }
     }
@@ -56,41 +87,90 @@ class AndroidTextToSpeechManager @Inject constructor(
     @Synchronized
     fun speak(text: String, locale: Locale = Locale.getDefault()) {
         if (text.isBlank()) return
-        val tts = engine
-        if (tts == null || !_isReady.value) {
-            selectedLocale = locale
-            pendingSpeech = text to locale
-            return
-        }
-
-        if (!sameLanguage(selectedLocale, locale)) {
-            configureVoice(locale)
-        }
-        if (!_offlineVoiceAvailable.value) {
-            _error.value = "Descarga una voz sin conexión para escuchar al asistente"
-            return
-        }
-
-        val maxLength = (TextToSpeech.getMaxSpeechInputLength() - 100).coerceAtLeast(500)
-        val chunks = SpokenTextFormatter.chunk(text, maxLength)
-        if (chunks.isEmpty()) return
-
-        tts.stop()
-        finalUtteranceId = null
-        chunks.forEachIndexed { index, chunk ->
-            val id = "cortex-${UUID.randomUUID()}-$index"
-            if (index == chunks.lastIndex) finalUtteranceId = id
-            tts.speak(
-                chunk,
-                if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD,
-                null,
-                id
-            )
+        when (val mode = preferences.ttsMode.value) {
+            AssistantTtsMode.NONE -> {
+                _error.value = "Elige una voz en Ajustes > Asistente > Voz"
+                _isSpeaking.value = false
+            }
+            AssistantTtsMode.GOOGLE -> speakWithGoogle(text, locale)
+            AssistantTtsMode.PIPER_ALD,
+            AssistantTtsMode.PIPER_CLAUDE -> speakWithPiper(text, checkNotNull(mode.assetId))
+            AssistantTtsMode.REMOTE_SERVER -> speakWithRemote(text)
         }
     }
 
+    fun previewGoogleVoice(voiceId: String) {
+        val tts = engine
+        if (tts == null || !_isReady.value) {
+            _error.value = "Google TTS todavia se esta iniciando"
+            return
+        }
+        val voice = tts.voices.orEmpty().firstOrNull { it.name == voiceId }
+        if (voice == null || !voice.isInstalledLocally()) {
+            _error.value = "Descarga esa voz desde Google TTS antes de probarla"
+            return
+        }
+        speakWithGoogleVoice(
+            text = "Hola, soy Cortex. Esta es una prueba de voz.",
+            locale = voice.locale,
+            voice = voice
+        )
+    }
+
+    fun previewPiperVoice(mode: AssistantTtsMode) {
+        require(mode == AssistantTtsMode.PIPER_ALD || mode == AssistantTtsMode.PIPER_CLAUDE)
+        speakWithPiper(
+            text = "Hola, soy Cortex. Esta es una prueba de voz en espanol de Mexico.",
+            assetId = checkNotNull(mode.assetId)
+        )
+    }
+
+    fun previewRemoteVoice() {
+        speakWithRemote("Hola, soy Cortex. Esta es una prueba de la voz del servidor.")
+    }
+
+    fun selectGoogleVoice(voiceId: String): Boolean {
+        val tts = engine ?: return false
+        val voice = tts.voices.orEmpty().firstOrNull { it.name == voiceId }
+        if (voice == null || !voice.isInstalledLocally()) {
+            _error.value = "Descarga esa voz desde Google TTS antes de seleccionarla"
+            return false
+        }
+        tts.voice = voice
+        selectedLocale = voice.locale
+        preferences.setGoogleVoiceId(voice.name)
+        _offlineVoiceAvailable.value = true
+        _error.value = null
+        return true
+    }
+
     fun stop() {
-        pendingSpeech = null
+        requestCounter.incrementAndGet()
+        piperJob?.cancel()
+        piperJob = null
+        remoteJob?.cancel()
+        remoteJob = null
+        piperTrack?.runCatching {
+            pause()
+            flush()
+            release()
+        }
+        piperTrack = null
+        remotePlayer?.runCatching {
+            stop()
+            release()
+        }
+        remotePlayer = null
+        remotePcmTrack?.runCatching {
+            pause()
+            flush()
+            release()
+        }
+        remotePcmTrack = null
+        remoteAudioFile?.delete()
+        remoteAudioFile = null
+        playbackTracker.cancel()
+        activeRequest = null
         engine?.stop()
         _isSpeaking.value = false
     }
@@ -98,60 +178,447 @@ class AndroidTextToSpeechManager @Inject constructor(
     fun createInstallVoiceIntent(): Intent = Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA)
 
     fun refreshVoice(locale: Locale = Locale.getDefault()) {
-        configureVoice(locale)
+        val tts = engine ?: return
+        selectedLocale = locale
+        val voices = tts.voices.orEmpty()
+            .filter { sameLanguage(it.locale, locale) }
+            .sortedWith(
+                compareBy<Voice> { it.isNetworkConnectionRequired }
+                    .thenByDescending { it.quality }
+                    .thenBy { it.latency }
+                    .thenBy { it.name }
+            )
+        _googleVoices.value = voices.mapIndexed { index, voice ->
+            GoogleTtsVoice(
+                id = voice.name,
+                displayName = googleVoiceLabel(voice, index),
+                languageTag = voice.locale.toLanguageTag(),
+                quality = voice.quality,
+                latency = voice.latency,
+                requiresNetwork = voice.isNetworkConnectionRequired,
+                installed = voice.isInstalledLocally()
+            )
+        }
+
+        val selectedId = preferences.googleVoiceId.value
+        val selected = voices.firstOrNull { it.name == selectedId && it.isInstalledLocally() }
+        if (selected != null) {
+            tts.voice = selected
+            selectedLocale = selected.locale
+        }
+        _offlineVoiceAvailable.value = when (val mode = preferences.ttsMode.value) {
+            AssistantTtsMode.GOOGLE -> selected != null
+            AssistantTtsMode.PIPER_ALD,
+            AssistantTtsMode.PIPER_CLAUDE ->
+                mode.assetId?.let { OnDemandVoiceFeatureLoader.isAssetReady(context, it) } == true
+            AssistantTtsMode.REMOTE_SERVER ->
+                SelfHostedVoiceApi.isConfigured(preferences.remoteTtsConfig.value)
+            AssistantTtsMode.NONE -> false
+        }
+        _isReady.value = true
+    }
+
+    fun dismissError() {
+        _error.value = null
     }
 
     @Synchronized
-    private fun configureVoice(locale: Locale) {
-        val tts = engine ?: return
-        val embeddedVoice = chooseEmbeddedVoice(tts.voices.orEmpty(), locale)
-        if (embeddedVoice != null) {
-            tts.voice = embeddedVoice
-            selectedLocale = embeddedVoice.locale
-            _offlineVoiceAvailable.value = true
-            _isReady.value = true
-            _error.value = null
-        } else {
-            selectedLocale = locale
-            _offlineVoiceAvailable.value = false
-            _isReady.value = true
+    private fun speakWithGoogle(text: String, locale: Locale) {
+        val tts = engine
+        if (tts == null || !_isReady.value) {
+            _error.value = "Google TTS todavia se esta iniciando"
+            return
+        }
+        val voiceId = preferences.googleVoiceId.value
+        val voice = tts.voices.orEmpty().firstOrNull { it.name == voiceId && it.isInstalledLocally() }
+        if (voice == null) {
+            _error.value = "Elige y descarga una voz de Google TTS"
+            return
+        }
+        if (!sameLanguage(voice.locale, locale)) {
+            _error.value = "La voz elegida no admite ${locale.displayLanguage}"
+            return
+        }
+        speakWithGoogleVoice(text, locale, voice)
+    }
+
+    private fun speakWithGoogleVoice(text: String, locale: Locale, voice: Voice) {
+        val tts = engine
+        if (tts == null || !_isReady.value) {
+            _error.value = "Google TTS todavia se esta iniciando"
+            return
+        }
+        if (!sameLanguage(voice.locale, locale)) {
+            _error.value = "La voz elegida no admite ${locale.displayLanguage}"
+            return
+        }
+        stop()
+        tts.voice = voice
+        selectedLocale = voice.locale
+
+        val maxLength = (TextToSpeech.getMaxSpeechInputLength() - 100).coerceAtLeast(500)
+        val chunks = SpokenTextFormatter.chunk(text, maxLength)
+        if (chunks.isEmpty()) return
+
+        val request = playbackTracker.start(chunks)
+        activeRequest = request
+        _error.value = null
+        for ((index, chunk) in request.chunks.withIndex()) {
+            val result = tts.speak(
+                chunk,
+                if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD,
+                null,
+                request.utteranceIds[index]
+            )
+            if (result == TextToSpeech.ERROR) {
+                tts.stop()
+                handlePlaybackError(request.utteranceIds[index])
+                return
+            }
+        }
+    }
+
+    private fun speakWithPiper(text: String, assetId: String) {
+        if (!OnDemandVoiceFeatureLoader.isAssetReady(context, assetId)) {
+            _error.value = "Descarga la voz Piper antes de usarla"
+            return
+        }
+        stop()
+        val requestId = requestCounter.incrementAndGet()
+        _isSpeaking.value = true
+        _error.value = null
+        piperJob = scope.launch {
+            val result = OnDemandVoiceFeatureLoader.synthesize(
+                context = context,
+                assetId = assetId,
+                text = SpokenTextFormatter.clean(text),
+                speed = 1f
+            )
+            if (requestId != requestCounter.get()) return@launch
+            result.onSuccess { audio -> playPiperAudio(audio, requestId) }
+                .onFailure { error ->
+                    _isSpeaking.value = false
+                    _error.value = error.message ?: "No se pudo generar la voz Piper"
+                }
+        }
+    }
+
+    private fun speakWithRemote(text: String) {
+        val config = preferences.remoteTtsConfig.value
+        val validationError = SelfHostedVoiceApi.endpointValidationError(config.endpointUrl)
+        if (validationError != null ||
+            config.model.isBlank() ||
+            Qwen3TtsVoiceSkill.requiresVoice(config) && config.voice.isBlank()
+        ) {
+            _error.value = validationError ?: "Completa los datos requeridos del servidor TTS"
+            return
+        }
+        stop()
+        val requestId = requestCounter.incrementAndGet()
+        _isSpeaking.value = true
+        _error.value = null
+        remoteJob = scope.launch {
+            if (config.audioMode == RemoteTtsAudioMode.STREAMING_PCM) {
+                streamRemotePcm(text, config, requestId)
+                return@launch
+            }
+            selfHostedVoiceApi.synthesize(
+                text = text,
+                config = config
+            ).onSuccess { audio ->
+                if (requestId != requestCounter.get()) return@onSuccess
+                playRemoteAudio(audio, requestId)
+            }.onFailure { error ->
+                if (requestId != requestCounter.get()) return@onFailure
+                _isSpeaking.value = false
+                _error.value = error.message ?: "No se pudo generar la voz remota"
+            }
+        }
+    }
+
+    private suspend fun streamRemotePcm(
+        text: String,
+        config: RemoteTtsConfig,
+        requestId: Long
+    ) {
+        var trailingByte: Byte? = null
+        val result = selfHostedVoiceApi.streamPcm(text, config) { chunk ->
+            if (requestId != requestCounter.get()) throw CancellationException("TTS cancelado")
+            val pcm = trailingByte?.let { previous ->
+                ByteArray(chunk.size + 1).also { combined ->
+                    combined[0] = previous
+                    chunk.copyInto(combined, destinationOffset = 1)
+                }
+            } ?: chunk
+            val playableBytes = pcm.size - pcm.size % PCM16_MONO_BYTES_PER_FRAME.toInt()
+            trailingByte = if (playableBytes < pcm.size) pcm.last() else null
+            if (playableBytes == 0) return@streamPcm
+
+            val track = remotePcmTrack ?: createRemotePcmTrack(config.pcmSampleRate).also {
+                remotePcmTrack = it
+                it.play()
+                Log.d("AndroidTTS", "TTS PCM playback started at ${config.pcmSampleRate} Hz")
+            }
+            var offset = 0
+            var zeroWriteRetries = 0
+            while (offset < playableBytes) {
+                if (requestId != requestCounter.get()) throw CancellationException("TTS cancelado")
+                val written = track.write(
+                    pcm,
+                    offset,
+                    playableBytes - offset,
+                    AudioTrack.WRITE_BLOCKING
+                )
+                check(written >= 0) { "AudioTrack no pudo escribir PCM: $written" }
+                if (written == 0) {
+                    check(++zeroWriteRetries <= MAX_ZERO_WRITE_RETRIES) {
+                        "AudioTrack no acepto los datos PCM"
+                    }
+                    Thread.sleep(2L)
+                    continue
+                }
+                zeroWriteRetries = 0
+                offset += written
+            }
         }
 
-        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+        val stream = result.getOrElse { error ->
+            if (requestId == requestCounter.get()) {
+                finishRemotePcmPlayback(requestId)
+                _error.value = error.message ?: "No se pudo reproducir el flujo PCM"
+            }
+            return
+        }
+        if (requestId == requestCounter.get()) {
+            val expectedFrames = stream.bytesReceived / PCM16_MONO_BYTES_PER_FRAME
+            val maximumDrainMs = expectedFrames * 1_000L / config.pcmSampleRate + 1_000L
+            val drainStartedAt = System.currentTimeMillis()
+            while (requestId == requestCounter.get() &&
+                remotePcmTrack.playedFrames() < expectedFrames &&
+                System.currentTimeMillis() - drainStartedAt < maximumDrainMs
+            ) {
+                delay(20L)
+            }
+            finishRemotePcmPlayback(requestId)
+        }
+    }
+
+    private fun createRemotePcmTrack(sampleRate: Int): AudioTrack {
+        val minimumBuffer = AudioTrack.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+        check(minimumBuffer > 0) { "Android no admite PCM a $sampleRate Hz" }
+        val bufferBytes = maxOf(minimumBuffer, 4 * 1024)
+        return AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build()
+            )
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .setBufferSizeInBytes(bufferBytes)
+            .setSessionId(AudioManager.AUDIO_SESSION_ID_GENERATE)
+            .build()
+            .also { track ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val lowLatencyFrames = (sampleRate / 50).coerceAtLeast(1)
+                    track.setStartThresholdInFrames(
+                        lowLatencyFrames.coerceAtMost(track.bufferSizeInFrames)
+                    )
+                }
+            }
+    }
+
+    private fun AudioTrack?.playedFrames(): Long =
+        this?.playbackHeadPosition?.toLong()?.and(0xffff_ffffL) ?: 0L
+
+    private fun finishRemotePcmPlayback(requestId: Long) {
+        if (requestId != requestCounter.get()) return
+        remotePcmTrack?.runCatching {
+            stop()
+            release()
+        }
+        remotePcmTrack = null
+        remoteJob = null
+        _isSpeaking.value = false
+    }
+
+    private fun playRemoteAudio(audio: RemoteTtsAudio, requestId: Long) {
+        if (audio.bytes.isEmpty() || requestId != requestCounter.get()) {
+            _isSpeaking.value = false
+            return
+        }
+        val file = File.createTempFile("cortex_remote_tts_", audio.fileExtension, context.cacheDir)
+        file.writeBytes(audio.bytes)
+        remoteAudioFile = file
+        runCatching {
+            MediaPlayer().also { player ->
+                remotePlayer = player
+                player.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                player.setDataSource(file.absolutePath)
+                player.setOnCompletionListener {
+                    finishRemotePlayback(requestId)
+                }
+                player.setOnErrorListener { _, what, extra ->
+                    Log.e("AndroidTTS", "Remote audio playback failed: what=$what extra=$extra")
+                    if (requestId == requestCounter.get()) {
+                        _error.value = "No se pudo reproducir el audio del servidor TTS"
+                    }
+                    finishRemotePlayback(requestId)
+                    true
+                }
+                player.prepare()
+                player.start()
+            }
+        }.onFailure { error ->
+            Log.e("AndroidTTS", "Remote audio preparation failed", error)
+            finishRemotePlayback(requestId)
+            _error.value = error.message ?: "El servidor devolvio un formato de audio no compatible"
+        }
+    }
+
+    private fun finishRemotePlayback(requestId: Long) {
+        if (requestId != requestCounter.get()) return
+        remotePlayer?.release()
+        remotePlayer = null
+        remoteAudioFile?.delete()
+        remoteAudioFile = null
+        remoteJob = null
+        _isSpeaking.value = false
+    }
+
+    private fun playPiperAudio(audio: OfflineTtsAudio, requestId: Long) {
+        if (audio.samples.isEmpty() || requestId != requestCounter.get()) {
+            _isSpeaking.value = false
+            return
+        }
+        val format = AudioFormat.Builder()
+            .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+            .setSampleRate(audio.sampleRate)
+            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+            .build()
+        val attributes = AudioAttributes.Builder()
+            // Follow the user's media volume. Some devices keep the dedicated assistant
+            // stream muted even while media is audible, which makes previews appear broken.
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+        val bufferBytes = audio.samples.size * Float.SIZE_BYTES
+        val track = AudioTrack.Builder()
+            .setAudioAttributes(attributes)
+            .setAudioFormat(format)
+            .setTransferMode(AudioTrack.MODE_STATIC)
+            .setBufferSizeInBytes(bufferBytes)
+            .setSessionId(AudioManager.AUDIO_SESSION_ID_GENERATE)
+            .build()
+        piperTrack = track
+        val written = track.write(audio.samples, 0, audio.samples.size, AudioTrack.WRITE_BLOCKING)
+        if (written <= 0) {
+            track.release()
+            piperTrack = null
+            _isSpeaking.value = false
+            _error.value = "No se pudo reproducir la voz Piper"
+            return
+        }
+        track.notificationMarkerPosition = written
+        track.setPlaybackPositionUpdateListener(
+            object : AudioTrack.OnPlaybackPositionUpdateListener {
+                override fun onMarkerReached(audioTrack: AudioTrack) {
+                    finishPiperPlayback(requestId)
+                }
+
+                override fun onPeriodicNotification(audioTrack: AudioTrack) = Unit
+            },
+            mainHandler
+        )
+        track.play()
+
+        val durationMillis = written * 1_000L / audio.sampleRate
+        scope.launch {
+            delay(durationMillis + 750L)
+            if (requestId == requestCounter.get() && _isSpeaking.value) {
+                finishPiperPlayback(requestId)
+            }
+        }
+    }
+
+    private fun finishPiperPlayback(requestId: Long) {
+        if (requestId != requestCounter.get()) return
+        piperTrack?.release()
+        piperTrack = null
+        _isSpeaking.value = false
+    }
+
+    private fun attachGooglePlaybackListener() {
+        engine?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {
-                _isSpeaking.value = true
+                if (playbackTracker.owns(utteranceId)) _isSpeaking.value = true
             }
 
             override fun onDone(utteranceId: String?) {
-                if (utteranceId == finalUtteranceId) {
+                val request = activeRequest
+                if (request != null && playbackTracker.isFinal(request, utteranceId)) {
                     _isSpeaking.value = false
+                    playbackTracker.cancel()
+                    activeRequest = null
                 }
             }
 
-            @Deprecated("Deprecated by Android")
-            override fun onError(utteranceId: String?) {
-                _isSpeaking.value = false
-                _error.value = "No se pudo reproducir la respuesta"
-            }
+            @Suppress("DEPRECATION")
+            override fun onError(utteranceId: String?) = handlePlaybackError(utteranceId)
 
-            override fun onError(utteranceId: String?, errorCode: Int) {
-                onError(utteranceId)
-            }
+            override fun onError(utteranceId: String?, errorCode: Int) =
+                handlePlaybackError(utteranceId)
 
             override fun onStop(utteranceId: String?, interrupted: Boolean) {
-                _isSpeaking.value = false
+                if (playbackTracker.owns(utteranceId)) {
+                    _isSpeaking.value = false
+                    playbackTracker.cancel()
+                    activeRequest = null
+                }
             }
         })
     }
 
-    private fun chooseEmbeddedVoice(voices: Set<Voice>, locale: Locale): Voice? {
-        return voices
-            .filterNot(Voice::isNetworkConnectionRequired)
-            .filter { sameLanguage(it.locale, locale) }
-            .sortedWith(compareByDescending<Voice> { it.quality }.thenBy { it.latency })
-            .firstOrNull()
+    private fun handlePlaybackError(utteranceId: String?) {
+        if (!playbackTracker.owns(utteranceId)) return
+        _isSpeaking.value = false
+        _error.value = "No se pudo reproducir la respuesta"
+        playbackTracker.cancel()
+        activeRequest = null
+    }
+
+    private fun Voice.isInstalledLocally(): Boolean =
+        !isNetworkConnectionRequired &&
+            TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED !in features.orEmpty()
+
+    private fun googleVoiceLabel(voice: Voice, index: Int): String {
+        val region = voice.locale.getDisplayCountry(voice.locale).takeIf(String::isNotBlank)
+        val location = listOfNotNull(voice.locale.getDisplayLanguage(voice.locale), region)
+            .joinToString(" · ")
+        return "$location · Voz ${index + 1}"
     }
 
     private fun sameLanguage(first: Locale, second: Locale): Boolean =
         first.language.equals(second.language, ignoreCase = true)
+
+    companion object {
+        private const val PCM16_MONO_BYTES_PER_FRAME = 2L
+        private const val MAX_ZERO_WRITE_RETRIES = 50
+    }
 }

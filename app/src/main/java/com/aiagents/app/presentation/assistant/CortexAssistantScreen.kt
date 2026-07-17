@@ -1,6 +1,7 @@
 package com.aiagents.app.presentation.assistant
 
 import android.Manifest
+import android.animation.ValueAnimator
 import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -16,14 +17,19 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +38,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -46,38 +53,47 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -91,24 +107,32 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aiagents.app.data.repository.ContextCompactionPolicy
 import com.aiagents.app.data.local.AssistantPreferences
 import com.aiagents.app.data.speech.AndroidTextToSpeechManager
+import com.aiagents.app.data.terminal.AssistantActionCoordinator
+import com.aiagents.app.domain.model.AssistantActionStatus
+import com.aiagents.app.domain.model.ContactActionPurpose
 import com.aiagents.app.domain.model.Message
 import com.aiagents.app.domain.model.MessageRole
+import com.aiagents.app.domain.model.PendingAssistantAction
+import com.aiagents.app.presentation.tool_results.DirectToolResultPayload
 import com.aiagents.app.presentation.stt.STTViewModel
 import com.aiagents.app.presentation.workspace_detail.WorkspaceDetailViewModel
 import com.aiagents.app.presentation.workspace_detail.LinkableText
-import com.aiagents.app.ui.components.WeatherResultCard
-import com.aiagents.app.ui.components.extractWeatherDataJson
+import com.aiagents.app.ui.components.DirectToolResultCard
 import com.aiagents.app.ui.theme.CortexColors
+import com.aiagents.app.ui.theme.CortexBubbleMark
 import com.aiagents.app.ui.theme.CortexTheme
 import com.aiagents.app.ui.theme.cortexGlass
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
+import coil.compose.AsyncImage
 
 private enum class AssistantStage {
     READY,
     LISTENING,
+    TRANSCRIBING,
     THINKING,
     SPEAKING,
     RESULT,
@@ -122,6 +146,7 @@ fun CortexAssistantScreen(
     assistantLanguageTag: String,
     textToSpeech: AndroidTextToSpeechManager,
     preferences: AssistantPreferences,
+    assistantActionCoordinator: AssistantActionCoordinator,
     onDismiss: () -> Unit,
     cortexViewModel: WorkspaceDetailViewModel = hiltViewModel(),
     sttViewModel: STTViewModel = hiltViewModel()
@@ -141,18 +166,21 @@ fun CortexAssistantScreen(
     val isListening by sttViewModel.isListening.collectAsState()
     val transcription by sttViewModel.transcription.collectAsState()
     val pendingTranscription by sttViewModel.pendingTranscription.collectAsState()
+    val isTranscribing by sttViewModel.isProcessing.collectAsState()
     val sttError by sttViewModel.error.collectAsState()
     val isSpeaking by textToSpeech.isSpeaking.collectAsState()
     val ttsError by textToSpeech.error.collectAsState()
     val autoListen by preferences.autoListen.collectAsState()
     val speakResponses by preferences.speakResponses.collectAsState()
     val assistantModel by preferences.modelKey.collectAsState()
+    val pendingAssistantAction by assistantActionCoordinator.pendingAction.collectAsState()
 
     // Every invocation starts compact and gets a fresh opportunity to listen. These are
     // deliberately not saveable across assistant activity recreation/restoration.
     var expanded by remember { mutableStateOf(false) }
     var initialListeningRequested by remember { mutableStateOf(false) }
     var voiceLoopActive by remember { mutableStateOf(false) }
+    var voiceReplyExpected by remember { mutableStateOf(false) }
     var activityResumed by remember(lifecycleOwner) {
         mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
     }
@@ -201,6 +229,12 @@ fun CortexAssistantScreen(
     val latestResultMessage = listOfNotNull(latestAssistantMessage, latestDirectResult)
         .maxByOrNull(Message::timestamp)
     val settledResponse = latestResultMessage?.content.orEmpty()
+    val settledSpokenResponse = latestResultMessage
+        ?.let { CortexAssistantResponsePolicy.spokenResponse(it, assistantLocale) }
+        .orEmpty()
+    val settledDirectPayload = latestResultMessage
+        ?.takeIf(CortexAssistantResponsePolicy::isDirectResult)
+        ?.let { CortexAssistantResponsePolicy.payload(it, assistantLocale) }
     val latestResultKey = latestResultMessage?.let { message ->
         "${message.id}:${message.timestamp}:${settledResponse.hashCode()}"
     }
@@ -211,6 +245,7 @@ fun CortexAssistantScreen(
     val stage = when {
         error != null -> AssistantStage.ERROR
         isListening -> AssistantStage.LISTENING
+        isTranscribing -> AssistantStage.TRANSCRIBING
         uiState.isLoading -> AssistantStage.THINKING
         isSpeaking -> AssistantStage.SPEAKING
         displayResponse.isNotBlank() -> AssistantStage.RESULT
@@ -235,10 +270,20 @@ fun CortexAssistantScreen(
         if (permissions.values.all { it }) cortexViewModel.onCalendarPermissionGranted()
         else cortexViewModel.onCalendarPermissionDenied()
     }
+    val assistantActionPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions.isNotEmpty() && permissions.values.all { it }) {
+            cortexViewModel.onAssistantActionPermissionsGranted()
+        } else {
+            cortexViewModel.onAssistantActionPermissionsDenied()
+        }
+    }
 
     fun requestListening() {
         initialListeningRequested = true
         voiceLoopActive = true
+        voiceReplyExpected = true
         textToSpeech.stop()
         sttViewModel.dismissError()
         if (hasRecordPermission) {
@@ -257,18 +302,46 @@ fun CortexAssistantScreen(
         }
     }
 
+    fun interceptPendingConfirmation(text: String): Boolean {
+        val draft = pendingAssistantAction as? PendingAssistantAction.WhatsAppDraft
+            ?: return false
+        if (draft.status != AssistantActionStatus.DRAFT) return false
+        return when (AssistantConfirmationParser.parse(text)) {
+            AssistantConfirmationDecision.CONFIRM -> {
+                assistantActionCoordinator.confirmWhatsApp(draft.id)
+                cortexViewModel.updateInputText("")
+                true
+            }
+            AssistantConfirmationDecision.CANCEL -> {
+                assistantActionCoordinator.cancel(draft.id)
+                cortexViewModel.updateInputText("")
+                true
+            }
+            AssistantConfirmationDecision.UNKNOWN -> false
+        }
+    }
+
     fun submitText() {
-        if (uiState.inputText.isBlank() || uiState.isLoading) return
+        val text = uiState.inputText.trim()
+        if (text.isBlank() || uiState.isLoading) return
+        voiceReplyExpected = false
         textToSpeech.stop()
         sttViewModel.dismissError()
-        cortexViewModel.sendMessage()
+        if (!interceptPendingConfirmation(text)) {
+            assistantActionCoordinator.reset()
+            cortexViewModel.sendMessage()
+        }
     }
 
     LaunchedEffect(workspaceId, normalizedLanguageTag) {
-        sttViewModel.prepareOfflineAssistant(
+        sttViewModel.prepareAssistantVoice(
             workspaceId = workspaceId,
             language = normalizedLanguageTag
         )
+    }
+
+    DisposableEffect(sttViewModel) {
+        onDispose { sttViewModel.endAssistantVoiceSession() }
     }
 
     LaunchedEffect(
@@ -277,10 +350,11 @@ fun CortexAssistantScreen(
         initialListeningRequested,
         activityResumed,
         uiState.isLoading,
+        isTranscribing,
         isSpeaking
     ) {
         if (sttSettings == null || !autoListen || initialListeningRequested ||
-            !activityResumed || uiState.isLoading || isSpeaking
+            !activityResumed || uiState.isLoading || isTranscribing || isSpeaking
         ) return@LaunchedEffect
 
         // SpeechRecognizer is unreliable if started before the assistant activity reaches RESUMED.
@@ -292,7 +366,10 @@ fun CortexAssistantScreen(
         val accepted = pendingTranscription?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
         sttViewModel.acceptTranscription()
         cortexViewModel.updateInputText(accepted)
-        cortexViewModel.sendMessage()
+        if (!interceptPendingConfirmation(accepted)) {
+            assistantActionCoordinator.reset()
+            cortexViewModel.sendMessage()
+        }
     }
 
     LaunchedEffect(uiState.pendingLocationPermission) {
@@ -337,8 +414,34 @@ fun CortexAssistantScreen(
         }
     }
 
-    LaunchedEffect(latestResultKey, uiState.isLoading, speakResponses, voiceLoopActive) {
-        val response = settledResponse.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+    LaunchedEffect(uiState.pendingAssistantActionPermissions) {
+        val permissions = uiState.pendingAssistantActionPermissions
+        if (permissions.isEmpty()) return@LaunchedEffect
+        val allGranted = permissions.all { permission ->
+            ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+        }
+        if (allGranted) {
+            cortexViewModel.onAssistantActionPermissionsGranted()
+        } else {
+            assistantActionPermission.launch(permissions.toTypedArray())
+        }
+    }
+
+    LaunchedEffect(pendingAssistantAction?.id, pendingAssistantAction?.expiresAt) {
+        val action = pendingAssistantAction ?: return@LaunchedEffect
+        val remaining = (action.expiresAt - System.currentTimeMillis()).coerceAtLeast(0L)
+        delay(remaining)
+        assistantActionCoordinator.expire(action.id)
+    }
+
+    LaunchedEffect(
+        latestResultKey,
+        uiState.isLoading,
+        speakResponses,
+        voiceLoopActive,
+        voiceReplyExpected
+    ) {
+        val response = settledSpokenResponse.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
         val resultMessage = latestResultMessage ?: return@LaunchedEffect
         if (resultMessage.timestamp < invocationStartedAt) return@LaunchedEffect
         if (uiState.isLoading) return@LaunchedEffect
@@ -346,7 +449,9 @@ fun CortexAssistantScreen(
         if (key == lastHandledResponseKey) return@LaunchedEffect
         lastHandledResponseKey = key
 
-        if (speakResponses) {
+        // A voice-initiated turn should answer by voice. The preference still controls automatic
+        // reading for typed turns, while voiceLoopActive captures the assistant interaction model.
+        if (speakResponses || voiceReplyExpected) {
             textToSpeech.speak(response, assistantLocale)
             val playbackStarted = withTimeoutOrNull(2_500) {
                 textToSpeech.isSpeaking.first { it }
@@ -355,6 +460,7 @@ fun CortexAssistantScreen(
                 textToSpeech.isSpeaking.first { !it }
             }
         }
+        voiceReplyExpected = false
 
         if (voiceLoopActive) {
             // Avoid capturing the final syllable of Cortex's own TTS response.
@@ -399,13 +505,18 @@ fun CortexAssistantScreen(
                     onDismiss = onDismiss
                 )
             } else {
-                CompactAssistantBubble(
+                CompactAssistantOverlay(
                     cortexName = cortexName,
                     stage = stage,
                     response = displayResponse,
+                    resultPayload = settledDirectPayload.takeIf {
+                        uiState.streamingContent.isNullOrBlank()
+                    },
                     transcription = transcription,
                     error = error,
                     isListening = isListening,
+                    pendingAction = pendingAssistantAction,
+                    actionCoordinator = assistantActionCoordinator,
                     onMic = ::toggleListening,
                     onExpand = { expanded = true },
                     onDismiss = onDismiss
@@ -416,100 +527,432 @@ fun CortexAssistantScreen(
 }
 
 @Composable
-private fun CompactAssistantBubble(
+private fun CompactAssistantOverlay(
     cortexName: String,
     stage: AssistantStage,
     response: String,
+    resultPayload: DirectToolResultPayload?,
     transcription: String,
     error: String?,
     isListening: Boolean,
+    pendingAction: PendingAssistantAction?,
+    actionCoordinator: AssistantActionCoordinator,
     onMic: () -> Unit,
     onExpand: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val shape = RoundedCornerShape(30.dp)
-    GlassPanel(
+    val contentKey = "${response.hashCode()}:${error.hashCode()}:${resultPayload.hashCode()}:${pendingAction?.id}:${pendingAction?.status}"
+    val hasPanelContent = response.isNotBlank() || error != null || resultPayload != null || pendingAction != null
+    var panelVisible by remember { mutableStateOf(hasPanelContent) }
+    LaunchedEffect(contentKey, hasPanelContent) {
+        if (hasPanelContent) panelVisible = true
+    }
+
+    BoxWithConstraints(
         modifier = Modifier
             .padding(horizontal = 16.dp)
             .padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 18.dp)
             .fillMaxWidth()
-            .animateContentSize(),
-        shape = shape
     ) {
-        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+        val panelMaxHeight = minOf(480.dp, maxHeight * 0.56f)
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            AnimatedVisibility(
+                visible = hasPanelContent && panelVisible,
+                enter = fadeIn(tween(180)) + expandVertically(expandFrom = Alignment.Bottom),
+                exit = fadeOut(tween(140)) + shrinkVertically(shrinkTowards = Alignment.Bottom)
             ) {
-                CortexOrb(stage = stage, modifier = Modifier.size(54.dp))
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable(onClick = onExpand),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    Text(
-                        text = stageLabel(stage, cortexName),
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold
+                AssistantResponsePanel(
+                    cortexName = cortexName,
+                    response = response,
+                    resultPayload = resultPayload,
+                    pendingAction = pendingAction,
+                    error = error,
+                    dimmed = isListening,
+                    maxHeight = panelMaxHeight,
+                    actionCoordinator = actionCoordinator,
+                    onExpand = onExpand,
+                    onHide = { panelVisible = false }
+                )
+            }
+
+            AssistantPill(
+                cortexName = cortexName,
+                stage = stage,
+                transcription = transcription,
+                error = error,
+                isListening = isListening,
+                hasPanelContent = hasPanelContent,
+                panelVisible = panelVisible,
+                onShowPanel = { panelVisible = true },
+                onMic = onMic,
+                onExpand = onExpand,
+                onDismiss = onDismiss
+            )
+        }
+    }
+}
+
+@Composable
+private fun AssistantResponsePanel(
+    cortexName: String,
+    response: String,
+    resultPayload: DirectToolResultPayload?,
+    pendingAction: PendingAssistantAction?,
+    error: String?,
+    dimmed: Boolean,
+    maxHeight: androidx.compose.ui.unit.Dp,
+    actionCoordinator: AssistantActionCoordinator,
+    onExpand: () -> Unit,
+    onHide: () -> Unit
+) {
+    val scrollState = rememberScrollState()
+    val coroutineScope = rememberCoroutineScope()
+    val showJumpToBottom by remember {
+        derivedStateOf { scrollState.maxValue - scrollState.value > 32 }
+    }
+    LaunchedEffect(response) {
+        if (!showJumpToBottom) {
+            delay(16)
+            scrollState.scrollTo(scrollState.maxValue)
+        }
+    }
+    var panelDrag by remember { mutableStateOf(0f) }
+    GlassPanel(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = maxHeight)
+            .animateContentSize()
+            .graphicsLayer { alpha = if (dimmed) 0.72f else 1f }
+            .semantics {
+                paneTitle = "Respuesta de $cortexName"
+                liveRegion = LiveRegionMode.Polite
+            },
+        shape = RoundedCornerShape(28.dp)
+    ) {
+        Box(Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(scrollState)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+            Row(
+                modifier = Modifier.pointerInput(onHide) {
+                    detectVerticalDragGestures(
+                        onDragStart = { panelDrag = 0f },
+                        onVerticalDrag = { _, amount -> panelDrag += amount },
+                        onDragEnd = {
+                            if (panelDrag > 56.dp.toPx()) onHide()
+                            panelDrag = 0f
+                        },
+                        onDragCancel = { panelDrag = 0f }
                     )
-                    val detail = when {
-                        error != null -> error
-                        isListening && transcription.isNotBlank() -> transcription
-                        response.isNotBlank() -> response
-                        else -> "Habla o toca para escribir"
-                    }
-                    LinkableText(
-                        text = detail,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            color = Color.White.copy(alpha = 0.72f)
-                        ),
-                        linkColor = CortexColors.Blue,
-                        maxLines = if (response.isBlank()) 1 else 3
-                    )
-                }
-                IconButton(onClick = onMic, modifier = Modifier.size(42.dp)) {
+                },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = cortexName,
+                    color = Color.White.copy(alpha = 0.78f),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onExpand, modifier = Modifier.size(36.dp)) {
                     Icon(
-                        imageVector = if (isListening) Icons.Default.Stop else Icons.Default.Mic,
-                        contentDescription = if (isListening) "Dejar de escuchar" else "Hablar",
-                        tint = if (isListening) CortexColors.Pink else Color.White
+                        Icons.Default.OpenInFull,
+                        contentDescription = "Abrir conversación",
+                        tint = Color.White.copy(alpha = 0.72f),
+                        modifier = Modifier.size(18.dp)
                     )
                 }
-                IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.White.copy(0.7f))
+                IconButton(onClick = onHide, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Ocultar respuesta",
+                        tint = Color.White.copy(alpha = 0.72f),
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
             }
 
-            AnimatedVisibility(
-                visible = response.isNotBlank(),
-                enter = fadeIn() + scaleIn(initialScale = 0.98f),
-                exit = fadeOut() + scaleOut(targetScale = 0.98f)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 7.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(Color.White.copy(alpha = 0.055f))
-                        .clickable(onClick = onExpand)
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            when {
+                pendingAction != null -> PendingAssistantActionCard(
+                    action = pendingAction,
+                    coordinator = actionCoordinator
+                )
+                resultPayload != null -> DirectToolResultCard(
+                    payload = resultPayload,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                error != null -> Text(
+                    text = error,
+                    color = Color(0xFFFFB4AB),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                response.isNotBlank() -> LinkableText(
+                    text = response,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        color = Color.White.copy(alpha = 0.90f)
+                    ),
+                    linkColor = CortexColors.Blue
+                )
+            }
+            }
+            if (showJumpToBottom) {
+                TextButton(
+                    onClick = { coroutineScope.launch {
+                        scrollState.animateScrollTo(scrollState.maxValue)
+                    } },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
                 ) {
-                    Icon(
-                        Icons.Default.OpenInFull,
-                        contentDescription = null,
-                        tint = CortexColors.Blue,
-                        modifier = Modifier.size(16.dp)
-                    )
+                    Text("Ir al final")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AssistantPill(
+    cortexName: String,
+    stage: AssistantStage,
+    transcription: String,
+    error: String?,
+    isListening: Boolean,
+    hasPanelContent: Boolean,
+    panelVisible: Boolean,
+    onShowPanel: () -> Unit,
+    onMic: () -> Unit,
+    onExpand: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    GlassPanel(
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics {
+                paneTitle = "Asistente $cortexName"
+                stateDescription = accessibleStageDescription(stage, isListening, error)
+            },
+        shape = RoundedCornerShape(34.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            CortexOrb(stage = stage, modifier = Modifier.size(58.dp))
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable {
+                        if (hasPanelContent && !panelVisible) onShowPanel() else onExpand()
+                    },
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = stageLabel(stage, cortexName),
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                )
+                Text(
+                    text = when {
+                        isListening && transcription.isNotBlank() -> transcription
+                        isListening -> "Te escucho…"
+                        stage == AssistantStage.TRANSCRIBING -> "Enviando audio al servidor…"
+                        hasPanelContent && !panelVisible -> "Toca para ver la respuesta"
+                        else -> "Habla o abre la conversación"
+                    },
+                    color = Color.White.copy(alpha = 0.66f),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            IconButton(onClick = onExpand, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    Icons.Default.OpenInFull,
+                    contentDescription = "Abrir conversación",
+                    tint = Color.White.copy(alpha = 0.76f),
+                    modifier = Modifier.size(19.dp)
+                )
+            }
+            IconButton(onClick = onMic, modifier = Modifier.size(44.dp)) {
+                Icon(
+                    imageVector = if (isListening) Icons.Default.Stop else Icons.Default.Mic,
+                    contentDescription = if (isListening) "Dejar de escuchar" else "Hablar",
+                    tint = if (isListening) CortexColors.Pink else Color.White
+                )
+            }
+            IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.White.copy(0.70f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun PendingAssistantActionCard(
+    action: PendingAssistantAction,
+    coordinator: AssistantActionCoordinator
+) {
+    when (action) {
+        is PendingAssistantAction.WhatsAppDraft -> WhatsAppDraftCard(action, coordinator)
+        is PendingAssistantAction.ContactSelection -> ContactSelectionCard(action, coordinator)
+    }
+}
+
+@Composable
+private fun WhatsAppDraftCard(
+    draft: PendingAssistantAction.WhatsAppDraft,
+    coordinator: AssistantActionCoordinator
+) {
+    var message by remember(draft.id, draft.message) { mutableStateOf(draft.message) }
+    val active = draft.status == AssistantActionStatus.DRAFT
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (draft.contact.photoUri != null) {
+                AsyncImage(
+                    model = draft.contact.photoUri,
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp).clip(CircleShape)
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(Brush.linearGradient(listOf(CortexColors.Mint, CortexColors.Blue))),
+                    contentAlignment = Alignment.Center
+                ) {
                     Text(
-                        "Abrir conversación",
-                        color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(start = 7.dp)
+                        draft.contact.displayName.take(1).uppercase(),
+                        color = Color(0xFF071A17),
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text(
+                    draft.contact.displayName,
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    listOfNotNull(draft.contact.label, draft.contact.phoneNumber).joinToString(" · "),
+                    color = Color.White.copy(alpha = 0.62f),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+        TextField(
+            value = message,
+            onValueChange = {
+                message = it
+                coordinator.updateWhatsAppMessage(draft.id, it)
+            },
+            enabled = active,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Mensaje de WhatsApp") },
+            minLines = 2,
+            maxLines = 5,
+            shape = RoundedCornerShape(18.dp),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = Color.White.copy(alpha = 0.08f),
+                unfocusedContainerColor = Color.White.copy(alpha = 0.055f),
+                disabledContainerColor = Color.White.copy(alpha = 0.04f),
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                disabledTextColor = Color.White.copy(alpha = 0.65f),
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent,
+                disabledIndicatorColor = Color.Transparent
+            )
+        )
+        if (active) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { coordinator.cancel(draft.id) },
+                    modifier = Modifier.weight(1f)
+                ) { Text("Cancelar") }
+                Button(
+                    onClick = { coordinator.confirmWhatsApp(draft.id, message) },
+                    enabled = message.isNotBlank(),
+                    modifier = Modifier.weight(1f)
+                ) { Text("Enviar a WhatsApp") }
+            }
+            Text(
+                "WhatsApp se abrirá con el texto preparado; el envío final se confirma allí.",
+                color = Color.White.copy(alpha = 0.56f),
+                style = MaterialTheme.typography.labelSmall
+            )
+        } else {
+            Text(
+                text = when (draft.status) {
+                    AssistantActionStatus.HANDED_OFF -> "Mensaje entregado a WhatsApp para revisión."
+                    AssistantActionStatus.CANCELLED -> "Borrador cancelado."
+                    AssistantActionStatus.EXPIRED -> "El borrador expiró."
+                    AssistantActionStatus.FAILED -> draft.failureMessage ?: "No se pudo abrir WhatsApp."
+                    AssistantActionStatus.DRAFT -> ""
+                },
+                color = if (draft.status == AssistantActionStatus.FAILED) Color(0xFFFFB4AB)
+                else CortexColors.Mint,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+}
+
+@Composable
+private fun ContactSelectionCard(
+    selection: PendingAssistantAction.ContactSelection,
+    coordinator: AssistantActionCoordinator
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            if (selection.purpose == ContactActionPurpose.CALL) "¿A qué número llamo?"
+            else "¿A qué contacto de WhatsApp?",
+            color = Color.White,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+        if (selection.status == AssistantActionStatus.DRAFT) {
+            selection.candidates.forEach { candidate ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.White.copy(alpha = 0.06f))
+                        .clickable { coordinator.selectContact(selection.id, candidate.id) }
+                        .padding(horizontal = 13.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(candidate.displayName, color = Color.White, fontWeight = FontWeight.Medium)
+                        Text(
+                            listOfNotNull(candidate.label, candidate.phoneNumber).joinToString(" · "),
+                            color = Color.White.copy(alpha = 0.62f),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+            OutlinedButton(
+                onClick = { coordinator.cancel(selection.id) },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Cancelar") }
+        } else {
+            Text(
+                if (selection.status == AssistantActionStatus.EXPIRED) "La selección expiró."
+                else "Selección cancelada.",
+                color = Color.White.copy(alpha = 0.68f)
+            )
         }
     }
 }
@@ -549,7 +992,11 @@ private fun ExpandedAssistantPanel(
             .padding(horizontal = 10.dp)
             .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 20.dp)
             .padding(bottom = maxOf(imeBottom, navigationBottom) + 8.dp)
-            .fillMaxSize(),
+            .fillMaxSize()
+            .semantics {
+                paneTitle = "Conversación con $cortexName"
+                stateDescription = accessibleStageDescription(stage, isListening, error)
+            },
         shape = RoundedCornerShape(34.dp)
     ) {
         Column(Modifier.fillMaxSize()) {
@@ -570,12 +1017,17 @@ private fun ExpandedAssistantPanel(
                     Text(
                         stageLabel(stage, cortexName),
                         color = CortexColors.Mint.copy(alpha = 0.88f),
-                        style = MaterialTheme.typography.labelSmall
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
                     )
                 }
                 if (isSpeaking) {
                     IconButton(onClick = onStopSpeaking) {
-                        Icon(Icons.Default.VolumeOff, contentDescription = "Silenciar", tint = Color.White)
+                        Icon(
+                            Icons.AutoMirrored.Filled.VolumeOff,
+                            contentDescription = "Detener voz",
+                            tint = Color.White
+                        )
                     }
                 }
                 IconButton(onClick = onCollapse) {
@@ -618,7 +1070,7 @@ private fun ExpandedAssistantPanel(
                             Message(role = MessageRole.ASSISTANT, content = streamingText)
                         )
                     }
-                } else if (isLoading) {
+                } else if (isLoading || stage == AssistantStage.TRANSCRIBING) {
                     item(key = "thinking") {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -630,15 +1082,21 @@ private fun ExpandedAssistantPanel(
                                 color = CortexColors.Mint,
                                 strokeWidth = 2.dp
                             )
-                            Text("Pensando…", color = Color.White.copy(alpha = 0.68f))
+                            Text(
+                                if (stage == AssistantStage.TRANSCRIBING) "Transcribiendo…" else "Pensando…",
+                                color = Color.White.copy(alpha = 0.68f)
+                            )
                         }
                     }
                 }
             }
 
-            AnimatedVisibility(visible = isListening || error != null) {
+            AnimatedVisibility(
+                visible = isListening || stage == AssistantStage.TRANSCRIBING || error != null
+            ) {
                 val notice = when {
                     error != null -> error
+                    stage == AssistantStage.TRANSCRIBING -> "Procesando tu voz en el servidor…"
                     transcription.isNotBlank() -> transcription
                     else -> "Te escucho…"
                 }
@@ -649,6 +1107,13 @@ private fun ExpandedAssistantPanel(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)
+                        .semantics {
+                            liveRegion = if (error != null) {
+                                LiveRegionMode.Assertive
+                            } else {
+                                LiveRegionMode.Polite
+                            }
+                        }
                 )
             }
 
@@ -678,7 +1143,9 @@ private fun ExpandedAssistantPanel(
                 TextField(
                     value = inputText,
                     onValueChange = onInputChange,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { contentDescription = "Mensaje para $cortexName" },
                     placeholder = { Text("Escribe a $cortexName…", color = Color.White.copy(0.46f)) },
                     maxLines = 4,
                     shape = RoundedCornerShape(24.dp),
@@ -723,17 +1190,34 @@ private fun ExpandedAssistantPanel(
     }
 }
 
+private fun accessibleStageDescription(
+    stage: AssistantStage,
+    isListening: Boolean,
+    error: String?
+): String = when {
+    error != null -> "Error: $error"
+    isListening -> "Escuchando"
+    stage == AssistantStage.TRANSCRIBING -> "Transcribiendo el audio"
+    stage == AssistantStage.THINKING -> "Procesando la solicitud"
+    stage == AssistantStage.SPEAKING -> "Reproduciendo la respuesta"
+    stage == AssistantStage.RESULT -> "Respuesta disponible"
+    else -> "Listo"
+}
+
 @Composable
 private fun AssistantMessage(message: Message) {
-    CortexAssistantResponsePolicy.weatherContent(message)
-        ?.let(::extractWeatherDataJson)
-        ?.let { weatherJson ->
-            WeatherResultCard(
-                weatherJson = weatherJson,
-                modifier = Modifier.fillMaxWidth()
-            )
-            return
+    val locale = Locale.getDefault()
+    val directPayloads = remember(message.toolResults, locale) {
+        CortexAssistantResponsePolicy.payloads(message, locale)
+    }
+    if (directPayloads.isNotEmpty()) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            directPayloads.forEach { payload ->
+                DirectToolResultCard(payload = payload, modifier = Modifier.fillMaxWidth())
+            }
         }
+        return
+    }
 
     val isUser = message.role == MessageRole.USER
     Row(
@@ -798,7 +1282,7 @@ private fun EmptyAssistantConversation(cortexName: String) {
             fontWeight = FontWeight.SemiBold
         )
         Text(
-            "Puedes hablarme o escribir. Tu voz se procesa en este dispositivo y no necesita API keys.",
+            "Puedes hablarme o escribir. Usaré el modelo de voz que configuraste.",
             color = Color.White.copy(alpha = 0.62f),
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.fillMaxWidth(),
@@ -809,15 +1293,19 @@ private fun EmptyAssistantConversation(cortexName: String) {
 @Composable
 private fun CortexOrb(stage: AssistantStage, modifier: Modifier = Modifier) {
     val transition = rememberInfiniteTransition(label = "cortex_orb")
+    val animationsEnabled = remember { ValueAnimator.areAnimatorsEnabled() }
     val rotation by transition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(
             animation = tween(
                 durationMillis = when (stage) {
-                    AssistantStage.LISTENING -> 1_600
-                    AssistantStage.THINKING -> 2_100
-                    else -> 5_200
+                    AssistantStage.LISTENING -> 4_800
+                    AssistantStage.TRANSCRIBING -> 3_200
+                    AssistantStage.THINKING -> 2_800
+                    AssistantStage.SPEAKING -> 3_600
+                    AssistantStage.RESULT -> 8_000
+                    else -> 14_000
                 },
                 easing = FastOutSlowInEasing
             ),
@@ -826,8 +1314,8 @@ private fun CortexOrb(stage: AssistantStage, modifier: Modifier = Modifier) {
         label = "orb_rotation"
     )
     val pulse by transition.animateFloat(
-        initialValue = 0.94f,
-        targetValue = if (stage == AssistantStage.LISTENING) 1.08f else 1.02f,
+        initialValue = if (stage == AssistantStage.LISTENING) 0.96f else 0.985f,
+        targetValue = if (stage == AssistantStage.LISTENING) 1.06f else 1.015f,
         animationSpec = infiniteRepeatable(
             animation = tween(if (stage == AssistantStage.LISTENING) 620 else 1_300),
             repeatMode = RepeatMode.Reverse
@@ -835,53 +1323,23 @@ private fun CortexOrb(stage: AssistantStage, modifier: Modifier = Modifier) {
         label = "orb_pulse"
     )
 
-    Box(modifier = modifier.graphicsLayer { scaleX = pulse; scaleY = pulse }) {
-        Canvas(Modifier.fillMaxSize().graphicsLayer { rotationZ = rotation }) {
-            val radius = size.minDimension / 2f
-            drawCircle(
-                brush = Brush.sweepGradient(
-                    listOf(
-                        CortexColors.Violet,
-                        CortexColors.Blue,
-                        CortexColors.Mint,
-                        CortexColors.Pink,
-                        CortexColors.Violet
-                    ),
-                    center = center
-                ),
-                radius = radius
-            )
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(Color(0xFF3A3350), Color(0xFF17131F)),
-                    center = center + Offset(-radius * 0.18f, -radius * 0.2f),
-                    radius = radius * 0.82f
-                ),
-                radius = radius * 0.72f
-            )
-            if (stage == AssistantStage.LISTENING || stage == AssistantStage.THINKING) {
-                drawArc(
-                    color = Color.White.copy(alpha = 0.82f),
-                    startAngle = 8f,
-                    sweepAngle = 72f,
-                    useCenter = false,
-                    topLeft = Offset(radius * 0.10f, radius * 0.10f),
-                    size = androidx.compose.ui.geometry.Size(radius * 1.8f, radius * 1.8f),
-                    style = Stroke(width = radius * 0.08f, cap = StrokeCap.Round)
-                )
-            }
-        }
-        Canvas(Modifier.fillMaxSize()) {
-            val radius = size.minDimension / 2f
-            drawCircle(
-                brush = Brush.radialGradient(
-                    listOf(Color.White.copy(0.34f), Color.Transparent),
-                    center = center + Offset(-radius * 0.3f, -radius * 0.34f),
-                    radius = radius * 0.7f
-                ),
-                radius = radius * 0.72f
-            )
-        }
+    val visiblePulse = if (animationsEnabled) pulse else 1f
+    val visiblePhase = if (animationsEnabled) rotation else 28f
+    val activityColor = when (stage) {
+        AssistantStage.LISTENING -> CortexColors.Mint
+        AssistantStage.TRANSCRIBING -> CortexColors.Blue
+        AssistantStage.THINKING -> CortexColors.Blue
+        AssistantStage.SPEAKING -> CortexColors.Pink
+        AssistantStage.ERROR -> Color(0xFFFF817A)
+        else -> CortexColors.Violet
+    }
+    Box(modifier = modifier.graphicsLayer { scaleX = visiblePulse; scaleY = visiblePulse }) {
+        CortexBubbleMark(
+            modifier = Modifier.fillMaxSize(),
+            phaseDegrees = visiblePhase,
+            activityColor = activityColor,
+            error = stage == AssistantStage.ERROR
+        )
     }
 }
 
@@ -902,6 +1360,7 @@ private fun GlassPanel(
 private fun stageLabel(stage: AssistantStage, cortexName: String): String = when (stage) {
     AssistantStage.READY -> "$cortexName está listo"
     AssistantStage.LISTENING -> "Te escucho"
+    AssistantStage.TRANSCRIBING -> "Transcribiendo"
     AssistantStage.THINKING -> "Pensando"
     AssistantStage.SPEAKING -> "Respondiendo"
     AssistantStage.RESULT -> "Respuesta de $cortexName"

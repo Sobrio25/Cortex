@@ -2,6 +2,8 @@ package com.aiagents.app.presentation.scheduled_tasks
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aiagents.app.data.diagnostics.AppErrorReporter
+import com.aiagents.app.data.diagnostics.ErrorReportContext
 import com.aiagents.app.data.local.ScheduledTaskDao
 import com.aiagents.app.data.model.ScheduledTaskEntity
 import com.aiagents.app.data.repository.AgentRepository
@@ -40,7 +42,8 @@ data class ScheduledTasksUiState(
 class ScheduledTasksViewModel @Inject constructor(
     private val scheduledTaskDao: ScheduledTaskDao,
     private val repository: AgentRepository,
-    private val schedulerManager: TaskSchedulerManager
+    private val schedulerManager: TaskSchedulerManager,
+    private val errorReporter: AppErrorReporter
 ) : ViewModel() {
 
     val tasks: StateFlow<List<ScheduledTaskEntity>> = scheduledTaskDao.observeAll()
@@ -172,7 +175,7 @@ class ScheduledTasksViewModel @Inject constructor(
             }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     isSaving = false,
-                    errorMessage = error.message ?: "No se pudo guardar la tarea."
+                    errorMessage = taskError(error, "scheduled_task_save")
                 )
             }
         }
@@ -196,7 +199,7 @@ class ScheduledTasksViewModel @Inject constructor(
                 schedulerManager.scheduleAlarm(updated)
             }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
-                    errorMessage = error.message ?: "No se pudo actualizar la tarea."
+                    errorMessage = taskError(error, "scheduled_task_toggle")
                 )
             }
         }
@@ -218,7 +221,7 @@ class ScheduledTasksViewModel @Inject constructor(
                 onReady(task.workspaceId, conversationId)
             }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
-                    errorMessage = error.message ?: "No se pudo abrir el chat de la tarea."
+                    errorMessage = taskError(error, "scheduled_task_conversation")
                 )
             }
         }
@@ -243,7 +246,7 @@ class ScheduledTasksViewModel @Inject constructor(
             }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     taskToDelete = null,
-                    errorMessage = error.message ?: "No se pudo eliminar la tarea."
+                    errorMessage = taskError(error, "scheduled_task_delete")
                 )
             }
         }
@@ -252,6 +255,12 @@ class ScheduledTasksViewModel @Inject constructor(
     fun clearError() {
         _uiState.value = _uiState.value.copy(errorMessage = null)
     }
+
+    private fun taskError(error: Throwable, operation: String): String =
+        errorReporter.present(
+            error,
+            ErrorReportContext(component = "scheduled_tasks", operation = operation)
+        ).displayMessage
 
     private suspend fun createTask(
         label: String,

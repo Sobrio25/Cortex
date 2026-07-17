@@ -12,6 +12,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aiagents.app.MainActivity
 import com.aiagents.app.R
+import com.aiagents.app.data.diagnostics.AppErrorReporter
+import com.aiagents.app.data.diagnostics.ErrorReportContext
 import com.aiagents.app.data.remote.ChatMessage
 import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.data.repository.FileRepository
@@ -63,6 +65,7 @@ data class WorkspaceUiState(
 class WorkspacesViewModel @Inject constructor(
     private val repository: AgentRepository,
     private val fileRepository: FileRepository,
+    private val errorReporter: AppErrorReporter,
     private val application: Application
 ) : AndroidViewModel(application) {
 
@@ -423,7 +426,7 @@ Rules:
                         _uiState.value = _uiState.value.copy(exportingWorkspaceId = null)
                         showExportNotification(
                             "Error al guardar AGENTES.md",
-                            error.message ?: "Error desconocido",
+                            workspaceError(error, "workspace_export_save"),
                             ongoing = false
                         )
                     }
@@ -431,7 +434,7 @@ Rules:
                     _uiState.value = _uiState.value.copy(exportingWorkspaceId = null)
                     showExportNotification(
                         "Error generando AGENTES.md",
-                        error.message ?: "Error desconocido",
+                        workspaceError(error, "workspace_export_generate"),
                         ongoing = false
                     )
                 }
@@ -440,10 +443,16 @@ Rules:
                 _uiState.value = _uiState.value.copy(exportingWorkspaceId = null)
                 showExportNotification(
                     "Error generando AGENTES.md",
-                    e.message ?: "Error desconocido",
+                    workspaceError(e, "workspace_export_generate"),
                     ongoing = false
                 )
             }
         }
     }
+
+    private fun workspaceError(error: Throwable, operation: String): String =
+        errorReporter.present(
+            error,
+            ErrorReportContext(component = "workspaces", operation = operation)
+        ).displayMessage
 }

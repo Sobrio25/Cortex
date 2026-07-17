@@ -2,6 +2,8 @@ package com.aiagents.app.presentation.providers
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aiagents.app.data.diagnostics.AppErrorReporter
+import com.aiagents.app.data.diagnostics.ErrorReportContext
 import com.aiagents.app.data.local.ProviderModelCatalogCache
 import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.domain.model.MoonshotEndpointType
@@ -46,7 +48,8 @@ data class ProviderState(
 class ProvidersViewModel @Inject constructor(
     private val repository: AgentRepository,
     private val anthropicOAuthManager: AnthropicOAuthManager,
-    private val modelCatalogCache: ProviderModelCatalogCache
+    private val modelCatalogCache: ProviderModelCatalogCache,
+    private val errorReporter: AppErrorReporter
 ) : ViewModel() {
 
     private val modelLoadJobs = mutableMapOf<ProviderType, Job>()
@@ -342,7 +345,11 @@ class ProvidersViewModel @Inject constructor(
                             ProviderType.OPENCODE,
                             currentState.copy(
                                 isLoading = false,
-                                catalogError = catalogErrorMessage(error)
+                                catalogError = providerError(
+                                    error,
+                                    "provider_catalog_load",
+                                    ProviderType.OPENCODE
+                                )
                             )
                         )
                         return@launch
@@ -396,7 +403,7 @@ class ProvidersViewModel @Inject constructor(
                     type,
                     state.copy(
                         isLoading = false,
-                        catalogError = error.message ?: "No se pudo guardar la configuración"
+                        catalogError = providerError(error, "provider_config_save", type)
                     )
                 )
                 return@launch
@@ -597,7 +604,7 @@ class ProvidersViewModel @Inject constructor(
                             } else {
                                 null
                             },
-                            catalogError = catalogErrorMessage(error)
+                            catalogError = providerError(error, "provider_catalog_load", type)
                         )
                     )
                 }
@@ -642,15 +649,18 @@ class ProvidersViewModel @Inject constructor(
         }
     }
 
-    private fun catalogErrorMessage(error: Throwable): String {
-        val detail = error.message
-            ?.replace(Regex("\\s+"), " ")
-            ?.trim()
-            ?.take(180)
-            ?.takeIf(String::isNotBlank)
-            ?: "Error de conexión o autenticación"
-        return "No se pudo actualizar el catálogo: $detail"
-    }
+    private fun providerError(
+        error: Throwable,
+        operation: String,
+        provider: ProviderType
+    ): String = errorReporter.present(
+        error,
+        ErrorReportContext(
+            component = "providers",
+            operation = operation,
+            provider = provider.name
+        )
+    ).displayMessage
 
     fun getDefaultBaseUrl(type: ProviderType): String {
         return when (type) {
@@ -744,7 +754,11 @@ class ProvidersViewModel @Inject constructor(
                 .onFailure { e ->
                     _anthropicOAuthState.value = _anthropicOAuthState.value.copy(
                         isLoading = false,
-                        error = e.message
+                        error = providerError(
+                            e,
+                            "anthropic_oauth_exchange",
+                            ProviderType.ANTHROPIC
+                        )
                     )
                 }
         }

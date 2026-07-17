@@ -26,6 +26,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -33,6 +34,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aiagents.app.domain.model.formatTemperatureValue
 import org.json.JSONObject
 
 data class CurrentWeatherData(
@@ -79,11 +81,14 @@ data class ForecastWeatherData(
     val source: String = "Open-Meteo",
     val locationSource: String = "search",
     val isStale: Boolean = false,
-    val isCached: Boolean = false
+    val isCached: Boolean = false,
+    val requestedDate: String = "",
+    val dayOffset: Int? = null
 )
 
 data class ForecastDayData(
     val date: String,
+    val isoDate: String = "",
     val minTemp: Double,
     val maxTemp: Double,
     val avgHumidity: Int,
@@ -227,6 +232,7 @@ fun parseForecastWeatherJson(json: String): ForecastWeatherData? {
             val day = daysArray.getJSONObject(index)
             ForecastDayData(
                 date = day.getString("date"),
+                isoDate = day.optString("isoDate"),
                 minTemp = day.getDouble("minTemp"),
                 maxTemp = day.getDouble("maxTemp"),
                 avgHumidity = day.optInt("avgHumidity"),
@@ -248,7 +254,9 @@ fun parseForecastWeatherJson(json: String): ForecastWeatherData? {
             source = obj.optString("source", "Open-Meteo"),
             locationSource = obj.optString("locationSource", "search"),
             isStale = obj.optBoolean("isStale"),
-            isCached = obj.optBoolean("isCached")
+            isCached = obj.optBoolean("isCached"),
+            requestedDate = obj.optString("requestedDate"),
+            dayOffset = obj.optionalInt("dayOffset")
         )
     } catch (_: Exception) {
         null
@@ -341,8 +349,8 @@ fun CurrentWeatherCard(
     val location = displayLocation(data.city, data.country)
     val accessibilityText = buildString {
         append("Clima en $location. ${data.description}. ")
-        append("Temperatura ${data.temp.rounded()}${data.unitSymbol}, ")
-        append("mínima ${data.minTemp.rounded()}, máxima ${data.maxTemp.rounded()}. ")
+        append("Temperatura ${formatTemperatureValue(data.temp)}${data.unitSymbol}, ")
+        append("mínima ${formatTemperatureValue(data.minTemp)}, máxima ${formatTemperatureValue(data.maxTemp)}. ")
         append("Precipitación ${data.precipitationMm.rounded()} milímetros. ")
         data.aqi?.let { append("Calidad del aire $it de 5, ${data.aqiLabel.orEmpty()}. ") }
         if (data.updatedAt.isNotBlank()) append("Actualizado ${data.updatedAt}. ")
@@ -378,7 +386,7 @@ fun CurrentWeatherCard(
                 Text(
                     text = getConditionEmoji(condition),
                     fontSize = if (compact) 46.sp else 54.sp,
-                    modifier = Modifier.semantics { contentDescription = data.description }
+                    modifier = Modifier.clearAndSetSemantics { }
                 )
                 Spacer(Modifier.width(14.dp))
                 Column(
@@ -386,7 +394,7 @@ fun CurrentWeatherCard(
                     horizontalAlignment = if (compact) Alignment.CenterHorizontally else Alignment.End
                 ) {
                     Text(
-                        text = "${data.temp.rounded()}${data.unitSymbol}",
+                        text = "${formatTemperatureValue(data.temp)}${data.unitSymbol}",
                         style = MaterialTheme.typography.displaySmall,
                         fontWeight = FontWeight.Bold,
                         color = textColor,
@@ -401,7 +409,7 @@ fun CurrentWeatherCard(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "↓ ${data.minTemp.rounded()}${data.unitSymbol}  ↑ ${data.maxTemp.rounded()}${data.unitSymbol}",
+                        text = "↓ ${formatTemperatureValue(data.minTemp)}${data.unitSymbol}  ↑ ${formatTemperatureValue(data.maxTemp)}${data.unitSymbol}",
                         style = MaterialTheme.typography.labelLarge,
                         color = textColor
                     )
@@ -410,7 +418,7 @@ fun CurrentWeatherCard(
             Spacer(Modifier.height(16.dp))
             AdaptiveWeatherStats(
                 stats = buildList {
-                    add(WeatherStatData("Sensación", "${data.feelsLike.rounded()}${data.unitSymbol}"))
+                    add(WeatherStatData("Sensación", "${formatTemperatureValue(data.feelsLike)}${data.unitSymbol}"))
                     add(WeatherStatData("Humedad", "${data.humidity}%"))
                     add(WeatherStatData("Precipitación", "${data.precipitationMm.rounded()} mm"))
                     add(WeatherStatData("Viento", "${data.windSpeed.rounded()} ${data.speedUnit}"))
@@ -568,7 +576,7 @@ private fun ForecastDayMiniCard(
             .clip(RoundedCornerShape(16.dp))
             .background(Color.Black.copy(alpha = 0.18f))
             .semantics(mergeDescendants = true) {
-                contentDescription = "${day.date}. ${day.description}. Máxima ${day.maxTemp.rounded()}, mínima ${day.minTemp.rounded()} $unitSymbol. Probabilidad de precipitación ${day.maxPop} por ciento."
+                contentDescription = "${day.date}. ${day.description}. Máxima ${formatTemperatureValue(day.maxTemp)}, mínima ${formatTemperatureValue(day.minTemp)} $unitSymbol. Probabilidad de precipitación ${day.maxPop} por ciento."
             }
             .padding(horizontal = 10.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -583,10 +591,14 @@ private fun ForecastDayMiniCard(
             overflow = TextOverflow.Ellipsis
         )
         Spacer(Modifier.height(7.dp))
-        Text(getConditionEmoji(condition), fontSize = 28.sp)
+        Text(
+            getConditionEmoji(condition),
+            fontSize = 28.sp,
+            modifier = Modifier.clearAndSetSemantics { }
+        )
         Spacer(Modifier.height(5.dp))
         Text(
-            text = "${day.maxTemp.rounded()}° / ${day.minTemp.rounded()}°",
+            text = "${formatTemperatureValue(day.maxTemp)}° / ${formatTemperatureValue(day.minTemp)}°",
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Bold,
             color = textColor

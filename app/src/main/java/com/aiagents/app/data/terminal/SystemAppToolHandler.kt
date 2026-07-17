@@ -30,7 +30,8 @@ data class SystemAppToolResult(
 
 @Singleton
 class SystemAppToolHandler @Inject constructor(
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context,
+    private val assistantActionCoordinator: AssistantActionCoordinator
 ) {
     companion object {
         private const val TAG = "SystemAppToolHandler"
@@ -44,7 +45,8 @@ class SystemAppToolHandler @Inject constructor(
         val ALL_ACTIONS = setOf(
             "open_app", "open_google_keep", "create_keep_note",
             "open_spotify", "play_spotify", "control_playback",
-            "open_url", "map_search", "navigate", "dial_phone", "share_text",
+            "open_url", "map_search", "navigate", "dial_phone", "call_phone",
+            "prepare_whatsapp_message", "share_text",
             "open_app_settings",
             "take_photo", "change_setting", "open_settings",
             "get_device_info", "set_volume", "set_brightness",
@@ -92,6 +94,8 @@ GESTIÓN DE APPS:
 - "map_search": Busca un lugar. Params: query. Siempre muestra selector de mapas.
 - "navigate": Prepara navegación. Params: destination, mode opcional ("driving"|"walking"|"bicycling"). Siempre muestra selector de mapas.
 - "dial_phone": Prepara un número en el marcador. Params: phone_number. Usa ACTION_DIAL: nunca inicia la llamada.
+- "call_phone": Llama directamente. Params: contact o phone_number. Requiere permisos de contactos/teléfono; si hay varias coincidencias muestra una tarjeta para elegir.
+- "prepare_whatsapp_message": Prepara una tarjeta de WhatsApp. Params: contact y message. La confirmación abre el chat con el texto listo; WhatsApp conserva el envío final.
 - "share_text": Comparte texto. Params: text y title opcional. Siempre abre el selector de Android; nunca envía silenciosamente.
 - "open_app_settings": Abre los ajustes Android de una app. Params: package_name o app_name.
 - "uninstall_app": Solicita desinstalar una app. Params: package_name o app_name. Solo abre el diálogo Android; el usuario debe confirmar.""",
@@ -143,6 +147,8 @@ GESTIÓN DE APPS:
                 "map_search" -> mapSearch(toolCallId, params)
                 "navigate" -> navigate(toolCallId, params)
                 "dial_phone" -> dialPhone(toolCallId, params)
+                "call_phone" -> callPhone(toolCallId, params)
+                "prepare_whatsapp_message" -> prepareWhatsAppMessage(toolCallId, params)
                 "share_text" -> shareText(toolCallId, params)
                 "open_app_settings" -> openAppSettings(toolCallId, params)
                 "take_photo" -> SystemAppToolResult(
@@ -599,6 +605,44 @@ GESTIÓN DE APPS:
         } catch (_: Exception) {
             SystemAppToolResult(toolCallId, TOOL_NAME, false, "No hay una app visible que pueda abrir el marcador.")
         }
+    }
+
+    private fun callPhone(toolCallId: String, params: JsonObject): SystemAppToolResult {
+        val result = assistantActionCoordinator.callPhone(
+            contactQuery = params.get("contact")?.asString,
+            rawNumber = params.get("phone_number")?.asString
+        )
+        return SystemAppToolResult(
+            toolCallId = toolCallId,
+            toolName = TOOL_NAME,
+            success = result.success,
+            content = result.message,
+            requiresUserInteraction = result.success && result.message.contains("elige", ignoreCase = true),
+            interactionReason = result.message.takeIf { result.success }
+        )
+    }
+
+    private fun prepareWhatsAppMessage(
+        toolCallId: String,
+        params: JsonObject
+    ): SystemAppToolResult {
+        val contact = params.get("contact")?.asString
+            ?: return SystemAppToolResult(toolCallId, TOOL_NAME, false, "Parámetro 'contact' requerido.")
+        val message = params.get("message")?.asString
+            ?: return SystemAppToolResult(toolCallId, TOOL_NAME, false, "Parámetro 'message' requerido.")
+        val result = assistantActionCoordinator.prepareWhatsApp(contact, message)
+        return SystemAppToolResult(
+            toolCallId = toolCallId,
+            toolName = TOOL_NAME,
+            success = result.success,
+            content = result.message,
+            requiresUserInteraction = result.success,
+            interactionReason = if (result.success) {
+                "El usuario debe confirmar el contacto y el mensaje en la tarjeta del asistente."
+            } else {
+                null
+            }
+        )
     }
 
     private fun shareText(toolCallId: String, params: JsonObject): SystemAppToolResult {

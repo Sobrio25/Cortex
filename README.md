@@ -1,4 +1,4 @@
-# AI Agents App
+# Cortex
 
 Aplicación Android nativa para gestionar múltiples agentes de IA con workspaces especializados.
 

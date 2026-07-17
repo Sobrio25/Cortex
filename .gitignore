@@ -6,6 +6,7 @@
 .DS_Store
 /build/
 /app/build/
+**/build/
 /captures
 .externalNativeBuild/
 .cxx/
@@ -29,3 +30,4 @@ keystore.properties
 nohup.out
 .kotlin/
 .claude/
+.firebase/

@@ -90,15 +90,23 @@ import com.aiagents.app.data.model.PermissionLevel
 import com.aiagents.app.data.events.AgentChangeEvent
 import com.aiagents.app.data.events.AgentChangeKind
 import com.aiagents.app.data.model.SubagentExecutionEntity
-import com.aiagents.app.data.repository.ContextCompactionPolicy
 import com.aiagents.app.data.terminal.CommandRiskLevel
 import com.aiagents.app.data.terminal.PermissionRequest
+import com.aiagents.app.data.diagnostics.userVisibleError
 import com.aiagents.app.domain.model.Agent
 import com.aiagents.app.domain.model.AgentFile
 import com.aiagents.app.domain.model.Message
 import com.aiagents.app.domain.model.MessageRole
 import com.aiagents.app.domain.model.Workspace
+import com.aiagents.app.presentation.tool_results.DirectToolResultPolicy
+import com.aiagents.app.presentation.tool_results.ToolExperiencePolicy
+import com.aiagents.app.ui.components.DirectToolResultCard
+import com.aiagents.app.ui.components.ArtifactCard
+import com.aiagents.app.ui.components.CapabilityStrip
+import com.aiagents.app.ui.components.ResearchSourcesCard
+import com.aiagents.app.ui.components.ToolActivityTimeline
 import com.aiagents.app.ui.theme.ShapeTokens
+import com.aiagents.app.ui.theme.CortexBubbleMark
 import com.aiagents.app.ui.theme.CortexColors
 import com.aiagents.app.ui.theme.CortexMark
 import com.aiagents.app.ui.theme.CortexTheme
@@ -126,6 +134,7 @@ import com.aiagents.app.data.model.STTMode
 import com.aiagents.app.data.model.CloudSTTProvider
 import com.aiagents.app.data.model.LocalModelType
 import com.aiagents.app.data.model.LocalSTTEngine
+import com.aiagents.app.data.speech.AssistantTtsMode
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.ui.layout.ContentScale
@@ -186,13 +195,25 @@ fun WorkspaceDetailScreen(
     val sttError by sttViewModel.error.collectAsState()
     val isSTTDownloading by sttViewModel.isDownloading.collectAsState()
     val sttDownloadProgress by sttViewModel.downloadProgress.collectAsState()
-    val isVoskModelDownloaded by sttViewModel.isVoskModelDownloaded.collectAsState()
+    val voiceFeatureState by sttViewModel.voiceFeatureState.collectAsState()
+    val isOfflineSttModelReady by sttViewModel.isOfflineModelReady.collectAsState()
+    val remoteSttConfig by sttViewModel.remoteSttConfig.collectAsState()
+    val remoteTtsConfig by sttViewModel.remoteTtsConfig.collectAsState()
+    val ttsMode by sttViewModel.ttsMode.collectAsState()
+    val isSpeaking by viewModel.isSpeaking.collectAsState()
+    val ttsError by viewModel.ttsError.collectAsState()
 
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showSTTSettingsDialog by remember { mutableStateOf(false) }
     var visibleAgentChange by remember { mutableStateOf<AgentChangeEvent?>(null) }
+    var speakingMessageId by remember { mutableStateOf<Long?>(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
+    val voicePackPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        sttViewModel.resumeVoicePackInstall()
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.agentChangeEvents.collect { event ->
@@ -284,9 +305,23 @@ fun WorkspaceDetailScreen(
     // Manejar errores de STT
     LaunchedEffect(sttError) {
         sttError?.let { error ->
-            snackbarHostState.showSnackbar(error)
+            snackbarHostState.showSnackbar(error, duration = SnackbarDuration.Long)
             sttViewModel.dismissError()
         }
+    }
+
+    LaunchedEffect(ttsError) {
+        ttsError?.let { error ->
+            snackbarHostState.showSnackbar(
+                viewModel.presentTtsError(error),
+                duration = SnackbarDuration.Long
+            )
+            viewModel.dismissTtsError()
+        }
+    }
+
+    LaunchedEffect(isSpeaking) {
+        if (!isSpeaking) speakingMessageId = null
     }
 
     // Verificar si tenemos permiso de camara
@@ -367,7 +402,7 @@ fun WorkspaceDetailScreen(
 
     LaunchedEffect(uiState.error) {
         uiState.error?.let { error ->
-            snackbarHostState.showSnackbar(error)
+            snackbarHostState.showSnackbar(error, duration = SnackbarDuration.Long)
             viewModel.dismissError()
         }
     }
@@ -517,10 +552,13 @@ fun WorkspaceDetailScreen(
                 WorkspaceTab.Chat -> {
                     ChatContent(
                         assistantName = activeAgent?.name ?: "Assistant",
-                        messages = ContextCompactionPolicy.visibleHistory(
-                            messages,
-                            includeInternalActions = uiState.showCommands
-                        ),
+                        messages = messages,
+                        selectedModel = selectedModel,
+                        availableFiles = files,
+                        waitingForPermission = uiState.pendingPermissionRequest != null ||
+                            uiState.pendingCalendarPermission ||
+                            uiState.pendingCameraPermission ||
+                            uiState.pendingLocationPermission,
                         inputText = uiState.inputText,
                         isLoading = uiState.isLoading,
                         attachedFiles = uiState.attachedFiles,
@@ -542,10 +580,14 @@ fun WorkspaceDetailScreen(
                             it.status in setOf("QUEUED", "RUNNING", "WAITING_PERMISSION")
                         },
                         todos = uiState.todos,
+                        ttsEnabled = ttsMode != AssistantTtsMode.NONE,
+                        speakingMessageId = speakingMessageId,
                         onInputChange = { viewModel.updateInputText(it) },
                         onSend = { viewModel.sendMessage() },
                         onStop = { viewModel.stopAgent() },
                         onCancelSubagent = viewModel::cancelSubagent,
+                        onOpenArtifact = { file -> openFile(context, file) },
+                        onShareArtifact = { file -> shareFile(context, file) },
                         onAttachFiles = {
                             val supportedTypes = viewModel.getSupportedFileTypes()
                             if (supportedTypes.isNotEmpty()) {
@@ -572,6 +614,15 @@ fun WorkspaceDetailScreen(
                             }
                         },
                         onCancelTranscription = { sttViewModel.cancelTranscription() },
+                        onSpeakMessage = { message ->
+                            if (speakingMessageId == message.id && isSpeaking) {
+                                viewModel.stopSpeaking()
+                            } else {
+                                speakingMessageId = message.id
+                                viewModel.speakMessage(message.content)
+                            }
+                        },
+                        onStopSpeaking = viewModel::stopSpeaking,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -737,24 +788,70 @@ fun WorkspaceDetailScreen(
             currentSettings = sttSettings?.let { s ->
                 STTSettingsUiState(
                     mode = try { STTMode.valueOf(s.mode) } catch (e: Exception) { STTMode.LOCAL },
-                    cloudProvider = try { CloudSTTProvider.valueOf(s.cloudProvider) } catch (e: Exception) { CloudSTTProvider.ANDROID_SPEECH_RECOGNIZER },
+                    cloudProvider = try {
+                        CloudSTTProvider.valueOf(s.cloudProvider).let { provider ->
+                            if (provider == CloudSTTProvider.FASTER_WHISPER) {
+                                CloudSTTProvider.SELF_HOSTED
+                            } else {
+                                provider
+                            }
+                        }
+                    } catch (e: Exception) { CloudSTTProvider.ANDROID_SPEECH_RECOGNIZER },
                     apiKey = s.apiKey,
                     localModelType = try { LocalModelType.valueOf(s.localModelType) } catch (e: Exception) { LocalModelType.AUTO },
                     localEngine = try { LocalSTTEngine.valueOf(s.localEngine) } catch (e: Exception) { LocalSTTEngine.AUTO },
-                    language = s.language
+                    language = s.language,
+                    remoteSttEndpoint = remoteSttConfig.endpointUrl,
+                    remoteSttModel = remoteSttConfig.model,
+                    remoteSttApiKey = remoteSttConfig.apiKey,
+                    useRemoteTts = ttsMode == AssistantTtsMode.REMOTE_SERVER,
+                    remoteTtsEndpoint = remoteTtsConfig.endpointUrl,
+                    remoteTtsModel = remoteTtsConfig.model,
+                    remoteTtsVoice = remoteTtsConfig.voice,
+                    remoteTtsApiKey = remoteTtsConfig.apiKey,
+                    remoteTtsApiFlavor = remoteTtsConfig.apiFlavor,
+                    remoteTtsLanguage = remoteTtsConfig.language,
+                    remoteTtsVoiceDescription = remoteTtsConfig.voiceDescription,
+                    remoteTtsAdaptiveStyle = remoteTtsConfig.adaptiveStyle,
+                    remoteTtsAudioMode = remoteTtsConfig.audioMode,
+                    remoteTtsPcmSampleRate = remoteTtsConfig.pcmSampleRate
                 )
-            } ?: STTSettingsUiState(),
+            } ?: STTSettingsUiState(
+                remoteSttEndpoint = remoteSttConfig.endpointUrl,
+                remoteSttModel = remoteSttConfig.model,
+                remoteSttApiKey = remoteSttConfig.apiKey,
+                useRemoteTts = ttsMode == AssistantTtsMode.REMOTE_SERVER,
+                remoteTtsEndpoint = remoteTtsConfig.endpointUrl,
+                remoteTtsModel = remoteTtsConfig.model,
+                remoteTtsVoice = remoteTtsConfig.voice,
+                remoteTtsApiKey = remoteTtsConfig.apiKey,
+                remoteTtsApiFlavor = remoteTtsConfig.apiFlavor,
+                remoteTtsLanguage = remoteTtsConfig.language,
+                remoteTtsVoiceDescription = remoteTtsConfig.voiceDescription,
+                remoteTtsAdaptiveStyle = remoteTtsConfig.adaptiveStyle,
+                remoteTtsAudioMode = remoteTtsConfig.audioMode,
+                remoteTtsPcmSampleRate = remoteTtsConfig.pcmSampleRate
+            ),
             onSave = { uiState ->
-                workspace?.id?.let { id ->
+                val accepted = workspace?.id?.let { id ->
                     sttViewModel.saveSettings(id, uiState)
+                } == true
+                if (accepted) {
+                    showSTTSettingsDialog = false
                 }
-                showSTTSettingsDialog = false
             },
             onDismiss = { showSTTSettingsDialog = false },
+            onInstallOfflineEngine = sttViewModel::installOfflineEngine,
+            onRequestVoicePackInstallPermission = {
+                sttViewModel.createVoicePackInstallPermissionIntent()?.let(
+                    voicePackPermissionLauncher::launch
+                )
+            },
             onDownloadModel = { sttViewModel.downloadModel() },
+            voiceFeatureState = voiceFeatureState,
+            isOfflineModelReady = isOfflineSttModelReady,
             isDownloading = isSTTDownloading,
-            downloadProgress = sttDownloadProgress,
-            isVoskModelDownloaded = isVoskModelDownloaded
+            downloadProgress = sttDownloadProgress
         )
     }
 
@@ -855,7 +952,7 @@ fun AgentSelectorCompact(
             onValueChange = {},
             readOnly = true,
             leadingIcon = {
-                Icon(Icons.Default.SmartToy, contentDescription = null, modifier = Modifier.size(20.dp))
+                CortexBubbleMark(modifier = Modifier.size(24.dp))
             },
             trailingIcon = {
                 ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
@@ -875,7 +972,7 @@ fun AgentSelectorCompact(
                 DropdownMenuItem(
                     text = { Text(agent.name) },
                     leadingIcon = {
-                        Icon(Icons.Default.SmartToy, contentDescription = null, modifier = Modifier.size(18.dp))
+                        CortexBubbleMark(modifier = Modifier.size(22.dp))
                     },
                     onClick = {
                         onAgentSelected(agent.id)
@@ -934,13 +1031,13 @@ fun ModelSelectorCompact(
                         text = {
                             Column {
                                 Text(
-                                    modelInfo.modelId,
+                                    modelInfo.displayModelName(),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                                 Text(
-                                    if (modelInfo.provider == com.aiagents.app.domain.model.ProviderType.MANAGED) "Plan" else modelInfo.provider.name,
+                                    modelInfo.displayProviderName(),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -961,6 +1058,9 @@ fun ModelSelectorCompact(
 fun ChatContent(
     assistantName: String,
     messages: List<Message>,
+    selectedModel: String,
+    availableFiles: List<AgentFile>,
+    waitingForPermission: Boolean,
     inputText: String,
     isLoading: Boolean,
     attachedFiles: List<AttachedFile>,
@@ -980,31 +1080,41 @@ fun ChatContent(
     agentStatuses: Map<String, String> = emptyMap(),
     subagentExecutions: List<SubagentExecutionEntity> = emptyList(),
     todos: List<com.aiagents.app.data.model.TodoEntity> = emptyList(),
+    ttsEnabled: Boolean = false,
+    speakingMessageId: Long? = null,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit = {},
     onCancelSubagent: (String) -> Unit = {},
+    onOpenArtifact: (AgentFile) -> Unit = {},
+    onShareArtifact: (AgentFile) -> Unit = {},
     onAttachFiles: () -> Unit,
     onRemoveAttachedFile: (Int) -> Unit,
     onStartListening: () -> Unit = {},
     onStopListening: () -> Unit = {},
     onAcceptTranscription: () -> Unit = {},
     onCancelTranscription: () -> Unit = {},
+    onSpeakMessage: (Message) -> Unit = {},
+    onStopSpeaking: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
     var isFirstLoad by remember { mutableStateOf(true) }
+    val locale = Locale.getDefault()
+    val visibleMessages = remember(messages, locale) {
+        ToolExperiencePolicy.prepareVisible(messages, locale)
+    }
 
     // Scroll inicial inmediato al último mensaje (sin animación) al entrar al chat
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
+    LaunchedEffect(visibleMessages.size) {
+        if (visibleMessages.isNotEmpty()) {
             if (isFirstLoad) {
                 // Primera carga: scroll instantáneo sin animación
-                listState.scrollToItem(messages.size - 1)
+                listState.scrollToItem(visibleMessages.size - 1)
                 isFirstLoad = false
             } else {
                 // Mensajes nuevos: scroll animado suave
-                listState.animateScrollToItem(messages.size - 1)
+                listState.animateScrollToItem(visibleMessages.size - 1)
             }
         }
     }
@@ -1014,8 +1124,8 @@ fun ChatContent(
 
     // Hacer scroll al último mensaje cuando aparece el teclado
     LaunchedEffect(isImeVisible) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+        if (visibleMessages.isNotEmpty()) {
+            listState.animateScrollToItem(visibleMessages.size - 1)
         }
     }
 
@@ -1071,7 +1181,7 @@ fun ChatContent(
     }
 
     Column(modifier = modifier) {
-        if (messages.isEmpty()) {
+        if (visibleMessages.isEmpty()) {
             EmptyChatState(
                 assistantName = assistantName,
                 modifier = Modifier
@@ -1093,13 +1203,32 @@ fun ChatContent(
                 modifier = Modifier.weight(1f)
             ) {
                 items(
-                    items = messages,
+                    items = visibleMessages,
                     key = { it.id }
                 ) { message ->
                     MessageBubble(
                         message = message,
                         showReasoning = showReasoning,
                         showCommands = showCommands,
+                        availableFiles = availableFiles,
+                        onOpenArtifact = onOpenArtifact,
+                        onShareArtifact = onShareArtifact,
+                        isSpeaking = speakingMessageId == message.id,
+                        onSpeakToggle = if (
+                            ttsEnabled &&
+                            message.role == MessageRole.ASSISTANT &&
+                            message.content.isNotBlank()
+                        ) {
+                            {
+                                if (speakingMessageId == message.id) {
+                                    onStopSpeaking()
+                                } else {
+                                    onSpeakMessage(message)
+                                }
+                            }
+                        } else {
+                            null
+                        },
                         modifier = Modifier.animateContentSize(
                             animationSpec = spring(
                                 dampingRatio = Spring.DampingRatioMediumBouncy,
@@ -1180,6 +1309,23 @@ fun ChatContent(
             onDismiss = onStopListening
         )
 
+        AnimatedVisibility(visible = isSTTProcessing) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                Text(
+                    "Transcribiendo en el servidor…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
         // Auto-send transcription: when pendingTranscription arrives, insert into input and send
         LaunchedEffect(pendingTranscription) {
             pendingTranscription?.let {
@@ -1200,12 +1346,21 @@ fun ChatContent(
             )
         }
 
+        CapabilityStrip(
+            selectedModel = selectedModel,
+            supportsVision = contextInfo.supportsVision,
+            supportsDocuments = contextInfo.supportsDocuments,
+            waitingForPermission = waitingForPermission,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+        )
+
         ChatInput(
             inputText = inputText,
             isLoading = isLoading,
             supportsFiles = contextInfo.supportsVision || contextInfo.supportsDocuments,
             isSTTEnabled = isSTTEnabled,
             isListening = isListening,
+            isSTTProcessing = isSTTProcessing,
             onInputChange = onInputChange,
             onSend = onSend,
             onStop = onStop,
@@ -1431,6 +1586,11 @@ fun MessageBubble(
     message: Message,
     showReasoning: Boolean = false,
     showCommands: Boolean = false,
+    availableFiles: List<AgentFile> = emptyList(),
+    onOpenArtifact: (AgentFile) -> Unit = {},
+    onShareArtifact: (AgentFile) -> Unit = {},
+    isSpeaking: Boolean = false,
+    onSpeakToggle: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val hasSubConversation = message.subConversationId != null
@@ -1453,10 +1613,15 @@ fun MessageBubble(
     // Estado para controlar si se muestran los comandos y salidas
     var showCommandsExpanded by remember { mutableStateOf(false) }
     val hasCommands = message.toolCalls.isNotEmpty() || message.toolResults.isNotEmpty()
-    val hasWeatherWidget = message.toolResults.any { toolResult ->
-        toolResult.name in com.aiagents.app.data.terminal.WeatherToolHandler.ALL_TOOL_NAMES &&
-            com.aiagents.app.ui.components.extractWeatherDataJson(toolResult.content) != null
+    val locale = Locale.getDefault()
+    val directResultPayloads = remember(message.toolResults, locale) {
+        DirectToolResultPolicy.payloads(message, locale)
     }
+    val toolExperience = remember(message.toolCalls, message.toolResults, locale) {
+        ToolExperiencePolicy.from(message, locale)
+    }
+    val uriHandler = LocalUriHandler.current
+    val hasDirectResultCard = directResultPayloads.isNotEmpty()
 
     // Estado para controlar si se muestra el contenido de tool messages
     var showToolContentExpanded by remember { mutableStateOf(false) }
@@ -1503,74 +1668,27 @@ fun MessageBubble(
             }
         }
 
-        // Weather cards always visible (outside collapsible block)
-        if (hasCommands) {
-            message.toolResults.forEach { toolResult ->
-                if (toolResult.name in com.aiagents.app.data.terminal.WeatherToolHandler.ALL_TOOL_NAMES) {
-                    val weatherJson = com.aiagents.app.ui.components.extractWeatherDataJson(toolResult.content)
-                    if (weatherJson != null) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        com.aiagents.app.ui.components.WeatherResultCard(
-                            weatherJson = weatherJson,
-                            modifier = Modifier.fillMaxWidth(0.90f)
-                        )
-                    }
-                }
-            }
+        // Verified direct results are native cards and remain visible even when commands are hidden.
+        directResultPayloads.forEach { payload ->
+            Spacer(modifier = Modifier.height(8.dp))
+            DirectToolResultCard(
+                payload = payload,
+                modifier = Modifier.fillMaxWidth(0.90f)
+            )
         }
 
-        // Botón de mostrar comandos cuando hay toolCalls o toolResults y showCommands está activado
-        if (hasCommands && showCommands) {
-            TextButton(
-                onClick = { showCommandsExpanded = !showCommandsExpanded },
-                modifier = Modifier.padding(bottom = 4.dp)
-            ) {
-                Icon(
-                    imageVector = if (showCommandsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = if (showCommandsExpanded) "Ocultar comandos" else "Mostrar comandos",
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-
-            // Contenido de comandos expandible
-            AnimatedVisibility(
-                visible = showCommandsExpanded,
-                enter = expandVertically(),
-                exit = shrinkVertically()
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    message.toolCalls.forEach { toolCall ->
-                        TerminalBlock(
-                            command = extractCommandFromToolCall(toolCall),
-                            isExecuting = false,
-                            modifier = Modifier.fillMaxWidth(0.90f)
-                        )
-                    }
-
-                    message.toolResults.forEach { toolResult ->
-                        // Skip weather results that have a card (they're rendered above)
-                        val isWeatherWithCard = toolResult.name in com.aiagents.app.data.terminal.WeatherToolHandler.ALL_TOOL_NAMES &&
-                            toolResult.content.contains("<!--WEATHER_DATA:")
-                        if (!isWeatherWithCard) {
-                            ToolResultBlock(
-                                content = toolResult.content,
-                                modifier = Modifier.fillMaxWidth(0.90f)
-                            )
-                        }
-                    }
-                }
-            }
+        if (toolExperience.receipts.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            ToolActivityTimeline(
+                receipts = toolExperience.receipts,
+                modifier = Modifier.fillMaxWidth(0.90f)
+            )
         }
 
         // Ocultar mensajes TOOL completamente si showCommands está desactivado
         val shouldShowMessage = (message.content.isNotEmpty() || message.attachedFiles.isNotEmpty()) &&
             (showCommands || !isTool) &&
-            !hasWeatherWidget
+            !hasDirectResultCard
 
         if (shouldShowMessage) {
             val messageSurface = when {
@@ -1668,16 +1786,109 @@ fun MessageBubble(
                         )
                     }
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = formatTime(message.timestamp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (isUser)
-                            Color.White.copy(alpha = 0.72f)
-                        else if (isTool)
-                            Color(0xFF00FF00).copy(alpha = 0.5f)
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = formatTime(message.timestamp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isUser)
+                                Color.White.copy(alpha = 0.72f)
+                            else if (isTool)
+                                Color(0xFF00FF00).copy(alpha = 0.5f)
+                            else
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (!isUser && !isTool && onSpeakToggle != null) {
+                            IconButton(
+                                onClick = onSpeakToggle,
+                                modifier = Modifier.size(30.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isSpeaking) {
+                                        Icons.Default.StopCircle
+                                    } else {
+                                        Icons.Default.VolumeUp
+                                    },
+                                    contentDescription = if (isSpeaking) {
+                                        "Detener lectura"
+                                    } else {
+                                        "Leer respuesta"
+                                    },
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        toolExperience.artifacts.forEach { artifact ->
+            val file = availableFiles.firstOrNull { candidate ->
+                candidate.name == artifact.name || candidate.path == artifact.path
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            ArtifactCard(
+                artifact = artifact,
+                canOpen = file != null || artifact.url != null,
+                canShare = file != null,
+                onOpen = {
+                    when {
+                        file != null -> onOpenArtifact(file)
+                        artifact.url != null -> runCatching { uriHandler.openUri(artifact.url) }
+                    }
+                },
+                onShare = { file?.let(onShareArtifact) },
+                modifier = Modifier.fillMaxWidth(0.90f)
+            )
+        }
+
+        if (toolExperience.sources.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            ResearchSourcesCard(
+                sources = toolExperience.sources,
+                modifier = Modifier.fillMaxWidth(0.90f)
+            )
+        }
+
+        if (hasCommands && showCommands) {
+            TextButton(onClick = { showCommandsExpanded = !showCommandsExpanded }) {
+                Icon(
+                    imageVector = if (showCommandsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = if (showCommandsExpanded) "Ocultar detalles técnicos" else "Detalles técnicos",
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+            AnimatedVisibility(
+                visible = showCommandsExpanded,
+                enter = expandVertically(),
+                exit = shrinkVertically()
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    message.toolCalls.forEach { toolCall ->
+                        TerminalBlock(
+                            command = extractCommandFromToolCall(toolCall),
+                            isExecuting = false,
+                            modifier = Modifier.fillMaxWidth(0.90f)
+                        )
+                    }
+                    message.toolResults.forEach { toolResult ->
+                        if (toolResult.name !in DirectToolResultPolicy.supportedToolNames) {
+                            ToolResultBlock(
+                                content = toolResult.content,
+                                modifier = Modifier.fillMaxWidth(0.90f)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1716,899 +1927,6 @@ fun MessageBubble(
     }
 }
 
-@Composable
-fun SubConversationViewer(
-    subConversationId: Long,
-    modifier: Modifier = Modifier
-) {
-    val viewModel: WorkspaceDetailViewModel = hiltViewModel()
-    val subMessages by viewModel.getSubConversationMessages(subConversationId)
-        .collectAsState(initial = emptyList())
-
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-        ),
-        shape = MaterialTheme.shapes.small,
-        modifier = modifier.padding(top = 4.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Text(
-                text = "Trabajo del agente (${subMessages.size} mensajes)",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
-            subMessages.forEach { msg ->
-                val roleLabel = when (msg.role) {
-                    MessageRole.USER -> "Tarea"
-                    MessageRole.ASSISTANT -> "Agente"
-                    MessageRole.TOOL -> "Tool"
-                    MessageRole.SYSTEM -> "Sistema"
-                }
-                val roleColor = when (msg.role) {
-                    MessageRole.USER -> MaterialTheme.colorScheme.primary
-                    MessageRole.ASSISTANT -> MaterialTheme.colorScheme.secondary
-                    MessageRole.TOOL -> Color(0xFF4CAF50)
-                    MessageRole.SYSTEM -> MaterialTheme.colorScheme.tertiary
-                }
-                val bgColor = when (msg.role) {
-                    MessageRole.TOOL -> Color(0xFF1E1E1E)
-                    else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                }
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = bgColor),
-                    shape = MaterialTheme.shapes.extraSmall
-                ) {
-                    Column(modifier = Modifier.padding(6.dp)) {
-                        Text(
-                            text = roleLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = roleColor,
-                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                        )
-                        Text(
-                            text = msg.content.take(500) + if (msg.content.length > 500) "..." else "",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (msg.role == MessageRole.TOOL) Color(0xFF00FF00) else MaterialTheme.colorScheme.onSurface
-                        )
-                        if (msg.toolCalls.isNotEmpty()) {
-                            Text(
-                                text = "Tools: ${msg.toolCalls.joinToString(", ") { it.function.name }}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color(0xFFFFC107)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun TerminalBlock(
-    command: String,
-    isExecuting: Boolean,
-    modifier: Modifier = Modifier
-) {
-    var expanded by remember { mutableStateOf(false) }
-    
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF1E1E1E)
-        ),
-        shape = MaterialTheme.shapes.small,
-        modifier = modifier,
-        onClick = { expanded = !expanded }
-    ) {
-        if (expanded) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Terminal,
-                        contentDescription = null,
-                        tint = if (isExecuting) Color(0xFFFFC107) else Color(0xFF4CAF50),
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = if (isExecuting) "Ejecutando..." else "Comando ejecutado",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (isExecuting) Color(0xFFFFC107) else Color(0xFF4CAF50)
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "$ $command",
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontFamily = FontFamily.Monospace
-                    ),
-                    color = Color(0xFF00FF00)
-                )
-            }
-        } else {
-            Row(
-                modifier = Modifier.padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (isExecuting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        color = Color(0xFFFFC107),
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    Icon(
-                        Icons.Default.Terminal,
-                        contentDescription = null,
-                        tint = Color(0xFF4CAF50),
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-                Text(
-                    text = if (isExecuting) "Ejecutando comando..." else "Comando ejecutado",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (isExecuting) Color(0xFFFFC107) else Color(0xFF4CAF50)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun ToolResultBlock(
-    content: String,
-    modifier: Modifier = Modifier
-) {
-    // Extract image URLs from tool result content
-    val imageUrls = remember(content) {
-        val mdRegex = Regex("""!\[[^\]]*\]\((https?://[^\s)]+)\)""", RegexOption.IGNORE_CASE)
-        val urls = mdRegex.findAll(content).map { it.groupValues[1] }
-            .filter { url ->
-                url.isNotBlank() && url.length > 10 && !url.endsWith("...")
-            }
-            .toList()
-        android.util.Log.d("ToolResultBlock", "Extracted ${urls.size} image URLs from tool result (content length: ${content.length})")
-        urls.forEachIndexed { i, url -> android.util.Log.d("ToolResultBlock", "  Image [$i]: $url") }
-        if (urls.isEmpty()) {
-            android.util.Log.d("ToolResultBlock", "Content preview: ${content.take(300)}")
-        }
-        urls
-    }
-    // Text without image markdown for the collapsed view
-    val textContent = remember(content) {
-        val mdRegex = Regex("""!\[[^\]]*\]\(https?://[^\s)]+\)""", RegexOption.IGNORE_CASE)
-        mdRegex.replace(content, "").trim()
-    }
-
-    var expanded by remember { mutableStateOf(false) }
-
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF1E1E1E)
-        ),
-        shape = MaterialTheme.shapes.small,
-        modifier = modifier,
-        onClick = { expanded = !expanded }
-    ) {
-        if (expanded) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text(
-                    text = "Salida:",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF9E9E9E)
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                if (textContent.isNotBlank()) {
-                    val displayText = textContent.take(500) + if (textContent.length > 500) "\n..." else ""
-                    LinkableText(
-                        text = displayText,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                            color = Color(0xFFB0BEC5)
-                        ),
-                        linkColor = Color(0xFF64B5F6),
-                        maxLines = 15
-                    )
-                }
-                if (imageUrls.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    ImageCarousel(imageUrls = imageUrls)
-                }
-            }
-        } else {
-            Row(
-                modifier = Modifier.padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(
-                    Icons.Default.Terminal,
-                    contentDescription = null,
-                    tint = Color(0xFF9E9E9E),
-                    modifier = Modifier.size(16.dp)
-                )
-                Text(
-                    text = "Salida del comando",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF9E9E9E)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun ReasoningBlock(
-    reasoning: String,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF1A237E).copy(alpha = 0.15f)
-        ),
-        shape = MaterialTheme.shapes.small,
-        modifier = modifier,
-        border = androidx.compose.foundation.BorderStroke(
-            width = 1.dp,
-            color = Color(0xFF5C6BC0).copy(alpha = 0.3f)
-        )
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Psychology,
-                    contentDescription = null,
-                    tint = Color(0xFF5C6BC0),
-                    modifier = Modifier.size(16.dp)
-                )
-                Text(
-                    text = "Proceso de pensamiento",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF5C6BC0)
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = reasoning,
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace
-                ),
-                color = Color(0xFF7986CB)
-            )
-        }
-    }
-}
-
-@Composable
-fun LiveReasoningBlock(
-    reasoning: String,
-    modifier: Modifier = Modifier
-) {
-    val scrollState = rememberScrollState()
-
-    // Auto-scroll to bottom when reasoning updates
-    LaunchedEffect(reasoning) {
-        scrollState.animateScrollTo(scrollState.maxValue)
-    }
-
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF1A237E).copy(alpha = 0.12f)
-        ),
-        shape = MaterialTheme.shapes.small,
-        modifier = modifier,
-        border = androidx.compose.foundation.BorderStroke(
-            width = 1.dp,
-            color = Color(0xFF5C6BC0).copy(alpha = 0.25f)
-        )
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Psychology,
-                    contentDescription = null,
-                    tint = Color(0xFF5C6BC0),
-                    modifier = Modifier.size(16.dp)
-                )
-                Text(
-                    text = "Pensando...",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF5C6BC0)
-                )
-                CircularProgressIndicator(
-                    modifier = Modifier.size(12.dp),
-                    strokeWidth = 1.5.dp,
-                    color = Color(0xFF5C6BC0)
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = reasoning,
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace
-                ),
-                color = Color(0xFF7986CB),
-                modifier = Modifier
-                    .heightIn(max = 200.dp)
-                    .verticalScroll(scrollState)
-            )
-        }
-    }
-}
-
-private fun extractCommandFromToolCall(toolCall: com.aiagents.app.domain.model.ToolCall): String {
-    return try {
-        val args = com.google.gson.Gson().fromJson(
-            toolCall.function.arguments,
-            Map::class.java
-        )
-        args?.get("command")?.toString() ?: toolCall.function.arguments
-    } catch (e: Exception) {
-        toolCall.function.arguments
-    }
-}
-
-/**
- * Renders text with clickable URLs that open in the browser.
- */
-@Composable
-fun LinkableText(
-    text: String,
-    style: TextStyle,
-    linkColor: Color,
-    modifier: Modifier = Modifier,
-    maxLines: Int = Int.MAX_VALUE
-) {
-    val uriHandler = LocalUriHandler.current
-
-    val annotatedText = remember(text, style) {
-        buildMarkdownAnnotatedString(text, style, linkColor)
-    }
-
-    @Suppress("DEPRECATION")
-    ClickableText(
-        text = annotatedText,
-        style = style,
-        maxLines = maxLines,
-        modifier = modifier,
-        onClick = { offset ->
-            annotatedText.getStringAnnotations("URL", offset, offset)
-                .firstOrNull()?.let { annotation ->
-                    try {
-                        uriHandler.openUri(annotation.item)
-                    } catch (_: Exception) { }
-                }
-        }
-    )
-}
-
-private fun buildMarkdownAnnotatedString(
-    text: String,
-    baseStyle: TextStyle,
-    linkColor: Color
-): AnnotatedString {
-    return buildAnnotatedString {
-        val lines = text.split("\n")
-        lines.forEachIndexed { lineIndex, rawLine ->
-            if (lineIndex > 0) append("\n")
-
-            // Horizontal rule: ---, ***, ___  (3+ of same char, optionally spaced)
-            if (rawLine.trim().matches(Regex("""^[-*_]{3,}$"""))) {
-                append("─".repeat(20))
-                return@forEachIndexed
-            }
-
-            // Headers: # to ###### → bold + scaled size
-            val headerMatch = Regex("""^(#{1,6})\s+(.+)$""").find(rawLine)
-            if (headerMatch != null) {
-                val level = headerMatch.groupValues[1].length
-                val headerText = headerMatch.groupValues[2]
-                val fontSize = when (level) {
-                    1 -> (baseStyle.fontSize.value * 1.5f).sp
-                    2 -> (baseStyle.fontSize.value * 1.3f).sp
-                    3 -> (baseStyle.fontSize.value * 1.15f).sp
-                    else -> (baseStyle.fontSize.value * 1.05f).sp
-                }
-                withStyle(SpanStyle(fontWeight = FontWeight.Bold, fontSize = fontSize)) {
-                    appendInlineMarkdown(headerText, linkColor)
-                }
-                return@forEachIndexed
-            }
-
-            // Blockquote: > text
-            val blockquoteMatch = Regex("""^>\s*(.*)$""").find(rawLine)
-            if (blockquoteMatch != null) {
-                val quoteText = blockquoteMatch.groupValues[1]
-                append("┃ ")
-                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                    appendInlineMarkdown(quoteText, linkColor)
-                }
-                return@forEachIndexed
-            }
-
-            // Bullet lists: - item or * item (but not ** or ***)
-            val bulletMatch = Regex("""^(\s*)[-*](?!\*)\s+(.+)$""").find(rawLine)
-            if (bulletMatch != null) {
-                val indent = bulletMatch.groupValues[1]
-                val bulletText = bulletMatch.groupValues[2]
-                append("${indent}\u2022 ")
-                appendInlineMarkdown(bulletText, linkColor)
-                return@forEachIndexed
-            }
-
-            // Numbered lists: 1. item
-            val numberedMatch = Regex("""^(\s*)(\d+)\.\s+(.+)$""").find(rawLine)
-            if (numberedMatch != null) {
-                val indent = numberedMatch.groupValues[1]
-                val number = numberedMatch.groupValues[2]
-                val itemText = numberedMatch.groupValues[3]
-                append("${indent}$number. ")
-                appendInlineMarkdown(itemText, linkColor)
-                return@forEachIndexed
-            }
-
-            // Regular line with inline markdown
-            appendInlineMarkdown(rawLine, linkColor)
-        }
-    }
-}
-
-private enum class InlineToken {
-    BOLD_ITALIC_STAR,   // ***text***
-    BOLD_ITALIC_UNDER,  // ___text___
-    BOLD_STAR,          // **text**
-    BOLD_UNDER,         // __text__
-    ITALIC_STAR,        // *text*
-    ITALIC_UNDER,       // _text_
-    STRIKETHROUGH,      // ~~text~~
-    CODE,               // `text`
-    LINK,               // [text](url)
-    RAW_URL             // https://...
-}
-
-private data class InlineMatch(
-    val token: InlineToken,
-    val range: IntRange,
-    val content: String,
-    val url: String? = null
-)
-
-private fun findInlineMatches(text: String): List<InlineMatch> {
-    val matches = mutableListOf<InlineMatch>()
-
-    // Each pattern with its token type - order defines priority for overlapping matches
-    val patterns = listOf(
-        InlineToken.BOLD_ITALIC_STAR to Regex("""\*\*\*(.+?)\*\*\*"""),
-        InlineToken.BOLD_ITALIC_UNDER to Regex("""___(.+?)___"""),
-        InlineToken.BOLD_STAR to Regex("""\*\*(.+?)\*\*"""),
-        InlineToken.BOLD_UNDER to Regex("""__(.+?)__"""),
-        InlineToken.ITALIC_STAR to Regex("""\*(.+?)\*"""),
-        InlineToken.ITALIC_UNDER to Regex("""(?<=\s|^)_(.+?)_(?=\s|$|[.,;:!?])"""),
-        InlineToken.STRIKETHROUGH to Regex("""~~(.+?)~~"""),
-        InlineToken.CODE to Regex("""`([^`]+?)`"""),
-        InlineToken.LINK to Regex("""\[([^\]]+?)\]\((https?://[^\s)]+)\)"""),
-        InlineToken.RAW_URL to Regex("""(https?://[^\s)\]>]+)""")
-    )
-
-    // Collect all candidates
-    val candidates = mutableListOf<InlineMatch>()
-    for ((token, regex) in patterns) {
-        regex.findAll(text).forEach { m ->
-            val content = m.groupValues.getOrElse(1) { "" }
-            val url = if (token == InlineToken.LINK) m.groupValues.getOrElse(2) { null } else null
-            candidates.add(InlineMatch(token, m.range, content, url))
-        }
-    }
-
-    // Sort by start position, then by longest match (higher priority patterns consume more)
-    candidates.sortWith(compareBy({ it.range.first }, { -it.range.count() }))
-
-    // Greedily pick non-overlapping matches
-    var lastEnd = -1
-    for (candidate in candidates) {
-        if (candidate.range.first > lastEnd) {
-            matches.add(candidate)
-            lastEnd = candidate.range.last
-        }
-    }
-
-    return matches
-}
-
-private fun AnnotatedString.Builder.appendInlineMarkdown(
-    text: String,
-    linkColor: Color
-) {
-    val matches = findInlineMatches(text)
-
-    var lastIndex = 0
-    for (m in matches) {
-        // Append text before this match
-        if (m.range.first > lastIndex) {
-            append(text.substring(lastIndex, m.range.first))
-        }
-
-        when (m.token) {
-            InlineToken.BOLD_ITALIC_STAR, InlineToken.BOLD_ITALIC_UNDER -> {
-                withStyle(SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic)) {
-                    append(m.content)
-                }
-            }
-            InlineToken.BOLD_STAR, InlineToken.BOLD_UNDER -> {
-                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                    appendInlineMarkdown(m.content, linkColor)
-                }
-            }
-            InlineToken.ITALIC_STAR, InlineToken.ITALIC_UNDER -> {
-                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                    append(m.content)
-                }
-            }
-            InlineToken.STRIKETHROUGH -> {
-                withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) {
-                    append(m.content)
-                }
-            }
-            InlineToken.CODE -> {
-                withStyle(SpanStyle(
-                    fontFamily = FontFamily.Monospace,
-                    background = Color(0x33888888)
-                )) {
-                    append(m.content)
-                }
-            }
-            InlineToken.LINK -> {
-                pushStringAnnotation("URL", m.url!!)
-                withStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)) {
-                    append(m.content)
-                }
-                pop()
-            }
-            InlineToken.RAW_URL -> {
-                val url = m.content.trimEnd('.', ',', ';', ':', '!', '?')
-                pushStringAnnotation("URL", url)
-                withStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)) {
-                    append(url)
-                }
-                pop()
-                val trimmedChars = m.content.length - url.length
-                if (trimmedChars > 0) {
-                    append(m.content.takeLast(trimmedChars))
-                }
-            }
-        }
-        lastIndex = m.range.last + 1
-    }
-
-    // Append remaining text
-    if (lastIndex < text.length) {
-        append(text.substring(lastIndex))
-    }
-}
-
-/**
- * Renderiza el contenido de un mensaje, mostrando bloques de código
- * con syntax highlighting cuando corresponda.
- */
-@Composable
-fun MessageContent(
-    content: String,
-    isUser: Boolean,
-    isTool: Boolean,
-    modifier: Modifier = Modifier
-) {
-    val segments = try {
-        parseMessageWithCodeBlocks(content)
-    } catch (e: Exception) {
-        listOf(ContentSegment(SegmentType.TEXT, content))
-    }
-
-    val textAndCodeSegments = segments.filter { it.type != SegmentType.IMAGE }
-    val imageUrls = segments
-        .filter { it.type == SegmentType.IMAGE }
-        .map { it.content }
-        .filter { url ->
-            url.isNotBlank() &&
-            (url.startsWith("http://") || url.startsWith("https://")) &&
-            url.length > 10 &&
-            !url.endsWith("...")
-        }
-
-    val context = LocalContext.current
-    Column(modifier = modifier) {
-        // Render text and code segments
-        textAndCodeSegments.forEach { segment ->
-            when (segment.type) {
-                SegmentType.TEXT -> {
-                    val textColor = when {
-                        isUser -> Color.White
-                        isTool -> Color(0xFF00FF00)
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                    LinkableText(
-                        text = segment.content,
-                        style = MaterialTheme.typography.bodyLarge.copy(color = textColor),
-                        linkColor = Color(0xFF64B5F6)
-                    )
-                }
-                SegmentType.CODE_BLOCK -> {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    CodeBlock(
-                        code = segment.content,
-                        language = segment.language ?: "text"
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-                SegmentType.TABLE -> {
-                    val tableTextColor = when {
-                        isUser -> Color.White
-                        isTool -> Color(0xFF00FF00)
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    MarkdownTable(
-                        tableContent = segment.content,
-                        textColor = tableTextColor
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-                SegmentType.WEATHER -> {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    com.aiagents.app.ui.components.WeatherResultCard(weatherJson = segment.content)
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-                else -> {}
-            }
-        }
-
-        // Render images as carousel at the bottom
-        if (imageUrls.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(8.dp))
-            ImageCarousel(imageUrls = imageUrls)
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun ImageCarousel(
-    imageUrls: List<String>,
-    modifier: Modifier = Modifier
-) {
-    if (imageUrls.isEmpty()) return
-
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val pagerState = rememberPagerState(pageCount = { imageUrls.size })
-    var downloadingIndex by remember { mutableIntStateOf(-1) }
-    // Track failed images to hide them visually
-    val failedImages = remember { mutableStateMapOf<Int, Boolean>() }
-
-    android.util.Log.d("ImageCarousel", "Rendering carousel with ${imageUrls.size} images")
-    imageUrls.forEachIndexed { i, url ->
-        android.util.Log.d("ImageCarousel", "  [$i] $url")
-    }
-
-    Column(modifier = modifier) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(4f / 3f)
-                .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
-        ) {
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxSize(),
-                pageSpacing = 8.dp
-            ) { page ->
-                val url = imageUrls[page]
-                val isFailed = failedImages[page] == true
-
-                if (isFailed) {
-                    // Show placeholder for failed images
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color(0xFF2A2A2A)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                Icons.Default.BrokenImage,
-                                contentDescription = null,
-                                tint = Color.Gray,
-                                modifier = Modifier.size(48.dp)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                "No se pudo cargar",
-                                color = Color.Gray,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
-                } else {
-                    AsyncImage(
-                        model = ImageRequest.Builder(context)
-                            .data(url)
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = null,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp)),
-                        contentScale = ContentScale.Crop,
-                        onState = { state ->
-                            when (state) {
-                                is AsyncImagePainter.State.Error -> {
-                                    android.util.Log.e("ImageCarousel", "Failed to load image [$page]: $url", state.result.throwable)
-                                    failedImages[page] = true
-                                }
-                                is AsyncImagePainter.State.Success -> {
-                                    android.util.Log.d("ImageCarousel", "Successfully loaded image [$page]: $url")
-                                }
-                                else -> {}
-                            }
-                        }
-                    )
-                }
-            }
-
-            // Page counter badge
-            if (imageUrls.size > 1) {
-                Surface(
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-                    color = Color.Black.copy(alpha = 0.6f),
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                ) {
-                    Text(
-                        text = "${pagerState.currentPage + 1}/${imageUrls.size}",
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
-            }
-
-            // Download button (only for non-failed images)
-            if (failedImages[pagerState.currentPage] != true) {
-                val isDownloading = downloadingIndex == pagerState.currentPage
-                Surface(
-                    shape = CircleShape,
-                    color = Color.Black.copy(alpha = 0.6f),
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(8.dp)
-                        .clickable(enabled = !isDownloading) {
-                            val currentPage = pagerState.currentPage
-                            downloadingIndex = currentPage
-                            scope.launch {
-                                downloadImageToGallery(
-                                    context,
-                                    imageUrls[currentPage],
-                                    "image_${System.currentTimeMillis()}"
-                                )
-                                downloadingIndex = -1
-                            }
-                        }
-                ) {
-                    if (isDownloading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier
-                                .padding(8.dp)
-                                .size(24.dp),
-                            color = Color.White,
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.Download,
-                            contentDescription = "Descargar imagen",
-                            tint = Color.White,
-                            modifier = Modifier.padding(8.dp)
-                        )
-                    }
-                }
-            }
-        }
-
-        // Dot indicators
-        if (imageUrls.size > 1) {
-            Row(
-                horizontalArrangement = Arrangement.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp)
-            ) {
-                repeat(imageUrls.size) { index ->
-                    val isSelected = pagerState.currentPage == index
-                    val isFailed = failedImages[index] == true
-                    Box(
-                        modifier = Modifier
-                            .padding(horizontal = 3.dp)
-                            .size(if (isSelected) 8.dp else 6.dp)
-                            .clip(CircleShape)
-                            .background(
-                                when {
-                                    isFailed -> Color.Red.copy(alpha = 0.5f)
-                                    isSelected -> MaterialTheme.colorScheme.primary
-                                    else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
-                                }
-                            )
-                    )
-                }
-            }
-        }
-    }
-}
-
-private suspend fun downloadImageToGallery(context: Context, url: String, fileName: String) {
-    try {
-        withContext(Dispatchers.IO) {
-            val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-            connection.connectTimeout = 10000
-            connection.readTimeout = 10000
-            connection.connect()
-            val bytes = connection.inputStream.use { it.readBytes() }
-            connection.disconnect()
-
-            val contentType = connection.contentType ?: "image/jpeg"
-            val extension = when {
-                contentType.contains("png") -> "png"
-                contentType.contains("webp") -> "webp"
-                contentType.contains("gif") -> "gif"
-                else -> "jpg"
-            }
-            val fullName = "$fileName.$extension"
-            val mimeType = if (contentType.startsWith("image/")) contentType else "image/$extension"
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val values = ContentValues().apply {
-                    put(MediaStore.Images.Media.DISPLAY_NAME, fullName)
-                    put(MediaStore.Images.Media.MIME_TYPE, mimeType)
-                    put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/AIAgents")
-                    put(MediaStore.Images.Media.IS_PENDING, 1)
-                }
-                val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                uri?.let {
-                    context.contentResolver.openOutputStream(it)?.use { os -> os.write(bytes) }
-                    values.clear()
-                    values.put(MediaStore.Images.Media.IS_PENDING, 0)
-                    context.contentResolver.update(it, values, null, null)
-                }
-            } else {
-                val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES + "/AIAgents")
-                dir.mkdirs()
-                val file = File(dir, fullName)
-                file.writeBytes(bytes)
-            }
-
-            withContext(Dispatchers.Main) {
-                Toast.makeText(context, "Imagen guardada", Toast.LENGTH_SHORT).show()
-            }
-        }
-    } catch (e: Exception) {
-        withContext(Dispatchers.Main) {
-            Toast.makeText(context, "Error al descargar: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
-    }
-}
 
 @Composable
 fun EmptyChatState(assistantName: String, modifier: Modifier = Modifier) {
@@ -2641,6 +1959,7 @@ fun ChatInput(
     supportsFiles: Boolean,
     isSTTEnabled: Boolean = false,
     isListening: Boolean = false,
+    isSTTProcessing: Boolean = false,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit = {},
@@ -2690,12 +2009,21 @@ fun ChatInput(
             )
             // Voice input button (between TextField and Send)
             if (isSTTEnabled) {
-                VoiceInputButton(
-                    isListening = isListening,
-                    onStartListening = onStartListening,
-                    onStopListening = onStopListening,
-                    enabled = !isLoading
-                )
+                if (isSTTProcessing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .padding(4.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    VoiceInputButton(
+                        isListening = isListening,
+                        onStartListening = onStartListening,
+                        onStopListening = onStopListening,
+                        enabled = !isLoading
+                    )
+                }
             }
             // Stop button — visible only while agent is working
             if (isLoading) {
@@ -2952,7 +2280,7 @@ fun SettingsDialog(
                         onValueChange = {},
                         readOnly = true,
                         leadingIcon = {
-                            Icon(Icons.Default.SmartToy, contentDescription = null, modifier = Modifier.size(20.dp))
+                            CortexBubbleMark(modifier = Modifier.size(24.dp))
                         },
                         trailingIcon = {
                             ExposedDropdownMenuDefaults.TrailingIcon(expanded = agentExpanded)
@@ -2970,7 +2298,7 @@ fun SettingsDialog(
                             DropdownMenuItem(
                                 text = { Text(agent.name) },
                                 leadingIcon = {
-                                    Icon(Icons.Default.SmartToy, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    CortexBubbleMark(modifier = Modifier.size(22.dp))
                                 },
                                 onClick = {
                                     onAgentSelected(agent.id)
@@ -3026,13 +2354,13 @@ fun SettingsDialog(
                                     text = {
                                         Column {
                                             Text(
-                                                modelInfo.modelId,
+                                                modelInfo.displayModelName(),
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
                                                 style = MaterialTheme.typography.bodyMedium
                                             )
                                             Text(
-                                                if (modelInfo.provider == com.aiagents.app.domain.model.ProviderType.MANAGED) "Plan" else modelInfo.provider.name,
+                                                modelInfo.displayProviderName(),
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.primary
                                             )
@@ -3420,7 +2748,40 @@ fun openFile(context: Context, file: AgentFile) {
         val chooser = Intent.createChooser(intent, "Abrir con")
         context.startActivity(chooser)
     } catch (e: Exception) {
-        Toast.makeText(context, "Error al abrir archivo: ${e.message}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(
+            context,
+            userVisibleError(context, e, "workspace_files", "file_open"),
+            Toast.LENGTH_LONG
+        ).show()
+    }
+}
+
+fun shareFile(context: Context, file: AgentFile) {
+    try {
+        val uri = if (file.path.startsWith("content://")) {
+            Uri.parse(file.path)
+        } else {
+            val localFile = File(file.path)
+            if (!localFile.exists()) {
+                Toast.makeText(context, "Archivo no encontrado", Toast.LENGTH_SHORT).show()
+                return
+            }
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", localFile)
+        }
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = file.mimeType.ifBlank { "application/octet-stream" }
+            putExtra(Intent.EXTRA_STREAM, uri)
+            clipData = ClipData.newUri(context.contentResolver, file.name, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(Intent.createChooser(sendIntent, "Compartir ${file.name}"))
+    } catch (error: Exception) {
+        Toast.makeText(
+            context,
+            userVisibleError(context, error, "workspace_files", "file_share"),
+            Toast.LENGTH_LONG
+        ).show()
     }
 }
 

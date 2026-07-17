@@ -6,6 +6,7 @@
     <color name="secondary">#10B981</color>
     <color name="secondary_dark">#059669</color>
     <color name="background">#0F172A</color>
+    <color name="cortex_launch_background">#070B18</color>
     <color name="surface">#1E293B</color>
     <color name="surface_variant">#334155</color>
     <color name="on_background">#F8FAFC</color>

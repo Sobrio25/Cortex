@@ -46,6 +46,7 @@ class CortexAssistantResponsePolicyTest {
         assertEquals(listOf(MessageRole.USER, MessageRole.TOOL), visible.map(Message::role))
         assertTrue(visible.last().content.contains("lluvia 76%"))
         assertFalse(visible.last().content.contains("Humedad"))
+        assertFalse(visible.last().content.contains("🌦️"))
         assertTrue(visible.last().content.split(Regex("\\s+")).size <= 18)
     }
 
@@ -69,5 +70,35 @@ class CortexAssistantResponsePolicyTest {
         )
 
         assertEquals("Recordatorio creado para 15/07/2026 09:30.", visible.single().content)
+    }
+
+    @Test
+    fun `assistant speaks structured weather instead of compact card punctuation`() {
+        val weather = Message(
+            role = MessageRole.TOOL,
+            content = "raw",
+            toolResults = listOf(
+                ToolResult(
+                    toolCallId = "weather-voice",
+                    name = "weather_current",
+                    content = """
+                        Clima actual en Ixtapaluca
+                        Despejado
+                        32°C · mín. 18°C · máx. 33°C
+                        <!--WEATHER_DATA:{"type":"current","city":"Ixtapaluca","country":"México","conditionId":800,"description":"Despejado","temp":32,"minTemp":18,"maxTemp":33,"unitSymbol":"°C"}-->
+                    """.trimIndent()
+                )
+            )
+        )
+
+        val spoken = CortexAssistantResponsePolicy.spokenResponse(
+            weather,
+            Locale.forLanguageTag("es-MX")
+        )
+
+        assertTrue(spoken.contains("32 grados Celsius"))
+        assertTrue(spoken.contains("la máxima de 33 grados Celsius"))
+        assertFalse(spoken.contains("°"))
+        assertFalse(spoken.contains("·"))
     }
 }

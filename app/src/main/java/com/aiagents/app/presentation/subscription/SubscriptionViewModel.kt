@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aiagents.app.data.auth.FirebaseAuthManager
 import com.aiagents.app.data.billing.PlayBillingManager
+import com.aiagents.app.data.diagnostics.AppErrorReporter
+import com.aiagents.app.data.diagnostics.ErrorReportContext
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.repository.SubscriptionRepository
 import com.aiagents.app.domain.model.SubscriptionPlan
@@ -29,9 +31,13 @@ class SubscriptionViewModel @Inject constructor(
     private val repository: SubscriptionRepository,
     private val billing: PlayBillingManager,
     private val securePreferences: SecurePreferences,
-    private val firebaseAuthManager: FirebaseAuthManager
+    private val firebaseAuthManager: FirebaseAuthManager,
+    private val errorReporter: AppErrorReporter
 ) : ViewModel() {
     val usage: StateFlow<UsageSnapshot> = repository.usage
+    val models = repository.models
+    val catalog = repository.catalog
+    val lastInferenceUsage = repository.lastInferenceUsage
     val products = billing.products.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     private val _uiState = MutableStateFlow(SubscriptionUiState())
@@ -45,7 +51,7 @@ class SubscriptionViewModel @Inject constructor(
         billing.connect()
         viewModelScope.launch {
             repository.refresh().onFailure {
-                _uiState.value = SubscriptionUiState(false, it.message)
+                _uiState.value = SubscriptionUiState(false, purchaseError(it, "billing_refresh"))
             }.onSuccess {
                 applyAccountConsent()
                 _uiState.value = SubscriptionUiState(false)
@@ -55,7 +61,12 @@ class SubscriptionViewModel @Inject constructor(
             billing.purchaseUpdates.collect(::processPurchase)
         }
         viewModelScope.launch {
-            billing.errors.collect { _uiState.value = _uiState.value.copy(loading = false, message = it) }
+            billing.errors.collect { detail ->
+                _uiState.value = _uiState.value.copy(
+                    loading = false,
+                    message = purchaseError(IllegalStateException(detail), "billing_client")
+                )
+            }
         }
     }
 
@@ -95,8 +106,17 @@ class SubscriptionViewModel @Inject constructor(
                     _uiState.value = SubscriptionUiState(false, "Plan activado")
                 }
                 .onFailure {
-                    _uiState.value = SubscriptionUiState(false, it.message ?: "No se pudo verificar la compra")
+                    _uiState.value = SubscriptionUiState(
+                        false,
+                        purchaseError(it, "purchase_verification")
+                    )
                 }
         }
     }
+
+    private fun purchaseError(error: Throwable, operation: String): String =
+        errorReporter.present(
+            error,
+            ErrorReportContext(component = "subscription", operation = operation)
+        ).displayMessage
 }

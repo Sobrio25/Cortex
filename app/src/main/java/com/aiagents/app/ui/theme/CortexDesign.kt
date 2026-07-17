@@ -13,9 +13,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.dp
 
 /** Shared visual tokens extracted from the Cortex voice assistant experience. */
@@ -88,37 +92,150 @@ object CortexTheme {
 }
 
 @Composable
-fun CortexMark(modifier: Modifier = Modifier) {
+fun CortexMark(
+    modifier: Modifier = Modifier,
+    rotationDegrees: Float = 0f,
+    showActivityArc: Boolean = false
+) {
+    CortexBubbleMark(
+        modifier = modifier,
+        phaseDegrees = rotationDegrees,
+        activityColor = if (showActivityArc) CortexColors.Mint else CortexColors.Blue
+    )
+}
+
+/** High-detail, glass-like assistant orb shared by assistant, agent, and app identity UI. */
+@Composable
+fun CortexBubbleMark(
+    modifier: Modifier = Modifier,
+    phaseDegrees: Float = 0f,
+    activityColor: Color = CortexColors.Blue,
+    error: Boolean = false
+) {
+    val rimAccent = if (error) Color(0xFFFF817A) else activityColor
     Canvas(modifier) {
-        val radius = size.minDimension / 2f
+        val diameter = size.minDimension
+        val radius = diameter * 0.39f
+        val sphereCenter = center
+
+        // Soft halo plus a lower-right contact shadow give the sphere space and weight.
+        drawCircle(
+            brush = Brush.radialGradient(
+                listOf(rimAccent.copy(alpha = 0.25f), Color.Transparent),
+                center = sphereCenter,
+                radius = diameter * 0.52f
+            ),
+            radius = diameter * 0.52f,
+            center = sphereCenter
+        )
+        drawOval(
+            brush = Brush.radialGradient(
+                listOf(Color.Black.copy(alpha = 0.34f), Color.Transparent),
+                center = sphereCenter + Offset(radius * 0.16f, radius * 0.64f),
+                radius = radius * 0.88f
+            ),
+            topLeft = sphereCenter + Offset(-radius * 0.72f, radius * 0.48f),
+            size = Size(radius * 1.58f, radius * 0.52f)
+        )
+
+        // Translucent body: off-axis lighting keeps it spherical over bright and dark apps.
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = 0.30f),
+                    Color(0xCC302A48),
+                    Color(0xF0141220)
+                ),
+                center = sphereCenter + Offset(-radius * 0.28f, -radius * 0.34f),
+                radius = radius * 1.38f
+            ),
+            radius = radius,
+            center = sphereCenter
+        )
+
+        // Slow internal iridescence moves independently from the static light reflections.
+        rotate(phaseDegrees, sphereCenter) {
+            drawCircle(
+                brush = Brush.sweepGradient(
+                    listOf(
+                        CortexColors.Violet.copy(alpha = 0.72f),
+                        CortexColors.Blue.copy(alpha = 0.62f),
+                        CortexColors.Mint.copy(alpha = 0.55f),
+                        CortexColors.Pink.copy(alpha = 0.60f),
+                        CortexColors.Violet.copy(alpha = 0.72f)
+                    ),
+                    center = sphereCenter
+                ),
+                radius = radius * 0.84f,
+                center = sphereCenter
+            )
+            drawCircle(
+                brush = Brush.radialGradient(
+                    listOf(Color(0xC8201B31), Color(0xEE0D0B13)),
+                    center = sphereCenter + Offset(radius * 0.14f, radius * 0.18f),
+                    radius = radius * 0.88f
+                ),
+                radius = radius * 0.68f,
+                center = sphereCenter
+            )
+        }
+
+        // Uneven refractive rim: bright upper-left, colored sides, darker lower-right.
         drawCircle(
             brush = Brush.sweepGradient(
                 listOf(
-                    CortexColors.Violet,
-                    CortexColors.Blue,
-                    CortexColors.Mint,
-                    CortexColors.Pink,
-                    CortexColors.Violet
+                    Color.White.copy(alpha = 0.92f),
+                    CortexColors.Blue.copy(alpha = 0.86f),
+                    CortexColors.Mint.copy(alpha = 0.56f),
+                    Color.White.copy(alpha = 0.18f),
+                    CortexColors.Pink.copy(alpha = 0.72f),
+                    CortexColors.Violet.copy(alpha = 0.88f),
+                    Color.White.copy(alpha = 0.92f)
                 ),
-                center = center
+                center = sphereCenter
             ),
-            radius = radius
+            radius = radius * 0.97f,
+            center = sphereCenter,
+            style = Stroke(width = radius * 0.105f)
+        )
+        drawCircle(
+            color = Color.White.copy(alpha = 0.16f),
+            radius = radius * 0.86f,
+            center = sphereCenter,
+            style = Stroke(width = radius * 0.025f)
+        )
+
+        // Specular crescent, pin light, and lower bounce complete the glass illusion.
+        drawArc(
+            brush = Brush.linearGradient(
+                listOf(Color.White.copy(alpha = 0.92f), Color.White.copy(alpha = 0.08f)),
+                start = sphereCenter + Offset(-radius, -radius),
+                end = sphereCenter
+            ),
+            startAngle = 202f,
+            sweepAngle = 86f,
+            useCenter = false,
+            topLeft = sphereCenter - Offset(radius * 0.70f, radius * 0.73f),
+            size = Size(radius * 1.40f, radius * 1.46f),
+            style = Stroke(width = radius * 0.13f, cap = StrokeCap.Round)
         )
         drawCircle(
             brush = Brush.radialGradient(
-                colors = listOf(Color(0xFF3A3350), Color(0xFF17131F)),
-                center = center + Offset(-radius * 0.18f, -radius * 0.20f),
-                radius = radius * 0.82f
+                listOf(Color.White.copy(alpha = 0.95f), Color.Transparent),
+                center = sphereCenter + Offset(-radius * 0.42f, -radius * 0.45f),
+                radius = radius * 0.24f
             ),
-            radius = radius * 0.72f
+            radius = radius * 0.24f,
+            center = sphereCenter + Offset(-radius * 0.42f, -radius * 0.45f)
         )
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(Color.White.copy(alpha = 0.34f), Color.Transparent),
-                center = center + Offset(-radius * 0.30f, -radius * 0.34f),
-                radius = radius * 0.70f
-            ),
-            radius = radius * 0.72f
+        drawArc(
+            color = rimAccent.copy(alpha = 0.46f),
+            startAngle = 54f,
+            sweepAngle = 72f,
+            useCenter = false,
+            topLeft = sphereCenter - Offset(radius * 0.80f, radius * 0.80f),
+            size = Size(radius * 1.60f, radius * 1.60f),
+            style = Stroke(width = radius * 0.055f, cap = StrokeCap.Round)
         )
     }
 }

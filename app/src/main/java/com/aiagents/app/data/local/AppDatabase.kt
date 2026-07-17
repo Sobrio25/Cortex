@@ -48,7 +48,7 @@ import com.aiagents.app.domain.model.WeatherWidgetsBuiltin
         SkillReviewEntity::class,
         SubagentExecutionEntity::class
     ],
-    version = 46,
+    version = 47,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -1134,6 +1134,24 @@ SIEMPRE usa la herramienta pubmed_search para buscar estudios científicos relev
                       )
                     """.trimIndent(),
                     arrayOf(AgentOrchestrator.DEFAULT_ORCHESTRATOR_PROMPT)
+                )
+            }
+        }
+
+        /** Separates system-assistant transcripts from normal chat and memory extraction. */
+        val MIGRATION_46_47 = object : Migration(46, 47) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE conversations ADD COLUMN contextKind TEXT NOT NULL DEFAULT 'CHAT'"
+                )
+                db.execSQL(
+                    """
+                    UPDATE conversations
+                    SET contextKind = 'VOICE_ASSISTANT'
+                    WHERE workspaceId IN (
+                        SELECT id FROM workspaces WHERE name = '__global__'
+                    )
+                    """.trimIndent()
                 )
             }
         }

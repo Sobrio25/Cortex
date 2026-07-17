@@ -2,6 +2,8 @@ package com.aiagents.app.presentation.local_models
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aiagents.app.data.diagnostics.AppErrorReporter
+import com.aiagents.app.data.diagnostics.ErrorReportContext
 import com.aiagents.app.data.local.CustomLocalModelDao
 import com.aiagents.app.data.model.CustomLocalModelEntity
 import com.aiagents.app.data.repository.HFBrowsableFile
@@ -21,7 +23,8 @@ import javax.inject.Inject
 @HiltViewModel
 class HuggingFaceBrowseViewModel @Inject constructor(
     private val huggingFaceRepository: HuggingFaceRepository,
-    private val customLocalModelDao: CustomLocalModelDao
+    private val customLocalModelDao: CustomLocalModelDao,
+    private val errorReporter: AppErrorReporter
 ) : ViewModel() {
 
     private val _searchQuery = MutableStateFlow("")
@@ -130,7 +133,7 @@ class HuggingFaceBrowseViewModel @Inject constructor(
                 }
                 .onFailure { throwable ->
                     if (generation == searchGeneration) {
-                        _error.value = throwable.userFacingMessage("No se pudo cargar la siguiente página")
+                        _error.value = throwable.userFacingMessage("model_search_next_page")
                     }
                 }
 
@@ -156,7 +159,7 @@ class HuggingFaceBrowseViewModel @Inject constructor(
                 }
                 .onFailure { throwable ->
                     _fileErrors.value = _fileErrors.value + (
-                        model.repoId to throwable.userFacingMessage("No se pudieron consultar los archivos")
+                        model.repoId to throwable.userFacingMessage("model_files_load")
                     )
                 }
 
@@ -202,7 +205,7 @@ class HuggingFaceBrowseViewModel @Inject constructor(
                 _addedFileKeys.value = _addedFileKeys.value + key
                 _addedMessage.value = "${model.repoName} se agregó a tu biblioteca"
             } catch (e: Exception) {
-                _error.value = e.userFacingMessage("No se pudo agregar el modelo")
+                _error.value = e.userFacingMessage("model_library_add")
             }
         }
     }
@@ -263,7 +266,7 @@ class HuggingFaceBrowseViewModel @Inject constructor(
                 .onFailure { throwable ->
                     if (generation != searchGeneration) return@onFailure
                     _browseResults.value = emptyList()
-                    _error.value = throwable.userFacingMessage("No se pudieron buscar modelos")
+                    _error.value = throwable.userFacingMessage("model_search")
                 }
 
             if (generation == searchGeneration) {
@@ -287,8 +290,11 @@ class HuggingFaceBrowseViewModel @Inject constructor(
         _fileErrors.value = emptyMap()
     }
 
-    private fun Throwable.userFacingMessage(fallback: String): String =
-        message?.takeIf { it.isNotBlank() } ?: fallback
+    private fun Throwable.userFacingMessage(operation: String): String =
+        errorReporter.present(
+            this,
+            ErrorReportContext(component = "huggingface_browse", operation = operation)
+        ).displayMessage
 
     private fun formatDownloads(downloads: Long): String = when {
         downloads >= 1_000_000 -> "%.1f M".format(downloads / 1_000_000f)

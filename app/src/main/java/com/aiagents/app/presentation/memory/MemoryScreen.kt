@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aiagents.app.data.model.MemoryEntity
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -32,18 +33,18 @@ fun MemoryScreen(
     onBack: () -> Unit,
     viewModel: MemoryViewModel = hiltViewModel()
 ) {
-    val memories by viewModel.memories.collectAsState()
-    val totalCount by viewModel.totalCount.collectAsState()
-    val selectedCategory by viewModel.selectedCategory.collectAsState()
-    val searchQuery by viewModel.searchQuery.collectAsState()
-    val contextFileEditors by viewModel.contextFileEditors.collectAsState()
-    val selectedContextFile by viewModel.selectedContextFile.collectAsState()
+    val memories by viewModel.memories.collectAsStateWithLifecycle()
+    val totalCount by viewModel.totalCount.collectAsStateWithLifecycle()
+    val selectedCategory by viewModel.selectedCategory.collectAsStateWithLifecycle()
+    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val contextFileEditors by viewModel.contextFileEditors.collectAsStateWithLifecycle()
+    val selectedContextFile by viewModel.selectedContextFile.collectAsStateWithLifecycle()
     val contextFileEditor = contextFileEditors.getValue(selectedContextFile)
 
     var showDeleteAllDialog by remember { mutableStateOf(false) }
     var editingMemory by remember { mutableStateOf<MemoryEntity?>(null) }
     val context = LocalContext.current
-    val exportResult by viewModel.exportResult.collectAsState()
+    val exportResult by viewModel.exportResult.collectAsStateWithLifecycle()
 
     val contextFileExportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/markdown")

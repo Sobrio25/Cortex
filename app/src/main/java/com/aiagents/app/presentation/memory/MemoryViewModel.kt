@@ -5,6 +5,8 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aiagents.app.data.diagnostics.AppErrorReporter
+import com.aiagents.app.data.diagnostics.ErrorReportContext
 import com.aiagents.app.data.local.MemoryDao
 import com.aiagents.app.data.memory.CortexMarkdownMemoryStore
 import com.aiagents.app.data.memory.CortexMemoryPolicy
@@ -34,6 +36,7 @@ class MemoryViewModel @Inject constructor(
     private val cortexMarkdownMemoryStore: CortexMarkdownMemoryStore,
     private val cortexProfileStore: CortexProfileStore,
     private val secondaryMemoryStore: SecondaryMemoryStore,
+    private val errorReporter: AppErrorReporter,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -211,7 +214,7 @@ class MemoryViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "${kind.fileName} export failed", e)
                 updateEditor(kind) {
-                    it.copy(result = "No se pudo exportar ${kind.fileName}: ${e.message}")
+                    it.copy(result = memoryError(e, "memory_context_export"))
                 }
             }
         }
@@ -263,7 +266,7 @@ class MemoryViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "${kind.fileName} import failed", e)
                 updateEditor(kind) {
-                    it.copy(result = "No se pudo importar ${kind.fileName}: ${e.message}")
+                    it.copy(result = memoryError(e, "memory_context_import"))
                 }
             }
         }
@@ -313,7 +316,7 @@ class MemoryViewModel @Inject constructor(
                 _totalCount.value = memoryDao.count()
             } catch (e: Exception) {
                 Log.e(TAG, "Secondary memory load failed", e)
-                _exportResult.value = "No se pudo cargar la memoria secundaria: ${e.message}"
+                _exportResult.value = memoryError(e, "memory_load")
             }
         }
     }
@@ -336,7 +339,7 @@ class MemoryViewModel @Inject constructor(
                 loadMemories()
             } catch (e: Exception) {
                 Log.e(TAG, "Secondary memory delete failed for id=$id", e)
-                _exportResult.value = "No se pudo eliminar la memoria: ${e.message}"
+                _exportResult.value = memoryError(e, "memory_delete")
             }
         }
     }
@@ -353,7 +356,7 @@ class MemoryViewModel @Inject constructor(
                 loadMemories(reconcileActive = true)
             } catch (e: Exception) {
                 Log.e(TAG, "Secondary memory update failed for id=$id", e)
-                _exportResult.value = "No se pudo actualizar la memoria: ${e.message}"
+                _exportResult.value = memoryError(e, "memory_update")
             }
         }
     }
@@ -368,7 +371,7 @@ class MemoryViewModel @Inject constructor(
                 loadMemories(reconcileActive = true)
             } catch (e: Exception) {
                 Log.e(TAG, "Secondary memory cleanup failed", e)
-                _exportResult.value = "No se pudo depurar la memoria secundaria: ${e.message}"
+                _exportResult.value = memoryError(e, "memory_cleanup")
             }
         }
     }
@@ -381,7 +384,7 @@ class MemoryViewModel @Inject constructor(
                 loadMemories()
             } catch (e: Exception) {
                 Log.e(TAG, "Secondary memory clear failed", e)
-                _exportResult.value = "No se pudo borrar la memoria secundaria: ${e.message}"
+                _exportResult.value = memoryError(e, "memory_clear")
             }
         }
     }
@@ -410,7 +413,7 @@ class MemoryViewModel @Inject constructor(
                 _exportResult.value = "Exportadas ${all.size} memorias"
             } catch (e: Exception) {
                 Log.e(TAG, "Export failed", e)
-                _exportResult.value = "Error: ${e.message}"
+                _exportResult.value = memoryError(e, "memory_export")
             }
         }
     }
@@ -440,10 +443,16 @@ class MemoryViewModel @Inject constructor(
                 loadMemories()
             } catch (e: Exception) {
                 Log.e(TAG, "Import failed", e)
-                _exportResult.value = "Error: ${e.message}"
+                _exportResult.value = memoryError(e, "memory_import")
             }
         }
     }
+
+    private fun memoryError(error: Throwable, operation: String): String =
+        errorReporter.present(
+            error,
+            ErrorReportContext(component = "memory", operation = operation)
+        ).displayMessage
 }
 
 enum class ContextFileKind(val fileName: String) {

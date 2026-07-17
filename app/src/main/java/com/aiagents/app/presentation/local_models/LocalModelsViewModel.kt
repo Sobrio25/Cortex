@@ -12,6 +12,8 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import com.aiagents.app.data.diagnostics.AppErrorReporter
+import com.aiagents.app.data.diagnostics.ErrorReportContext
 import com.aiagents.app.data.local.CustomLocalModelDao
 import com.aiagents.app.data.local.LocalModelRepository
 import com.aiagents.app.data.local.ModelDownloadWorker
@@ -37,6 +39,7 @@ class LocalModelsViewModel @Inject constructor(
     private val modelRepository: LocalModelRepository,
     private val agentRepository: AgentRepository,
     private val customLocalModelDao: CustomLocalModelDao,
+    private val errorReporter: AppErrorReporter,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -234,7 +237,11 @@ class LocalModelsViewModel @Inject constructor(
                         val detail = workInfo.outputData
                             .getString(ModelDownloadWorker.OUTPUT_ERROR_MESSAGE)
                             ?: "Verifica tu conexión e intenta de nuevo"
-                        _errorMessage.value = "Error descargando ${model.name}: $detail"
+                        _errorMessage.value = modelError(
+                            IllegalStateException(detail),
+                            operation = "local_model_download",
+                            model = model.id
+                        )
                     }
                     WorkInfo.State.CANCELLED -> {
                         _downloadProgress.value = _downloadProgress.value - model.id
@@ -285,11 +292,26 @@ class LocalModelsViewModel @Inject constructor(
                 true
             },
             onFailure = { e ->
-                _errorMessage.value = "Error importando modelo: ${e.message}"
+                _errorMessage.value = modelError(
+                    e,
+                    operation = "local_model_import",
+                    model = targetFileName.substringBeforeLast(".")
+                )
                 false
             }
         )
     }
+
+    private fun modelError(error: Throwable, operation: String, model: String): String =
+        errorReporter.present(
+            error,
+            ErrorReportContext(
+                component = "local_models",
+                operation = operation,
+                provider = ProviderType.LOCAL.name,
+                model = model
+            )
+        ).displayMessage
 
     fun cancelDownload(modelId: String) {
         workManager.cancelUniqueWork("download_$modelId")

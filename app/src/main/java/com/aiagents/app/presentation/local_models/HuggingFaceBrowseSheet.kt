@@ -59,7 +59,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,17 +82,17 @@ fun HuggingFaceBrowseSheet(
     onModelAdded: () -> Unit,
     viewModel: HuggingFaceBrowseViewModel = hiltViewModel()
 ) {
-    val searchQuery by viewModel.searchQuery.collectAsState()
-    val browseResults by viewModel.browseResults.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val isLoadingMore by viewModel.isLoadingMore.collectAsState()
-    val hasMore by viewModel.hasMore.collectAsState()
-    val hasSearched by viewModel.hasSearched.collectAsState()
-    val loadingFileRepos by viewModel.loadingFileRepos.collectAsState()
-    val fileErrors by viewModel.fileErrors.collectAsState()
-    val addedFileKeys by viewModel.addedFileKeys.collectAsState()
-    val error by viewModel.error.collectAsState()
-    val addedMessage by viewModel.addedMessage.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val browseResults by viewModel.browseResults.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val isLoadingMore by viewModel.isLoadingMore.collectAsStateWithLifecycle()
+    val hasMore by viewModel.hasMore.collectAsStateWithLifecycle()
+    val hasSearched by viewModel.hasSearched.collectAsStateWithLifecycle()
+    val loadingFileRepos by viewModel.loadingFileRepos.collectAsStateWithLifecycle()
+    val fileErrors by viewModel.fileErrors.collectAsStateWithLifecycle()
+    val addedFileKeys by viewModel.addedFileKeys.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
+    val addedMessage by viewModel.addedMessage.collectAsStateWithLifecycle()
 
     var compatibleOnly by rememberSaveable { mutableStateOf(false) }
     val visibleResults = remember(browseResults, compatibleOnly) {

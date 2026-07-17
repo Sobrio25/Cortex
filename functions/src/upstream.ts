@@ -7,7 +7,85 @@ export interface UpstreamResult {
     finishReason: string | null;
     reasoning?: string | null;
   };
-  usage: { promptTokens: number; completionTokens: number };
+  usage: { promptTokens: number; completionTokens: number; estimated: boolean };
+  upstream: {
+    provider: string;
+    model: string;
+    gateway: string;
+    fallback: boolean;
+    fallbackCategory?: UpstreamFailureCategory;
+  };
+}
+
+export type UpstreamFailureCategory =
+  | "INVALID_REQUEST"
+  | "AUTHENTICATION"
+  | "PERMISSION"
+  | "MODEL_UNAVAILABLE"
+  | "RATE_LIMIT"
+  | "TIMEOUT"
+  | "CAPACITY"
+  | "NETWORK"
+  | "MALFORMED_RESPONSE"
+  | "UNKNOWN";
+
+export class UpstreamError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly category: UpstreamFailureCategory,
+    public readonly retryable: boolean,
+  ) {
+    super(`upstream_${category.toLowerCase()}`);
+  }
+}
+
+export function classifyUpstreamStatus(status: number): {
+  category: UpstreamFailureCategory;
+  retryable: boolean;
+} {
+  if (status === 400 || status === 422) return { category: "INVALID_REQUEST", retryable: false };
+  if (status === 401) return { category: "AUTHENTICATION", retryable: false };
+  if (status === 403) return { category: "PERMISSION", retryable: false };
+  if (status === 404) return { category: "MODEL_UNAVAILABLE", retryable: true };
+  if (status === 408 || status === 504) return { category: "TIMEOUT", retryable: true };
+  if (status === 425 || status === 429) return { category: "RATE_LIMIT", retryable: true };
+  if (status >= 500) return { category: "CAPACITY", retryable: true };
+  return { category: "UNKNOWN", retryable: false };
+}
+
+export function isRetryableUpstreamError(error: unknown): error is UpstreamError {
+  return error instanceof UpstreamError && error.retryable;
+}
+
+export function fallbackReason(category: UpstreamFailureCategory): string {
+  switch (category) {
+    case "MODEL_UNAVAILABLE": return "El modelo solicitado no estaba disponible";
+    case "RATE_LIMIT": return "El proveedor alcanzó temporalmente su límite";
+    case "TIMEOUT": return "El proveedor tardó demasiado en responder";
+    case "CAPACITY": return "El proveedor no tenía capacidad disponible";
+    case "NETWORK": return "No se pudo conectar con el proveedor";
+    case "MALFORMED_RESPONSE": return "El proveedor devolvió una respuesta incompleta";
+    default: return "El proveedor principal no pudo completar la solicitud";
+  }
+}
+
+const PROVIDER_NAMES: Record<string, string> = {
+  anthropic: "Anthropic",
+  deepseek: "DeepSeek",
+  google: "Google",
+  meta: "Meta",
+  minimax: "MiniMax",
+  moonshotai: "Moonshot AI",
+  openai: "OpenAI",
+  qwen: "Alibaba Qwen",
+  xai: "xAI",
+  xiaomi: "Xiaomi",
+  zai: "Z.AI",
+};
+
+export function providerNameForModel(model: string, fallback: string): string {
+  const namespace = model.split("/", 1)[0]?.toLowerCase();
+  return PROVIDER_NAMES[namespace] ?? fallback;
 }
 
 function toOpenAiMessages(body: any): any[] {
@@ -53,6 +131,8 @@ async function callCompatible(
   apiKey: string,
   model: string,
   body: any,
+  gateway: string,
+  fallbackProvider: string,
 ): Promise<UpstreamResult> {
   const payload: Record<string, unknown> = {
     model,
@@ -62,18 +142,29 @@ async function callCompatible(
     stream: false,
   };
   if (Array.isArray(body.tools) && body.tools.length) payload.tools = body.tools;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(540_000),
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(540_000),
+    });
+  } catch (error) {
+    const timedOut = error instanceof Error &&
+      (error.name === "TimeoutError" || error.name === "AbortError");
+    throw new UpstreamError(0, timedOut ? "TIMEOUT" : "NETWORK", true);
+  }
   const json: any = await response.json().catch(() => ({}));
   if (!response.ok || json.error) {
-    throw new Error(`upstream_${response.status}`);
+    const classified = classifyUpstreamStatus(response.status);
+    throw new UpstreamError(response.status, classified.category, classified.retryable);
+  }
+  if (!Array.isArray(json.choices) || json.choices.length === 0) {
+    throw new UpstreamError(response.status, "MALFORMED_RESPONSE", true);
   }
   const choice = json.choices?.[0] ?? {};
   const message = choice.message ?? {};
@@ -81,6 +172,11 @@ async function callCompatible(
   const estimatedCompletionTokens = Math.ceil(
     (String(message.content ?? "").length + JSON.stringify(message.tool_calls ?? []).length) / 4,
   );
+  const resolvedModel = typeof json.model === "string" && json.model.trim()
+    ? json.model.trim()
+    : model;
+  const hasPromptUsage = Number.isFinite(Number(json.usage?.prompt_tokens));
+  const hasCompletionUsage = Number.isFinite(Number(json.usage?.completion_tokens));
   return {
     response: {
       content: typeof message.content === "string" ? message.content : "",
@@ -93,19 +189,28 @@ async function callCompatible(
       reasoning: message.reasoning ?? message.thinking ?? null,
     },
     usage: {
-      promptTokens: Number(json.usage?.prompt_tokens ?? 0) || estimatedPromptTokens,
-      completionTokens: Number(json.usage?.completion_tokens ?? 0) || estimatedCompletionTokens,
+      promptTokens: hasPromptUsage ? Number(json.usage.prompt_tokens) : estimatedPromptTokens,
+      completionTokens: hasCompletionUsage ? Number(json.usage.completion_tokens) : estimatedCompletionTokens,
+      estimated: !hasPromptUsage || !hasCompletionUsage,
+    },
+    upstream: {
+      provider: providerNameForModel(resolvedModel, fallbackProvider),
+      model: resolvedModel,
+      gateway,
+      fallback: false,
     },
   };
 }
 
 export async function callPaid(model: ModelDefinition, body: any, apiKey: string): Promise<UpstreamResult> {
-  if (!model.vercelModel) throw new Error("paid_model_unavailable");
+  if (!model.vercelModel) throw new UpstreamError(404, "MODEL_UNAVAILABLE", true);
   return callCompatible(
     "https://ai-gateway.vercel.sh/v1/chat/completions",
     apiKey,
     model.vercelModel,
     body,
+    "Vercel AI Gateway",
+    providerNameForModel(model.vercelModel, "Vercel AI Gateway"),
   );
 }
 
@@ -121,6 +226,8 @@ export async function callFree(body: any, secrets: {
       secrets.openCode!,
       "deepseek-v4-flash-free",
       body,
+      "OpenCode Zen",
+      "OpenCode",
     ));
   }
   if (secrets.openRouter) {
@@ -129,6 +236,8 @@ export async function callFree(body: any, secrets: {
       secrets.openRouter!,
       "openrouter/free",
       body,
+      "OpenRouter",
+      "OpenRouter",
     ));
   }
   if (secrets.kilo) {
@@ -137,21 +246,33 @@ export async function callFree(body: any, secrets: {
       secrets.kilo!,
       "kilo-auto/free",
       body,
+      "Kilo AI",
+      "Kilo AI",
     ));
   }
-  for (const attempt of attempts) {
+  let firstFailure: UpstreamFailureCategory | undefined;
+  for (let index = 0; index < attempts.length; index += 1) {
     try {
-      return await attempt();
-    } catch {
-      // Continue through the private fallback chain without exposing its identity.
+      const result = await attempts[index]();
+      return {
+        ...result,
+        upstream: {
+          ...result.upstream,
+          fallback: index > 0,
+          ...(index > 0 && firstFailure ? { fallbackCategory: firstFailure } : {}),
+        },
+      };
+    } catch (error) {
+      if (!isRetryableUpstreamError(error)) throw error;
+      firstFailure ??= error.category;
     }
   }
-  throw new Error("free_capacity_unavailable");
+  throw new UpstreamError(503, firstFailure ?? "CAPACITY", true);
 }
 
 export function calculateCost(model: ModelDefinition, usage: UpstreamResult["usage"]): number {
   return Math.ceil(
-    usage.promptTokens * (model.inputMicrosPerToken ?? 0) +
-    usage.completionTokens * (model.outputMicrosPerToken ?? 0),
+    usage.promptTokens * (model.pricing.inputMicrosPerToken ?? 0) +
+    usage.completionTokens * (model.pricing.outputMicrosPerToken ?? 0),
   );
 }

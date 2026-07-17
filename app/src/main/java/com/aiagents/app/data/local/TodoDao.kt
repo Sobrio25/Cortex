@@ -24,4 +24,10 @@ interface TodoDao {
 
     @Query("UPDATE todos SET status = :status, updatedAt = :now WHERE id = :id")
     suspend fun updateStatus(id: Long, status: String, now: Long = System.currentTimeMillis())
+
+    @Query("UPDATE todos SET status = 'completed', updatedAt = :now WHERE conversationId = :conversationId AND status = 'in_progress'")
+    suspend fun completeInProgressForConversation(
+        conversationId: Long,
+        now: Long = System.currentTimeMillis()
+    ): Int
 }

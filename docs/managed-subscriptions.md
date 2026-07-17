@@ -1,8 +1,9 @@
 # Managed subscriptions
 
 The Android client and Firebase backend are linked to project `cortex-agents-ai`.
-End users only see plan and model names. Gateway/provider identities are internal and
-must never be copied into onboarding, subscription UI, public API errors, or fallback notices.
+Inference responses report the final model/provider route, token usage, cost and a
+sanitized fallback category. Credentials, upstream response bodies and internal errors
+are never included.
 
 The free allowance is 500,000 combined input and output tokens per ISO week
 (Monday 00:00 UTC). Every inference operation is metered from upstream usage. A
@@ -19,10 +20,17 @@ Google-backed Firebase UID after app data is cleared or the app is reinstalled.
 - Every paid inference request goes to Vercel AI Gateway at
   `https://ai-gateway.vercel.sh/v1/chat/completions`.
 - OpenRouter is only part of the free-capacity chain. OpenCode and Kilo are also
-  free fallbacks; none is exposed by the public API.
+  free fallbacks. The completed response identifies the route that actually answered.
 - BYOK providers and local models remain independent of managed usage and billing.
 - The backend stores entitlement, counters, token cost, latency/error metadata and
   hashed turn IDs. It does not store prompts, responses, images or tool output.
+- The private Firebase Hosting dashboard described in `docs/usage-dashboard.md`
+  reports daily and request-level managed usage by model, provider and gateway.
+- `GET /v1/models` is the source of truth for context, tools/vision/streaming/reasoning
+  support and input/output prices. Unknown values are explicitly returned as such;
+  Android only keeps an `auto` offline fallback and does not duplicate named models.
+- Fallback only proceeds for recoverable capacity, rate-limit, timeout, network or
+  model-availability failures. Invalid requests and authorization failures are not retried.
 
 ## Cloud setup completed
 
@@ -65,7 +73,7 @@ Google-backed Firebase UID after app data is cleared or the app is reinstalled.
 
 ```bash
 cd functions && npm test && cd ..
-firebase deploy --only auth,firestore,functions --project cortex-agents-ai
+firebase deploy --only auth,firestore,functions,hosting --project cortex-agents-ai
 JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew test assembleDebug
 ```
 

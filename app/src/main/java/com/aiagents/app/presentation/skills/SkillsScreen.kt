@@ -55,7 +55,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,10 +82,10 @@ fun SkillsScreen(
     onBack: () -> Unit,
     viewModel: SkillsViewModel = hiltViewModel()
 ) {
-    val skills by viewModel.skills.collectAsState()
-    val selectedId by viewModel.selectedSkillId.collectAsState()
-    val reviewSettings by viewModel.reviewSettings.collectAsState()
-    val recentReviews by viewModel.recentReviews.collectAsState()
+    val skills by viewModel.skills.collectAsStateWithLifecycle()
+    val selectedId by viewModel.selectedSkillId.collectAsStateWithLifecycle()
+    val reviewSettings by viewModel.reviewSettings.collectAsStateWithLifecycle()
+    val recentReviews by viewModel.recentReviews.collectAsStateWithLifecycle()
     val selectedSkill = skills.firstOrNull { it.id == selectedId }
     val snackbarHostState = remember { SnackbarHostState() }
     var filter by remember { mutableStateOf<SkillStatus?>(null) }

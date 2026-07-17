@@ -1,20 +1,30 @@
 package com.aiagents.app.presentation.stt
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.Manifest
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aiagents.app.data.diagnostics.AppErrorReporter
+import com.aiagents.app.data.diagnostics.ErrorReportContext
 import com.aiagents.app.data.model.CloudSTTProvider
 import com.aiagents.app.data.model.STTMode
 import com.aiagents.app.data.model.STTSettingsEntity
-import com.aiagents.app.data.speech.ModelDownloader
+import com.aiagents.app.data.speech.OnDemandVoiceFeatureLoader
+import com.aiagents.app.data.speech.Qwen3TtsVoiceSkill
 import com.aiagents.app.data.speech.STTManager
-import com.aiagents.app.data.speech.VoskSTTService
+import com.aiagents.app.data.speech.VoiceFeatureInstaller
 import com.aiagents.app.data.local.STTSettingsDao
-import com.aiagents.app.domain.service.STTConfig
+import com.aiagents.app.data.local.AssistantPreferences
+import com.aiagents.app.data.speech.AssistantSttMode
+import com.aiagents.app.data.speech.AssistantTtsMode
+import com.aiagents.app.data.speech.RemoteSttConfig
+import com.aiagents.app.data.speech.RemoteTtsAudioMode
+import com.aiagents.app.data.speech.RemoteTtsConfig
+import com.aiagents.app.data.speech.SelfHostedVoiceApi
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
@@ -24,9 +34,12 @@ import javax.inject.Inject
 
 @HiltViewModel
 class STTViewModel @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val sttManager: STTManager,
-    private val sttSettingsDao: STTSettingsDao
+    private val sttSettingsDao: STTSettingsDao,
+    private val voiceFeatureInstaller: VoiceFeatureInstaller,
+    private val assistantPreferences: AssistantPreferences,
+    private val errorReporter: AppErrorReporter
 ) : ViewModel() {
 
     private val _currentSettings = MutableStateFlow<STTSettingsEntity?>(null)
@@ -53,14 +66,11 @@ class STTViewModel @Inject constructor(
     private val _downloadProgress = MutableStateFlow(0f)
     val downloadProgress: StateFlow<Float> = _downloadProgress.asStateFlow()
 
-    private val _isVoskModelDownloaded = MutableStateFlow(VoskSTTService.isModelDownloaded(context))
-    val isVoskModelDownloaded: StateFlow<Boolean> = _isVoskModelDownloaded.asStateFlow()
-
-    private val _downloadedVoskModels = MutableStateFlow(VoskSTTService.getDownloadedModels(context))
-    val downloadedVoskModels: StateFlow<Set<String>> = _downloadedVoskModels.asStateFlow()
-
-    private val _downloadingModelId = MutableStateFlow<String?>(null)
-    val downloadingModelId: StateFlow<String?> = _downloadingModelId.asStateFlow()
+    val voiceFeatureState = voiceFeatureInstaller.state
+    private val _isOfflineModelReady = MutableStateFlow(
+        OnDemandVoiceFeatureLoader.isInstalledAndReady(context)
+    )
+    val isOfflineModelReady: StateFlow<Boolean> = _isOfflineModelReady.asStateFlow()
 
     // Tracks the active listening coroutine so it can be cancelled on stop
     private var listeningJob: Job? = null
@@ -68,6 +78,25 @@ class STTViewModel @Inject constructor(
     val isSTTEnabled: StateFlow<Boolean> = sttManager.isEnabled
 
     val sttService = sttManager.currentService
+    val remoteSttConfig = assistantPreferences.remoteSttConfig
+    val remoteTtsConfig = assistantPreferences.remoteTtsConfig
+    val ttsMode = assistantPreferences.ttsMode
+
+    init {
+        viewModelScope.launch {
+            voiceFeatureInstaller.state.collect { state ->
+                if (state.installed) {
+                    _isOfflineModelReady.value = OnDemandVoiceFeatureLoader.isInstalledAndReady(context)
+                }
+                state.error?.let { message ->
+                    _error.value = voiceError(
+                        IllegalStateException(message),
+                        "voice_feature_install"
+                    )
+                }
+            }
+        }
+    }
 
     fun loadSettingsForWorkspace(workspaceId: Long) {
         viewModelScope.launch {
@@ -79,40 +108,43 @@ class STTViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Prepares the hidden global workspace for an API-keyless assistant session.
-     * AUTO starts on-device, retries with Android's system recognizer if the local language is
-     * missing, and uses Vosk when its downloaded model has been explicitly selected.
-     */
-    fun prepareOfflineAssistant(workspaceId: Long, language: String) {
+    /** Prepares the hidden global workspace with the voice engine selected for the assistant. */
+    fun prepareAssistantVoice(workspaceId: Long, language: String) {
         viewModelScope.launch {
             val existing = sttSettingsDao.getSettingsForWorkspace(workspaceId.toInt())
-            val fallbackModelId = if (language.substringBefore('-').equals("en", ignoreCase = true)) {
-                "vosk-small-en"
-            } else {
-                "vosk-small-es"
-            }
-            val fallbackModelDirectory = ModelDownloader.getVoskModelInfo(fallbackModelId)?.dirName
-                ?: "vosk-model-small-es"
-            val localEngine = if (
-                VoskSTTService.isModelDownloaded(context, fallbackModelDirectory)
-            ) {
-                com.aiagents.app.data.model.LocalSTTEngine.VOSK
-            } else {
-                com.aiagents.app.data.model.LocalSTTEngine.AUTO
+            val selectedMode = assistantPreferences.sttMode.value
+            val localEngine = when (selectedMode) {
+                AssistantSttMode.WHISPER_TINY ->
+                    com.aiagents.app.data.model.LocalSTTEngine.SHERPA_ONNX
+                AssistantSttMode.REMOTE_SERVER,
+                AssistantSttMode.ANDROID,
+                AssistantSttMode.NONE -> com.aiagents.app.data.model.LocalSTTEngine.AUTO
             }
             val settings = (existing ?: STTSettingsEntity(workspaceId = workspaceId.toInt())).copy(
-                enabled = true,
-                mode = STTMode.LOCAL.name,
+                enabled = selectedMode != AssistantSttMode.NONE,
+                mode = if (selectedMode == AssistantSttMode.REMOTE_SERVER) {
+                    STTMode.CLOUD.name
+                } else {
+                    STTMode.LOCAL.name
+                },
                 localEngine = localEngine.name,
+                cloudProvider = if (selectedMode == AssistantSttMode.REMOTE_SERVER) {
+                    CloudSTTProvider.SELF_HOSTED.name
+                } else {
+                    CloudSTTProvider.ANDROID_SPEECH_RECOGNIZER.name
+                },
                 apiKey = "",
                 language = language,
                 updatedAt = System.currentTimeMillis()
             )
             sttSettingsDao.insertSettings(settings)
-            sttManager.initializeFromSettings(settings)
+            sttManager.beginAssistantSession(settings)
             _currentSettings.value = settings
         }
+    }
+
+    fun endAssistantVoiceSession() {
+        sttManager.endAssistantSession()
     }
 
     fun toggleSTTEnabled(workspaceId: Long, enabled: Boolean) {
@@ -137,53 +169,109 @@ class STTViewModel @Inject constructor(
         }
     }
 
-    fun saveSettings(workspaceId: Long, uiState: STTSettingsUiState) {
+    fun saveSettings(workspaceId: Long, uiState: STTSettingsUiState): Boolean {
+        voiceSettingsValidationError(uiState)?.let { error ->
+            _error.value = error
+            return false
+        }
+
         viewModelScope.launch {
+            if (uiState.mode == STTMode.CLOUD &&
+                uiState.cloudProvider == CloudSTTProvider.SELF_HOSTED
+            ) {
+                assistantPreferences.setRemoteSttConfig(
+                    RemoteSttConfig(
+                        endpointUrl = uiState.remoteSttEndpoint,
+                        model = uiState.remoteSttModel,
+                        apiKey = uiState.remoteSttApiKey
+                    )
+                )
+            }
+
+            if (uiState.useRemoteTts) {
+                assistantPreferences.setRemoteTtsConfig(
+                    RemoteTtsConfig(
+                        endpointUrl = uiState.remoteTtsEndpoint,
+                        model = uiState.remoteTtsModel,
+                        voice = uiState.remoteTtsVoice,
+                        apiKey = uiState.remoteTtsApiKey,
+                        apiFlavor = uiState.remoteTtsApiFlavor,
+                        language = uiState.remoteTtsLanguage,
+                        voiceDescription = uiState.remoteTtsVoiceDescription,
+                        adaptiveStyle = uiState.remoteTtsAdaptiveStyle,
+                        audioMode = uiState.remoteTtsAudioMode,
+                        pcmSampleRate = uiState.remoteTtsPcmSampleRate
+                    )
+                )
+                assistantPreferences.setTtsMode(AssistantTtsMode.REMOTE_SERVER)
+                assistantPreferences.setSpeakResponses(true)
+            } else if (assistantPreferences.ttsMode.value == AssistantTtsMode.REMOTE_SERVER) {
+                assistantPreferences.setTtsMode(AssistantTtsMode.NONE)
+                assistantPreferences.setSpeakResponses(false)
+            }
+
             val entity = STTSettingsEntity(
                 id = _currentSettings.value?.id ?: 0,
                 workspaceId = workspaceId.toInt(),
                 enabled = _currentSettings.value?.enabled ?: false,
                 mode = uiState.mode.name,
                 cloudProvider = uiState.cloudProvider.name,
-                apiKey = uiState.apiKey,
+                apiKey = if (uiState.cloudProvider == CloudSTTProvider.SELF_HOSTED) {
+                    ""
+                } else {
+                    uiState.apiKey
+                },
                 localModelType = uiState.localModelType.name,
                 localEngine = uiState.localEngine.name,
                 language = uiState.language,
                 updatedAt = System.currentTimeMillis()
             )
             sttSettingsDao.insertSettings(entity)
-
-            // Map to domain config and reinitialize
-            val cloudProvider = try {
-                STTConfig.CloudSTTProvider.valueOf(
-                    when (uiState.cloudProvider) {
-                        CloudSTTProvider.ANDROID_SPEECH_RECOGNIZER -> "ANDROID_SPEECH_RECOGNIZER"
-                        CloudSTTProvider.WHISPER_API -> "WHISPER_API"
-                        CloudSTTProvider.GOOGLE_FREE -> "GOOGLE_SPEECH"
-                        CloudSTTProvider.ASSEMBLY_AI -> "ASSEMBLY_AI"
-                        CloudSTTProvider.DEEPGRAM -> "DEEPGRAM"
-                        else -> "ANDROID_SPEECH_RECOGNIZER"
-                    }
-                )
-            } catch (e: Exception) {
-                STTConfig.CloudSTTProvider.ANDROID_SPEECH_RECOGNIZER
-            }
-
-            val localEngine = try {
-                STTConfig.LocalSTTEngine.valueOf(uiState.localEngine.name)
-            } catch (e: Exception) {
-                STTConfig.LocalSTTEngine.AUTO
-            }
-
-            val config = STTConfig(
-                mode = STTConfig.STTMode.valueOf(uiState.mode.name),
-                language = uiState.language,
-                apiKey = uiState.apiKey,
-                cloudProvider = cloudProvider,
-                localEngine = localEngine
-            )
-            sttManager.initializeService(config)
+            _currentSettings.value = entity
+            sttManager.initializeFromSettings(entity)
         }
+        return true
+    }
+
+    private fun voiceSettingsValidationError(uiState: STTSettingsUiState): String? {
+        if (uiState.mode == STTMode.CLOUD &&
+            uiState.cloudProvider == CloudSTTProvider.SELF_HOSTED
+        ) {
+            SelfHostedVoiceApi.endpointValidationError(uiState.remoteSttEndpoint)?.let {
+                return "Servidor Whisper: $it"
+            }
+            if (uiState.remoteSttModel.isBlank()) {
+                return "Especifica el modelo Whisper del servidor"
+            }
+        }
+        if (uiState.useRemoteTts) {
+            SelfHostedVoiceApi.endpointValidationError(uiState.remoteTtsEndpoint)?.let {
+                return "Servidor TTS: $it"
+            }
+            val config = RemoteTtsConfig(
+                endpointUrl = uiState.remoteTtsEndpoint,
+                model = uiState.remoteTtsModel,
+                voice = uiState.remoteTtsVoice,
+                apiKey = uiState.remoteTtsApiKey,
+                apiFlavor = uiState.remoteTtsApiFlavor,
+                language = uiState.remoteTtsLanguage,
+                voiceDescription = uiState.remoteTtsVoiceDescription,
+                adaptiveStyle = uiState.remoteTtsAdaptiveStyle,
+                audioMode = uiState.remoteTtsAudioMode,
+                pcmSampleRate = uiState.remoteTtsPcmSampleRate
+            )
+            if (uiState.remoteTtsModel.isBlank() ||
+                Qwen3TtsVoiceSkill.requiresVoice(config) && uiState.remoteTtsVoice.isBlank()
+            ) {
+                return "Completa los datos requeridos del servidor TTS"
+            }
+            if (uiState.remoteTtsAudioMode == RemoteTtsAudioMode.STREAMING_PCM &&
+                uiState.remoteTtsPcmSampleRate !in 8_000..96_000
+            ) {
+                return "La frecuencia PCM debe estar entre 8000 y 96000 Hz"
+            }
+        }
+        return null
     }
 
     fun hasRecordAudioPermission(): Boolean {
@@ -199,11 +287,13 @@ class STTViewModel @Inject constructor(
             return
         }
 
-        listeningJob?.cancel()
+        // Repeated UI/lifecycle events must observe the active session instead of replacing it.
+        if (listeningJob?.isActive == true || _isListening.value) return
         listeningJob = viewModelScope.launch {
             var liveTranscriptionJob: Job? = null
             try {
                 _isListening.value = true
+                _isProcessing.value = false
                 _transcription.value = ""
                 _pendingTranscription.value = null
 
@@ -214,7 +304,10 @@ class STTViewModel @Inject constructor(
                     sttManager.currentService.value
                 }
                 if (service == null) {
-                    _error.value = "Servicio STT no inicializado"
+                    _error.value = voiceError(
+                        IllegalStateException("STT service was not initialized"),
+                        "voice_start"
+                    )
                     _isListening.value = false
                     return@launch
                 }
@@ -231,8 +324,9 @@ class STTViewModel @Inject constructor(
 
                 // Verify the service actually started
                 if (!service.isListening.value) {
-                    _error.value = service.transcription.value.takeIf { it.isNotBlank() }
-                        ?: "No se pudo iniciar la grabacion"
+                    val detail = service.transcription.value.takeIf { it.isNotBlank() }
+                        ?: "Voice recording did not start"
+                    _error.value = voiceError(IllegalStateException(detail), "voice_start")
                     _isListening.value = false
                     return@launch
                 }
@@ -241,11 +335,13 @@ class STTViewModel @Inject constructor(
                 // This triggers from silence detection (auto-stop) OR manual stopListening().
                 service.isListening.first { !it }
 
-                // Recording stopped — wait for transcription to complete.
-                // stopListening() calls recordingJob.join() which waits for Vosk to finish.
-                service.stopListening()
-
+                // The microphone is already closed. Keep the network/model work in a distinct
+                // state so the UI never claims that Cortex is still recording the user.
                 _isListening.value = false
+                _isProcessing.value = true
+
+                // Wait for the recognizer/server to finish its transcription.
+                service.stopListening()
 
                 // Read the transcription result directly from the service StateFlow.
                 val result = service.transcription.value.takeIf {
@@ -255,16 +351,20 @@ class STTViewModel @Inject constructor(
                     _transcription.value = result
                     _pendingTranscription.value = result
                 } else if (service.transcription.value.startsWith("Error:", ignoreCase = true)) {
-                    _error.value = service.transcription.value.removePrefix("Error:").trim()
+                    _error.value = voiceError(
+                        IllegalStateException(service.transcription.value),
+                        "voice_transcription"
+                    )
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Normal cancellation
             } catch (e: Exception) {
                 Log.e("STTViewModel", "Error in STT", e)
-                _error.value = "Error: ${e.message}"
+                _error.value = voiceError(e, "voice_transcription")
             } finally {
                 liveTranscriptionJob?.cancel()
                 _isListening.value = false
+                _isProcessing.value = false
             }
         }
     }
@@ -277,6 +377,10 @@ class STTViewModel @Inject constructor(
                 sttManager.currentService.value?.stopListening()
             } catch (e: Exception) {
                 Log.e("STTViewModel", "Error stopping listening", e)
+                errorReporter.record(
+                    e,
+                    ErrorReportContext("stt", "voice_stop")
+                )
             }
         }
     }
@@ -300,38 +404,63 @@ class STTViewModel @Inject constructor(
     fun isOnDeviceRecognitionAvailable(): Boolean =
         sttManager.isOnDeviceRecognitionAvailable()
 
-    fun downloadModel() {
-        downloadModel("vosk-small-es")
+    fun installOfflineEngine() {
+        voiceFeatureInstaller.requestInstall()
     }
 
-    fun downloadModel(modelId: String) {
+    fun createVoicePackInstallPermissionIntent(): Intent? =
+        voiceFeatureInstaller.externalInstallPermissionIntent()
+
+    fun resumeVoicePackInstall() {
+        voiceFeatureInstaller.resumeExternalInstall()
+    }
+
+    fun downloadModel() {
         if (_isDownloading.value) return
+        if (!voiceFeatureInstaller.state.value.installed) {
+            voiceFeatureInstaller.requestInstall()
+            return
+        }
         viewModelScope.launch {
             _isDownloading.value = true
-            _downloadingModelId.value = modelId
             _downloadProgress.value = 0f
             try {
-                val result = ModelDownloader.downloadVoskModel(context, modelId) { progress ->
+                val result = OnDemandVoiceFeatureLoader.downloadDefaultModel(context) { progress ->
                     _downloadProgress.value = progress
                 }
 
                 if (result.isSuccess) {
-                    _downloadedVoskModels.value = VoskSTTService.getDownloadedModels(context)
-                    _isVoskModelDownloaded.value = true
-                    _error.value = "Modelo descargado correctamente"
-                    _currentSettings.value?.let { sttManager.initializeFromSettings(it) }
+                    _isOfflineModelReady.value = OnDemandVoiceFeatureLoader.isInstalledAndReady(context)
+                    _error.value = "Modelo Whisper descargado correctamente"
+                    _currentSettings.value?.let { current ->
+                        val updated = current.copy(
+                            mode = STTMode.LOCAL.name,
+                            localEngine = com.aiagents.app.data.model.LocalSTTEngine.SHERPA_ONNX.name,
+                            updatedAt = System.currentTimeMillis()
+                        )
+                        sttSettingsDao.insertSettings(updated)
+                        sttManager.initializeFromSettings(updated)
+                    }
                 } else {
-                    _error.value = "Error al descargar el modelo"
+                    _error.value = voiceError(
+                        IllegalStateException("Offline voice model download failed"),
+                        "voice_model_download"
+                    )
                 }
             } catch (e: Exception) {
                 Log.e("STTViewModel", "Error downloading model", e)
-                _error.value = "Error al descargar: ${e.message}"
+                _error.value = voiceError(e, "voice_model_download")
             } finally {
                 _isDownloading.value = false
-                _downloadingModelId.value = null
             }
         }
     }
+
+    private fun voiceError(error: Throwable, operation: String): String =
+        errorReporter.present(
+            error,
+            ErrorReportContext(component = "stt", operation = operation)
+        ).displayMessage
 
     override fun onCleared() {
         super.onCleared()

@@ -11,29 +11,25 @@ class ToolSearchHandler @Inject constructor() {
 
         /** Minimum number of total tools before deferred mode activates */
         const val DEFERRED_THRESHOLD = 15
+        const val MAX_PREACTIVATED_TOOLS = 6
+        private val QUERY_STOP_WORDS = setOf(
+            "the", "and", "for", "with", "from", "this", "that",
+            "los", "las", "una", "uno", "unos", "unas", "por", "para", "con", "del",
+            "que", "como", "quiero", "puedes"
+        )
 
-        /** Core tools always included in deferred mode (not deferred) */
+        /**
+         * Minimal schemas that are useful in most foreground turns.
+         *
+         * Task-specific capabilities are preactivated locally from the user's request or loaded
+         * through search_tools. Keeping this list small prevents every turn from paying for
+         * terminal, web, memory, skill, preview and scheduling schemas simultaneously.
+         */
         val CORE_TOOL_NAMES = setOf(
-            // File operations
-            "read_text_file", "read_image_file", "read_pdf_file", "write_file", "list_files",
-            // App control and assistant identity are always available.
+            "read_text_file", "write_file", "list_files",
             "app_control", AssistantIdentityToolHandler.TOOL_NAME,
-            // Task planning — always core so agents can show progress
-            "todo_write", "todo_read",
-            // Scheduling — always core so agents can manage cron jobs
-            "schedule_task",
-            // Memory
-            "memory", "memory_search", "memory_list",
-            // Skill creation requested by the user
-            "skill_create", "skill_list", "skill_view",
-            // Agent selection & delegation (Cortex routing)
-            "select_agent", DelegationToolHandler.TOOL_NAME,
-            // Terminal
-            "execute_command",
-            // Code execution
-            "run_code", "preview_web", "preview_project",
-            // Web search — always available so agents don't resort to Python scripts
-            "web_search", "web_fetch", "serpapi_search"
+            "todo_write",
+            DelegationToolHandler.TOOL_NAME
         )
 
         fun getToolDefinitionsJson(): List<Map<String, Any>> = listOf(
@@ -269,7 +265,7 @@ class ToolSearchHandler @Inject constructor() {
         val queryWords = query.lowercase()
             .replace(Regex("[^a-záéíóúñü0-9\\s]"), " ")
             .split("\\s+".toRegex())
-            .filter { it.length > 1 }
+            .filter { it.length > 2 && it !in QUERY_STOP_WORDS }
             .toSet()
 
         if (queryWords.isEmpty()) {
@@ -279,11 +275,25 @@ class ToolSearchHandler @Inject constructor() {
         val scored = registry
             .filter { it.name in availableToolNames }
             .map { entry ->
-                val score = queryWords.count { word ->
-                    word in entry.keywords ||
-                        entry.category.contains(word) ||
-                        entry.name.contains(word) ||
-                        entry.description.lowercase().contains(word)
+                val nameTerms = entry.name.lowercase().split('_').toSet()
+                val categoryTerms = entry.category.lowercase().split('_').toSet()
+                val descriptionTerms = entry.description.lowercase()
+                    .replace(Regex("[^a-záéíóúñü0-9\\s]"), " ")
+                    .split("\\s+".toRegex())
+                    .toSet()
+                val normalizedKeywords = entry.keywords.flatMap { keyword ->
+                    keyword.lowercase()
+                        .replace(Regex("[^a-záéíóúñü0-9\\s]"), " ")
+                        .split("\\s+".toRegex())
+                }.toSet()
+                val score = queryWords.sumOf { word ->
+                    when {
+                        word in nameTerms -> 8
+                        word in normalizedKeywords -> 3
+                        word in categoryTerms -> 2
+                        word in descriptionTerms -> 1
+                        else -> 0
+                    }
                 }
                 entry to score
             }
@@ -299,6 +309,8 @@ class ToolSearchHandler @Inject constructor() {
         val allMatchedTools = registry
             .filter { it.category in matchedCategories && it.name in availableToolNames }
 
+        val rankedToolNames = (scored.map { it.first.name } + allMatchedTools.map { it.name })
+            .distinct()
         val toolNames = allMatchedTools.map { it.name }.toSet()
 
         val message = buildString {
@@ -318,7 +330,8 @@ class ToolSearchHandler @Inject constructor() {
         return ToolSearchResult(
             found = true,
             message = message,
-            toolNames = toolNames
+            toolNames = toolNames,
+            rankedToolNames = rankedToolNames
         )
     }
 
@@ -336,7 +349,12 @@ class ToolSearchHandler @Inject constructor() {
             appendLine("Try searching with more specific keywords.")
         }
 
-        return ToolSearchResult(found = false, message = message, toolNames = emptySet())
+        return ToolSearchResult(
+            found = false,
+            message = message,
+            toolNames = emptySet(),
+            rankedToolNames = emptyList()
+        )
     }
 
     /**
@@ -347,6 +365,7 @@ class ToolSearchHandler @Inject constructor() {
     data class ToolSearchResult(
         val found: Boolean,
         val message: String,
-        val toolNames: Set<String>
+        val toolNames: Set<String>,
+        val rankedToolNames: List<String>
     )
 }

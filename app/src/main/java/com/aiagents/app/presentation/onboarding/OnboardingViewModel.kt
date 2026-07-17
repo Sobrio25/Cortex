@@ -7,6 +7,8 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aiagents.app.data.auth.FirebaseAuthManager
+import com.aiagents.app.data.diagnostics.AppErrorReporter
+import com.aiagents.app.data.diagnostics.ErrorReportContext
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.memory.CortexProfileStore
 import com.aiagents.app.data.repository.AgentRepository
@@ -28,7 +30,8 @@ class OnboardingViewModel @Inject constructor(
     private val agentRepository: AgentRepository,
     private val cortexProfileStore: CortexProfileStore,
     private val firebaseAuthManager: FirebaseAuthManager,
-    private val subscriptionRepository: SubscriptionRepository
+    private val subscriptionRepository: SubscriptionRepository,
+    private val errorReporter: AppErrorReporter
 ) : ViewModel() {
 
     val currentStep = savedStateHandle.getStateFlow("currentStep", 0)
@@ -47,6 +50,12 @@ class OnboardingViewModel @Inject constructor(
     val formalityLevel = savedStateHandle.getStateFlow("formality", 50)
     val empathyLevel = savedStateHandle.getStateFlow("empathy", 50)
     val technicalPrecision = savedStateHandle.getStateFlow("technical", 70)
+    val onboardingMode = savedStateHandle.getStateFlow(
+        "onboardingMode",
+        securePreferences.getOnboardingMode()
+            ?.let { stored -> runCatching { OnboardingMode.valueOf(stored) }.getOrNull() }
+            ?: OnboardingMode.MANAGED_CLOUD
+    )
     val managedPrivacyAccepted = savedStateHandle.getStateFlow(
         "managedPrivacyAccepted",
         securePreferences.isManagedPrivacyAccepted()
@@ -68,7 +77,7 @@ class OnboardingViewModel @Inject constructor(
         if (firebaseAuthManager.isGoogleSignedIn) {
             viewModelScope.launch {
                 runCatching { syncAccountConsent() }
-                    .onFailure { _googleSignInError.value = it.message }
+                    .onFailure { _googleSignInError.value = onboardingError(it, "consent_sync") }
             }
         }
     }
@@ -92,6 +101,12 @@ class OnboardingViewModel @Inject constructor(
     fun setFormality(value: Int) { savedStateHandle["formality"] = value }
     fun setEmpathy(value: Int) { savedStateHandle["empathy"] = value }
     fun setTechnicalPrecision(value: Int) { savedStateHandle["technical"] = value }
+    fun setOnboardingMode(mode: OnboardingMode) {
+        savedStateHandle["onboardingMode"] = mode
+        securePreferences.setOnboardingMode(mode.name)
+        _googleSignInError.value = null
+    }
+
     fun setManagedPrivacyAccepted(accepted: Boolean) {
         savedStateHandle["managedPrivacyAccepted"] = accepted
         _googleSignInError.value = null
@@ -108,13 +123,17 @@ class OnboardingViewModel @Inject constructor(
                 syncAccountConsent()
             }
                 .onFailure {
-                    _googleSignInError.value = it.message ?: "No se pudo iniciar sesión con Google"
+                    _googleSignInError.value = onboardingError(it, "google_sign_in")
                 }
             _googleSignInLoading.value = false
         }
     }
 
     fun acceptFreeDataDisclosure(onAccepted: () -> Unit) {
+        if (onboardingMode.value != OnboardingMode.MANAGED_CLOUD) {
+            onAccepted()
+            return
+        }
         if (
             _googleSignInLoading.value ||
             !managedPrivacyAccepted.value ||
@@ -130,8 +149,7 @@ class OnboardingViewModel @Inject constructor(
                     onAccepted()
                 }
                 .onFailure {
-                    _googleSignInError.value = it.message
-                        ?: "No se pudo registrar la aceptación del aviso"
+                    _googleSignInError.value = onboardingError(it, "consent_acceptance")
                 }
             _googleSignInLoading.value = false
         }
@@ -144,6 +162,12 @@ class OnboardingViewModel @Inject constructor(
             savedStateHandle["managedPrivacyAccepted"] = true
         }
     }
+
+    private fun onboardingError(error: Throwable, operation: String): String =
+        errorReporter.present(
+            error,
+            ErrorReportContext(component = "onboarding", operation = operation)
+        ).displayMessage
 
     fun nextStep() {
         savedStateHandle["currentStep"] = (currentStep.value + 1).coerceAtMost(TOTAL_ONBOARDING_STEPS - 1)
@@ -160,8 +184,12 @@ class OnboardingViewModel @Inject constructor(
         if (
             completing ||
             chosenAssistantName.isBlank() ||
-            !managedPrivacyAccepted.value ||
-            !_googleSignedIn.value
+            !OnboardingModePolicy.canContinue(
+                mode = onboardingMode.value,
+                managedPrivacyAccepted = managedPrivacyAccepted.value,
+                googleSignedIn = _googleSignedIn.value,
+                googleSignInLoading = _googleSignInLoading.value
+            )
         ) return
         completing = true
         viewModelScope.launch {
@@ -170,7 +198,12 @@ class OnboardingViewModel @Inject constructor(
             val now = System.currentTimeMillis()
 
             securePreferences.saveUserIdentity(name, nickname)
-            securePreferences.enableManagedFreePlan()
+            securePreferences.setOnboardingMode(onboardingMode.value.name)
+            if (onboardingMode.value == OnboardingMode.MANAGED_CLOUD) {
+                securePreferences.enableManagedFreePlan()
+            } else {
+                securePreferences.disableManagedFreePlanSelection()
+            }
 
             cortexProfileStore.seedFromOnboarding(
                 agentName = chosenAssistantName,

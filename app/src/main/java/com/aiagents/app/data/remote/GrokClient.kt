@@ -126,7 +126,14 @@ class GrokClient(
                     content = content,
                     toolCalls = toolCalls,
                     finishReason = choice?.finish_reason,
-                    reasoning = null
+                    reasoning = null,
+                    usage = chatResponse.usage?.let { usage ->
+                        TokenUsage(
+                            inputTokens = usage.promptTokens?.toLong() ?: 0,
+                            outputTokens = usage.completionTokens?.toLong() ?: 0,
+                            totalTokens = usage.totalTokens?.toLong()
+                        )
+                    }
                 ))
             }
         } catch (e: Exception) {

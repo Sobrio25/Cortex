@@ -191,6 +191,14 @@ class SecurePreferences @Inject constructor(
         setActiveProvider(ProviderType.MANAGED)
     }
 
+    /** Stops routing through the managed plan without revoking consent already granted by the user. */
+    fun disableManagedFreePlanSelection() {
+        clearSelectedModels(ProviderType.MANAGED)
+        if (getActiveProvider() == ProviderType.MANAGED) {
+            encryptedPrefs.edit().remove("ACTIVE_PROVIDER").apply()
+        }
+    }
+
     fun saveHuggingFaceToken(token: String) {
         encryptedPrefs.edit().putString("HUGGINGFACE_TOKEN", token).apply()
     }
@@ -248,6 +256,26 @@ class SecurePreferences @Inject constructor(
             .apply()
         return legacyName
     }
+
+    fun saveAssistantRemoteSttApiKey(apiKey: String) {
+        encryptedPrefs.edit().also { editor ->
+            if (apiKey.isBlank()) editor.remove("ASSISTANT_REMOTE_STT_API_KEY")
+            else editor.putString("ASSISTANT_REMOTE_STT_API_KEY", apiKey.trim())
+        }.apply()
+    }
+
+    fun getAssistantRemoteSttApiKey(): String =
+        encryptedPrefs.getString("ASSISTANT_REMOTE_STT_API_KEY", null).orEmpty()
+
+    fun saveAssistantRemoteTtsApiKey(apiKey: String) {
+        encryptedPrefs.edit().also { editor ->
+            if (apiKey.isBlank()) editor.remove("ASSISTANT_REMOTE_TTS_API_KEY")
+            else editor.putString("ASSISTANT_REMOTE_TTS_API_KEY", apiKey.trim())
+        }.apply()
+    }
+
+    fun getAssistantRemoteTtsApiKey(): String =
+        encryptedPrefs.getString("ASSISTANT_REMOTE_TTS_API_KEY", null).orEmpty()
 
     // Preferencia para mostrar/ocultar razonamiento de modelos
     fun setShowReasoning(enabled: Boolean) {
@@ -614,6 +642,12 @@ class SecurePreferences @Inject constructor(
         encryptedPrefs.edit().putBoolean("ONBOARDING_COMPLETED", completed).apply()
     }
 
+    fun setOnboardingMode(mode: String) {
+        encryptedPrefs.edit().putString("ONBOARDING_MODE", mode).apply()
+    }
+
+    fun getOnboardingMode(): String? = encryptedPrefs.getString("ONBOARDING_MODE", null)
+
     fun getAppLanguage(): String = encryptedPrefs.getString("APP_LANGUAGE", "") ?: ""
 
     fun setAppLanguage(language: String) {
@@ -682,6 +716,24 @@ class SecurePreferences @Inject constructor(
         return encryptedPrefs.getBoolean("TASK_NOTIFICATIONS_ENABLED", true)
     }
 
+    // ── Privacy-preserving global usage analytics ───────────────────────────
+
+    fun setGlobalUsageAnalyticsEnabled(enabled: Boolean) {
+        encryptedPrefs.edit().putBoolean("GLOBAL_USAGE_ANALYTICS_ENABLED", enabled).apply()
+    }
+
+    fun isGlobalUsageAnalyticsEnabled(): Boolean {
+        return encryptedPrefs.getBoolean("GLOBAL_USAGE_ANALYTICS_ENABLED", false)
+    }
+
+    fun setErrorReportingEnabled(enabled: Boolean) {
+        encryptedPrefs.edit().putBoolean("ERROR_REPORTING_ENABLED", enabled).apply()
+    }
+
+    fun isErrorReportingEnabled(): Boolean {
+        return encryptedPrefs.getBoolean("ERROR_REPORTING_ENABLED", true)
+    }
+
     /** Minimum duration in seconds for a task to be considered "long" (default 15s) */
     fun setLongTaskThresholdSeconds(seconds: Int) {
         encryptedPrefs.edit().putInt("LONG_TASK_THRESHOLD_SECONDS", seconds).apply()
@@ -704,5 +756,25 @@ class SecurePreferences @Inject constructor(
     fun clearDraft(workspaceId: Long) {
         encryptedPrefs.edit().remove("DRAFT_$workspaceId").apply()
     }
+
+    /** Conversation-scoped drafts. The explicit `NEW` scope is used before a chat is created. */
+    fun saveDraft(workspaceId: Long, conversationId: Long?, text: String) {
+        encryptedPrefs.edit().putString(draftKey(workspaceId, conversationId), text).apply()
+    }
+
+    fun getDraft(workspaceId: Long, conversationId: Long?): String =
+        encryptedPrefs.getString(draftKey(workspaceId, conversationId), "") ?: ""
+
+    fun clearDraft(workspaceId: Long, conversationId: Long?) {
+        encryptedPrefs.edit().remove(draftKey(workspaceId, conversationId)).apply()
+    }
+
+    /** Removes the old workspace-wide slot, which could leak a sent message into another chat. */
+    fun clearLegacyDraft(workspaceId: Long) {
+        clearDraft(workspaceId)
+    }
+
+    private fun draftKey(workspaceId: Long, conversationId: Long?): String =
+        "DRAFT_V2_${workspaceId}_${conversationId?.takeIf { it > 0L } ?: "NEW"}"
 
 }

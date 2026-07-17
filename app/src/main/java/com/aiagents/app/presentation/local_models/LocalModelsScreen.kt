@@ -16,6 +16,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aiagents.app.data.model.CustomLocalModelEntity
 import com.aiagents.app.domain.model.LocalModel
 import com.aiagents.app.domain.model.ModelDownloadHelp
@@ -26,14 +27,14 @@ fun LocalModelsScreen(
     onBack: (() -> Unit)? = null,
     viewModel: LocalModelsViewModel = hiltViewModel()
 ) {
-    val models by viewModel.models.collectAsState()
-    val downloadProgress by viewModel.downloadProgress.collectAsState()
-    val isDownloading by viewModel.isDownloading.collectAsState()
-    val errorMessage by viewModel.errorMessage.collectAsState()
-    val successMessage by viewModel.successMessage.collectAsState()
-    val huggingFaceToken by viewModel.huggingFaceToken.collectAsState()
+    val models by viewModel.models.collectAsStateWithLifecycle()
+    val downloadProgress by viewModel.downloadProgress.collectAsStateWithLifecycle()
+    val isDownloading by viewModel.isDownloading.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
+    val successMessage by viewModel.successMessage.collectAsStateWithLifecycle()
+    val huggingFaceToken by viewModel.huggingFaceToken.collectAsStateWithLifecycle()
 
-    val customModels by viewModel.customModels.collectAsState()
+    val customModels by viewModel.customModels.collectAsStateWithLifecycle()
 
     var showHelpDialog by remember { mutableStateOf(false) }
     var showTokenDialog by remember { mutableStateOf(false) }

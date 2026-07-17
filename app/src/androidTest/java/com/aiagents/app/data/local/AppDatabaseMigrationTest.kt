@@ -4,6 +4,7 @@ import androidx.room.testing.MigrationTestHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.aiagents.app.data.orchestration.AgentOrchestrator
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -102,8 +103,94 @@ class AppDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun migrates44To47PreservingDataAndNormalizingLegacyOrchestratorIdentity() {
+        helper.createDatabase(LATEST_CHAIN_DATABASE_NAME, 44).apply {
+            execSQL(
+                """
+                INSERT INTO agents (
+                    id, name, role, systemPrompt, temperature, maxTokens, folderPath,
+                    enableTerminal, whenToUse, createdAt, updatedAt, sarcasmLevel,
+                    creativityLevel, formalityLevel, empathyLevel, technicalPrecision,
+                    useLocalRouting, enabledTools, isSystemAgent
+                ) VALUES (
+                    77, 'Clawdy', 'Agent Orchestrator',
+                    'Eres Cortex, el orquestador central de agentes AI.',
+                    0.7, 4096, 'agents/cortex', 1, '', 1, 1,
+                    50, 50, 50, 50, 50, 0, '', 1
+                )
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO finance_transactions (
+                    id, type, amount, currency, category, description, date, createdAt
+                ) VALUES (88, 'EXPENSE', 42.5, 'MXN', 'Prueba', 'Dato legado', 1, 1)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        helper.runMigrationsAndValidate(
+            LATEST_CHAIN_DATABASE_NAME,
+            47,
+            false,
+            AppDatabase.MIGRATION_44_45,
+            AppDatabase.MIGRATION_45_46,
+            AppDatabase.MIGRATION_46_47
+        ).use { database ->
+            database.query("SELECT name, systemPrompt FROM agents WHERE id = 77").use { cursor ->
+                assertEquals(true, cursor.moveToFirst())
+                assertEquals("Clawdy", cursor.getString(0))
+                assertEquals(AgentOrchestrator.DEFAULT_ORCHESTRATOR_PROMPT, cursor.getString(1))
+            }
+            database.query(
+                "SELECT amount, description FROM finance_transactions WHERE id = 88"
+            ).use { cursor ->
+                assertEquals(true, cursor.moveToFirst())
+                assertEquals(42.5, cursor.getDouble(0), 0.0)
+                assertEquals("Dato legado", cursor.getString(1))
+            }
+        }
+    }
+
+    @Test
+    fun migrates46To47SeparatingVoiceAssistantConversations() {
+        helper.createDatabase(ASSISTANT_CONTEXT_DATABASE_NAME, 46).apply {
+            execSQL(
+                "INSERT INTO workspaces (id, name, description, activeAgentId, selectedModel, systemPrompt, externalStorageUri, createdAt, updatedAt) " +
+                    "VALUES (90, '__global__', '', NULL, '', '', NULL, 1, 1), " +
+                    "(91, 'Proyecto', '', NULL, '', '', NULL, 1, 1)"
+            )
+            execSQL(
+                "INSERT INTO conversations (id, workspaceId, title, createdAt, updatedAt, parentConversationId, delegationAgentName, delegationTask, status, lastMemoryExtraction) " +
+                    "VALUES (92, 90, 'Assistant', 1, 1, NULL, NULL, NULL, 'active', NULL), " +
+                    "(93, 91, 'Chat', 1, 1, NULL, NULL, NULL, 'active', NULL)"
+            )
+            close()
+        }
+
+        helper.runMigrationsAndValidate(
+            ASSISTANT_CONTEXT_DATABASE_NAME,
+            47,
+            true,
+            AppDatabase.MIGRATION_46_47
+        ).use { database ->
+            database.query("SELECT contextKind FROM conversations WHERE id = 92").use { cursor ->
+                assertEquals(true, cursor.moveToFirst())
+                assertEquals("VOICE_ASSISTANT", cursor.getString(0))
+            }
+            database.query("SELECT contextKind FROM conversations WHERE id = 93").use { cursor ->
+                assertEquals(true, cursor.moveToFirst())
+                assertEquals("CHAT", cursor.getString(0))
+            }
+        }
+    }
+
     private companion object {
         const val DATABASE_NAME = "migration-38-41"
         const val SCHEDULED_TASK_DATABASE_NAME = "migration-43-44"
+        const val LATEST_CHAIN_DATABASE_NAME = "migration-44-47"
+        const val ASSISTANT_CONTEXT_DATABASE_NAME = "migration-46-47-assistant-context"
     }
 }

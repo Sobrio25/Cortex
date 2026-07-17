@@ -35,7 +35,7 @@ class SkillRuntimeProvider @Inject constructor(
     fun render(maxChars: Int = MAX_INDEX_CHARS): String = renderIndex(activeSkills, maxChars)
 
     companion object {
-        const val MAX_INDEX_CHARS = 4_000
+        const val MAX_INDEX_CHARS = 2_400
         private const val OMITTED_RESERVE_CHARS = 96
 
         internal fun renderIndex(skills: List<Skill>, maxChars: Int = MAX_INDEX_CHARS): String {

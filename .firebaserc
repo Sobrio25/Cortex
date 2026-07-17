@@ -1,5 +1,17 @@
 {
   "projects": {
     "default": "cortex-agents-ai"
+  },
+  "targets": {
+    "cortex-agents-ai": {
+      "hosting": {
+        "dashboard": [
+          "cortex-agents-ai"
+        ],
+        "voicepack": [
+          "cortex-agents-voice-pack"
+        ]
+      }
+    }
   }
 }

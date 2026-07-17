@@ -24,6 +24,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aiagents.app.R
 import com.aiagents.app.domain.model.MoonshotEndpointType
 import com.aiagents.app.domain.model.NvidiaProviderConfig
@@ -38,8 +39,8 @@ fun ProvidersScreen(
     onBack: (() -> Unit)? = null,
     viewModel: ProvidersViewModel = hiltViewModel()
 ) {
-    val providerStates by viewModel.providerStates.collectAsState()
-    val selectedModels by viewModel.selectedModels.collectAsState()
+    val providerStates by viewModel.providerStates.collectAsStateWithLifecycle()
+    val selectedModels by viewModel.selectedModels.collectAsStateWithLifecycle()
 
     var showConfigDialog by remember { mutableStateOf<ProviderType?>(null) }
 
@@ -267,8 +268,8 @@ fun ProviderConfigDialog(
     onDismiss: () -> Unit,
     onSave: () -> Unit
 ) {
-    val providerStates by viewModel.providerStates.collectAsState()
-    val selectedModels by viewModel.selectedModels.collectAsState()
+    val providerStates by viewModel.providerStates.collectAsStateWithLifecycle()
+    val selectedModels by viewModel.selectedModels.collectAsStateWithLifecycle()
     val state = providerStates[type] ?: return
 
     var apiKey by remember { mutableStateOf(state.apiKey) }

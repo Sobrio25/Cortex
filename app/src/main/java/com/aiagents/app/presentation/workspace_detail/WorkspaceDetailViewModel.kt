@@ -1,13 +1,18 @@
 package com.aiagents.app.presentation.workspace_detail
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.core.content.ContextCompat
 import com.aiagents.app.data.background.CortexTaskCoordinator
+import com.aiagents.app.data.diagnostics.AppErrorReporter
+import com.aiagents.app.data.diagnostics.ErrorReportContext
 import com.aiagents.app.data.events.AgentChangeNotifier
 import com.aiagents.app.data.local.LocalLLMClient
 import com.aiagents.app.data.local.LocalModelRepository
@@ -34,6 +39,8 @@ import com.aiagents.app.data.repository.ContextWindowPolicy
 import com.aiagents.app.data.repository.FileRepository
 import com.aiagents.app.data.repository.TokenCounter
 import com.aiagents.app.data.repository.SubscriptionRepository
+import com.aiagents.app.data.runtime.RuntimeContextProfile
+import com.aiagents.app.data.speech.AndroidTextToSpeechManager
 import com.aiagents.app.data.terminal.BraveSearchToolHandler
 import com.aiagents.app.data.terminal.DuckDuckGoSearchToolHandler
 import com.aiagents.app.data.terminal.GoogleMapsToolHandler
@@ -76,6 +83,7 @@ import com.aiagents.app.domain.model.Agent
 import com.aiagents.app.domain.model.isOrchestrator
 import com.aiagents.app.domain.model.AgentFile
 import com.aiagents.app.domain.model.Conversation
+import com.aiagents.app.domain.model.ConversationContextKind
 import com.aiagents.app.domain.model.Message
 import com.aiagents.app.domain.model.MessageRole
 import com.aiagents.app.domain.model.ProviderType
@@ -121,22 +129,6 @@ import javax.inject.Inject
 
 private const val LEGACY_SUBTASK_TOOL_NAME = "execute_subtask"
 private const val MEMORY_EXTRACTION_IDLE_DELAY_MS = 20_000L
-
-data class OptionSelectionRequest(
-    val title: String,
-    val options: List<String>,
-    val messageContent: String = ""
-)
-
-data class MultiQuestionQueue(
-    val questions: List<OptionSelectionRequest>,
-    val answers: List<String> = emptyList(),
-    val currentIndex: Int = 0
-) {
-    val currentQuestion: OptionSelectionRequest get() = questions[currentIndex]
-    val isLastQuestion: Boolean get() = currentIndex >= questions.size - 1
-    val progress: String get() = "${currentIndex + 1}/${questions.size}"
-}
 
 data class AgentBoardMessage(
     val agentName: String,
@@ -185,6 +177,9 @@ data class WorkspaceDetailState(
     val pendingLocationPermission: Boolean = false,
     val pendingLocationToolCall: ToolCall? = null,
     val pendingLocationAgent: Agent? = null,
+    val pendingAssistantActionPermissions: List<String> = emptyList(),
+    val pendingAssistantActionToolCall: ToolCall? = null,
+    val pendingAssistantActionAgent: Agent? = null,
     val webPreviewHtml: String? = null,
     val webPreviewUrl: String? = null,
     val webPreviewTitle: String = "Preview",
@@ -198,12 +193,6 @@ data class AttachedFile(
     val name: String,
     val mimeType: String,
     val size: Long = 0
-)
-
-data class ModelInfo(
-    val provider: ProviderType,
-    val modelId: String,
-    val fullKey: String = "${provider.name}|$modelId" // "PROVIDER|modelId"
 )
 
 private data class ResolvedSubagentTask(
@@ -225,6 +214,7 @@ class WorkspaceDetailViewModel @Inject constructor(
     private val agentOrchestrator: AgentOrchestrator,
     private val localModelRepository: LocalModelRepository,
     private val securePreferences: SecurePreferences,
+    private val errorReporter: AppErrorReporter,
     private val memoryExtractor: MemoryExtractor,
     private val agentChangeNotifier: AgentChangeNotifier,
     private val taskCompletionNotifier: TaskCompletionNotifier,
@@ -233,6 +223,7 @@ class WorkspaceDetailViewModel @Inject constructor(
     private val subagentRuntime: SubagentRuntime,
     private val codeExecutionHandler: CodeExecutionHandler,
     private val todoDao: com.aiagents.app.data.local.TodoDao,
+    private val textToSpeechManager: AndroidTextToSpeechManager,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
     private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
@@ -273,6 +264,13 @@ class WorkspaceDetailViewModel @Inject constructor(
         assistantModelOverride?.takeIf { assistantModeEnabled }.orEmpty()
             .ifBlank { _selectedModel.value }
 
+    private fun runtimeContextProfile(): RuntimeContextProfile =
+        if (assistantModeEnabled) RuntimeContextProfile.VOICE_ASSISTANT
+        else RuntimeContextProfile.STANDARD
+
+    private fun assistantAllowedTools(): Set<String>? =
+        CortexAssistantPrompt.ALLOWED_TOOL_NAMES.takeIf { assistantModeEnabled }
+
     val agents: StateFlow<List<Agent>> = repository.getAllAgents()
         .stateIn(executionScope, SharingStarted.Lazily, emptyList())
 
@@ -296,6 +294,8 @@ class WorkspaceDetailViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(WorkspaceDetailState())
     val uiState: StateFlow<WorkspaceDetailState> = _uiState.asStateFlow()
+    val isSpeaking: StateFlow<Boolean> = textToSpeechManager.isSpeaking
+    val ttsError: StateFlow<String?> = textToSpeechManager.error
     val agentChangeEvents = agentChangeNotifier.events
 
     // Observe todos for the active conversation, update UI state reactively
@@ -305,7 +305,20 @@ class WorkspaceDetailViewModel @Inject constructor(
                 if (convId != null && convId > 0) todoDao.observeTodos(convId)
                 else flowOf(emptyList())
             }.collect { todos ->
-                _uiState.value = _uiState.value.copy(todos = todos)
+                _uiState.value = _uiState.value.copy(
+                    todos = TodoPlanCompletionPolicy.activeTodos(todos)
+                )
+
+                // Recover plans created by older app versions too. This also repairs a plan
+                // that finished while the app was closed: only the exact "plan + successful
+                // tool work" sequence is eligible, so unfinished work remains visible.
+                val conversationId = _conversationId.value
+                if (conversationId != null && conversationId > 0 && todos.isNotEmpty()) {
+                    val history = runCatching {
+                        repository.getMessagesForConversationOnce(conversationId)
+                    }.getOrElse { emptyList() }
+                    completeTerminalPlanAfterSuccessfulWork(conversationId, todos, history)
+                }
             }
         }
     }
@@ -384,6 +397,8 @@ class WorkspaceDetailViewModel @Inject constructor(
 
     /** Job for debounced draft auto-save */
     private var draftSaveJob: kotlinx.coroutines.Job? = null
+    private val draftSaveGuard = DraftSaveGuard()
+    private var draftCanPersist = false
 
     /** Current agent processing job — cancel to stop the agent */
     private var currentAgentJob: kotlinx.coroutines.Job? = null
@@ -454,10 +469,19 @@ class WorkspaceDetailViewModel @Inject constructor(
     }
 
     private fun restoreDraft() {
-        val draft = securePreferences.getDraft(workspaceId)
-        if (draft.isNotBlank()) {
-            _uiState.value = _uiState.value.copy(inputText = draft)
-        }
+        // Never restore the legacy workspace-wide value: it may be the last sent message
+        // from a different conversation. 0.3.1 drafts are isolated per conversation.
+        securePreferences.clearLegacyDraft(workspaceId)
+        restoreDraftForCurrentConversation()
+    }
+
+    private fun currentDraftScope(): DraftScope = DraftScope(workspaceId, _conversationId.value)
+
+    private fun restoreDraftForCurrentConversation() {
+        val scope = currentDraftScope()
+        val draft = securePreferences.getDraft(scope.workspaceId, scope.conversationId)
+        draftCanPersist = draft.isNotBlank()
+        _uiState.value = _uiState.value.copy(inputText = draft)
     }
     
     private fun loadShowReasoningPreference() {
@@ -498,7 +522,8 @@ class WorkspaceDetailViewModel @Inject constructor(
         val state = _uiState.value
         val needsRuntimePermission = state.pendingCalendarPermission ||
             state.pendingCameraPermission ||
-            state.pendingLocationPermission
+            state.pendingLocationPermission ||
+            state.pendingAssistantActionPermissions.isNotEmpty()
         val preview = taskCompletionPreview
             ?: state.error
             ?: messages.value.lastOrNull { it.role == MessageRole.ASSISTANT }?.content?.take(200)
@@ -535,11 +560,9 @@ class WorkspaceDetailViewModel @Inject constructor(
     
     private fun startFileScanning() {
         viewModelScope.launch {
-            // Escanear cada 2 segundos
-            while (true) {
-                scanWorkspaceFiles()
-                kotlinx.coroutines.delay(2000)
-            }
+            // Initial snapshot only. File mutations call scanWorkspaceFiles directly and the UI
+            // exposes refreshFiles for external/SAF changes, avoiding permanent 2-second polling.
+            scanWorkspaceFiles()
         }
     }
     
@@ -681,15 +704,6 @@ class WorkspaceDetailViewModel @Inject constructor(
         return selected.toList().sorted()
     }
 
-    /** Extrae solo el modelId del formato "PROVIDER|modelId" */
-    private fun extractModelId(fullKey: String): String =
-        if ("|" in fullKey) fullKey.substringAfter("|") else fullKey
-
-    /** Extrae el ProviderType del formato "PROVIDER|modelId" */
-    private fun extractProvider(fullKey: String): ProviderType? =
-        if ("|" in fullKey) runCatching { ProviderType.valueOf(fullKey.substringBefore("|")) }.getOrNull()
-        else null
-
     fun setActiveAgent(agentId: Long?) {
         viewModelScope.launch {
             repository.setActiveAgent(workspaceId, agentId)
@@ -729,25 +743,57 @@ class WorkspaceDetailViewModel @Inject constructor(
     }
 
     fun getAllModels(): List<ModelInfo> {
-        return _uiState.value.availableModels.mapNotNull { fullKey ->
-            val provider = extractProvider(fullKey) ?: return@mapNotNull null
-            val modelId = extractModelId(fullKey)
-            ModelInfo(provider, modelId, fullKey)
-        }
+        return _uiState.value.availableModels.mapNotNull(ModelSelectionPolicy::modelInfo)
     }
 
     fun updateInputText(text: String) {
         _uiState.value = _uiState.value.copy(inputText = text)
-        // Auto-save draft with debounce (500ms)
         draftSaveJob?.cancel()
+        draftCanPersist = text.isNotBlank()
+
+        // Empty drafts must be removed immediately. If this were debounced, leaving
+        // the screen before the delay elapsed would cancel the cleanup and restore
+        // an obsolete draft the next time the chat is opened.
+        if (text.isBlank()) {
+            draftSaveJob = null
+            val scope = currentDraftScope()
+            securePreferences.clearDraft(scope.workspaceId, scope.conversationId)
+            return
+        }
+
+        // Auto-save non-empty drafts with debounce (500ms).
+        val token = draftSaveGuard.capture(currentDraftScope(), text)
         draftSaveJob = viewModelScope.launch {
             kotlinx.coroutines.delay(500)
-            if (text.isNotBlank()) {
-                securePreferences.saveDraft(workspaceId, text)
-            } else {
-                securePreferences.clearDraft(workspaceId)
+            val currentScope = currentDraftScope()
+            if (draftCanPersist && draftSaveGuard.canPersist(token, currentScope, _uiState.value.inputText)) {
+                securePreferences.saveDraft(currentScope.workspaceId, currentScope.conversationId, text)
             }
         }
+    }
+
+    private fun discardSavedDraft() {
+        // Cancelling first is essential: otherwise a pending debounced save can run
+        // after clearDraft() and persist the message that has just been sent.
+        draftSaveJob?.cancel()
+        draftSaveJob = null
+        draftSaveGuard.invalidate()
+        draftCanPersist = false
+        val scope = currentDraftScope()
+        securePreferences.clearDraft(scope.workspaceId, scope.conversationId)
+    }
+
+    private fun persistCurrentDraftBeforeSwitch() {
+        draftSaveJob?.cancel()
+        draftSaveJob = null
+        val scope = currentDraftScope()
+        val text = _uiState.value.inputText
+        if (draftCanPersist && text.isNotBlank()) {
+            securePreferences.saveDraft(scope.workspaceId, scope.conversationId, text)
+        } else if (text.isBlank()) {
+            securePreferences.clearDraft(scope.workspaceId, scope.conversationId)
+        }
+        draftSaveGuard.invalidate()
     }
 
     // ── Option Selection ─────────────────────────────────────────────────────
@@ -758,9 +804,10 @@ class WorkspaceDetailViewModel @Inject constructor(
             val updatedAnswers = queue.answers + option
             if (queue.isLastQuestion) {
                 // All questions answered — build combined response and send
-                val combinedResponse = queue.questions.zip(updatedAnswers) { q, a ->
-                    "**${q.title}**: $a"
-                }.joinToString("\n")
+                val combinedResponse = OptionSelectionParser.formatAnswers(
+                    queue.questions,
+                    updatedAnswers
+                )
                 _uiState.value = _uiState.value.copy(
                     pendingOptionSelection = null,
                     pendingQuestionQueue = null,
@@ -790,9 +837,10 @@ class WorkspaceDetailViewModel @Inject constructor(
         val queue = _uiState.value.pendingQuestionQueue
         if (queue != null && queue.answers.isNotEmpty()) {
             // Already answered some questions — send what we have
-            val combinedResponse = queue.questions.take(queue.answers.size)
-                .zip(queue.answers) { q, a -> "**${q.title}**: $a" }
-                .joinToString("\n")
+            val combinedResponse = OptionSelectionParser.formatAnswers(
+                queue.questions.take(queue.answers.size),
+                queue.answers
+            )
             _uiState.value = _uiState.value.copy(
                 pendingOptionSelection = null,
                 pendingQuestionQueue = null,
@@ -807,50 +855,19 @@ class WorkspaceDetailViewModel @Inject constructor(
         }
     }
 
-    private val OPTIONS_TAG_REGEX = Regex(
-        """<ask_options\s+(?:titulo|title)="([^"]+)">([\s\S]*?)</ask_options>""",
-        RegexOption.IGNORE_CASE
-    )
-    private val OPTION_ITEM_REGEX = Regex("""^\s*[-•*]\s+(.+)$""", RegexOption.MULTILINE)
-
-    /**
-     * Detecta todos los bloques <ask_options> en el contenido del agente.
-     * Retorna la lista de requests y el contenido limpio (sin los bloques).
-     */
-    private fun parseAllOptions(content: String): Pair<List<OptionSelectionRequest>, String> {
-        val matches = OPTIONS_TAG_REGEX.findAll(content).toList()
-        if (matches.isEmpty()) return Pair(emptyList(), content)
-
-        val requests = matches.mapNotNull { match ->
-            val title = match.groupValues[1].trim()
-            val optionsBlock = match.groupValues[2]
-            val options = OPTION_ITEM_REGEX.findAll(optionsBlock)
-                .map { it.groupValues[1].trim() }
-                .filter { it.isNotEmpty() }
-                .toList()
-            if (options.isNotEmpty()) OptionSelectionRequest(title, options) else null
-        }
-
-        var cleanContent = content
-        for (match in matches) {
-            cleanContent = cleanContent.replace(match.value, "")
-        }
-        return Pair(requests, cleanContent.trim())
-    }
-
     /**
      * Parsea opciones del contenido, actualiza el estado si las encuentra y
      * retorna el contenido sin los bloques <ask_options>.
      * Soporta múltiples bloques: los encola y muestra uno por uno.
      */
     private fun checkAndSetOptions(content: String): String {
-        val (requests, cleanContent) = parseAllOptions(content)
+        val (requests, cleanContent) = OptionSelectionParser.parseAll(content)
         if (requests.isNotEmpty()) {
             // Attach the clean message content to the first request so the bottom sheet can show it
-            val requestsWithContent = requests.mapIndexed { index, req ->
-                if (index == 0 && cleanContent.isNotBlank()) req.copy(messageContent = cleanContent)
-                else req
-            }
+            val requestsWithContent = OptionSelectionParser.attachMessageToFirst(
+                requests,
+                cleanContent
+            )
             if (requestsWithContent.size == 1) {
                 // Single question — no queue needed
                 _uiState.value = _uiState.value.copy(
@@ -902,7 +919,7 @@ class WorkspaceDetailViewModel @Inject constructor(
                 Log.e("WorkspaceDetailVM", "Context compaction failed", e)
                 _uiState.value = _uiState.value.copy(
                     isCompacting = false,
-                    error = "Error compacting context: ${e.message}"
+                    error = userFacingError(e, "context_compaction")
                 )
             }
         }
@@ -928,8 +945,8 @@ class WorkspaceDetailViewModel @Inject constructor(
         val provider = extractProvider(fullKey)
 
         val summaryInputTokenBudget = (modelContextWindow / 2).coerceIn(4_096, 64_000)
-        val conversationText = buildCompactionTranscript(
-            messagesToSummarize = plan.messagesToSummarize,
+        val conversationText = CompactionTranscriptBuilder.build(
+            messages = plan.messagesToSummarize,
             tokenBudget = summaryInputTokenBudget
         )
 
@@ -988,44 +1005,9 @@ Rules:
             Log.e("WorkspaceDetailVM", "Summarization failed", error)
             _uiState.value = _uiState.value.copy(
                 isCompacting = false,
-                error = "Failed to summarize conversation: ${error.message}"
+                error = userFacingError(error, "context_summary")
             )
         }
-    }
-
-    private fun buildCompactionTranscript(
-        messagesToSummarize: List<Message>,
-        tokenBudget: Int
-    ): String {
-        val totalCharacterBudget = (tokenBudget * 3).coerceAtLeast(12_000)
-        val perMessageCharacterLimit = (totalCharacterBudget / messagesToSummarize.size.coerceAtLeast(1))
-            .coerceIn(128, 12_000)
-
-        return buildString {
-            messagesToSummarize.forEach { message ->
-                val details = buildString {
-                    append(message.content)
-                    if (message.attachedFiles.isNotEmpty()) {
-                        append("\nAttached files: ")
-                        append(message.attachedFiles.joinToString(", "))
-                    }
-                    message.toolCalls.forEach { call ->
-                        append("\nTool call ${call.function.name}: ${call.function.arguments}")
-                    }
-                    // Tool messages already persist their provider-visible result in content.
-                    // Fall back to metadata only for old/partial rows whose content is empty.
-                    if (message.content.isBlank()) {
-                        message.toolResults.forEach { result ->
-                            append("\nTool result ${result.name}: ${result.content}")
-                        }
-                    }
-                }.take(perMessageCharacterLimit)
-                if (details.isNotBlank()) {
-                    appendLine("[${message.role.name}]: $details")
-                    appendLine()
-                }
-            }
-        }.take(totalCharacterBudget)
     }
 
     fun updateTerminalInput(text: String) {
@@ -1132,11 +1114,15 @@ Rules:
                     Log.d("WorkspaceDetailVM", "File imported: $fileName")
                 }.onFailure { error ->
                     Log.e("WorkspaceDetailVM", "Error importing file", error)
-                    _uiState.value = _uiState.value.copy(error = "Error al importar archivo: ${error.message}")
+                    _uiState.value = _uiState.value.copy(
+                        error = userFacingError(error, "file_import")
+                    )
                 }
             } catch (e: Exception) {
                 Log.e("WorkspaceDetailVM", "Error importing file", e)
-                _uiState.value = _uiState.value.copy(error = "Error al importar archivo: ${e.message}")
+                _uiState.value = _uiState.value.copy(
+                    error = userFacingError(e, "file_import")
+                )
             }
         }
     }
@@ -1226,6 +1212,11 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             return
         }
 
+        // Do this synchronously before launching any message-processing coroutine.
+        // Both the normal and "agent already working" paths must invalidate the
+        // pending auto-save, or the sent text can reappear when the chat is reopened.
+        discardSavedDraft()
+
         pendingMemoryExtractionJob?.cancel()
         pendingMemoryExtractionJob = null
         conversationResumeExtractionJob?.cancel()
@@ -1255,7 +1246,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             return
         }
 
-        memoryExtractor.beginForegroundRequest()
+        if (!assistantModeEnabled) memoryExtractor.beginForegroundRequest()
         currentAgentJob = cortexTaskCoordinator.launch(
             workspaceId = workspaceId,
             agentName = agent.name,
@@ -1267,9 +1258,9 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             taskCompletionPreview = null
             var cancelled = false
             try {
-                securePreferences.clearDraft(workspaceId)
                 val workspaceFolderPath = fileRepository.getWorkspaceFolderPath(workspaceId)
                 repository.resetActivatedTools(agent, workspaceFolderPath)
+                repository.activateRelevantTools(agent, workspaceFolderPath, text)
                 if (assistantModeEnabled) {
                     repository.activateTools(
                         agent,
@@ -1321,13 +1312,13 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             } catch (error: Throwable) {
                 handleError(error)
             } finally {
-                memoryExtractor.endForegroundRequest()
+                if (!assistantModeEnabled) memoryExtractor.endForegroundRequest()
                 if (cancelled) {
                     taskStartTimeMs = 0L
                     taskCompletionPreview = null
                 } else {
                     notifyTaskFinished(agent.name)
-                    triggerInactiveConversationsExtraction()
+                    if (!assistantModeEnabled) triggerInactiveConversationsExtraction()
                 }
                 currentAgentJob = null
             }
@@ -1441,12 +1432,10 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         _workingAgents.value = listOf(orchestrator.name)
         val fullKey = effectiveSelectedModel()
 
-        val enhancedPrompt = agentOrchestrator.buildPrompt(orchestrator).let { prompt ->
-            if (assistantModeEnabled) {
-                CortexAssistantPrompt.appendTo(prompt, assistantLanguageTag)
-            } else {
-                prompt
-            }
+        val enhancedPrompt = if (assistantModeEnabled) {
+            CortexAssistantPrompt.instructionsFor(assistantLanguageTag)
+        } else {
+            agentOrchestrator.buildPrompt(orchestrator)
         }
         val agentWithEnhancedPrompt = orchestrator.copy(systemPrompt = enhancedPrompt)
         val workspacePath = fileRepository.getWorkspaceFolderPath(workspaceId)
@@ -1459,7 +1448,9 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             enableTerminal = orchestrator.enableTerminal,
             workspaceFolderPath = workspacePath,
             imageDataUris = imageDataUris,
-            memorySessionKey = currentMemorySessionKey()
+            allowedToolNames = assistantAllowedTools(),
+            memorySessionKey = currentMemorySessionKey(),
+            runtimeContextProfile = runtimeContextProfile()
         )
 
         var shouldRestoreCortex = true
@@ -1471,7 +1462,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             val content = response.content ?: ""
 
             // ── PRIORITY 1: Typed subagent spawning ──
-            val hasDelegationToolCalls = response.toolCalls?.any {
+            val hasDelegationToolCalls = !assistantModeEnabled && response.toolCalls?.any {
                 it.function.name in DelegationToolHandler.ALL_TOOL_NAMES
             } == true
 
@@ -1486,9 +1477,14 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                 handleToolCalls(agentWithEnhancedPrompt, response.toolCalls!!)
             } else {
                 // ── PRIORITY 2: Text-based delegation (regex fallback) ──
-                val parallelDelegation = agentOrchestrator.parseDelegationParallel(content)
-                val sequentialDelegation = if (parallelDelegation == null) agentOrchestrator.parseDelegationSequence(content) else null
-                val singleDelegation = if (parallelDelegation == null && sequentialDelegation == null) agentOrchestrator.parseDelegation(content) else null
+                val parallelDelegation = if (assistantModeEnabled) null
+                else agentOrchestrator.parseDelegationParallel(content)
+                val sequentialDelegation = if (!assistantModeEnabled && parallelDelegation == null) {
+                    agentOrchestrator.parseDelegationSequence(content)
+                } else null
+                val singleDelegation = if (!assistantModeEnabled && parallelDelegation == null && sequentialDelegation == null) {
+                    agentOrchestrator.parseDelegation(content)
+                } else null
 
                 when {
                     parallelDelegation != null -> {
@@ -1591,7 +1587,9 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             enableTerminal = agent.enableTerminal,
             workspaceFolderPath = workspacePath,
             imageDataUris = imageDataUris,
-            memorySessionKey = currentMemorySessionKey()
+            allowedToolNames = assistantAllowedTools(),
+            memorySessionKey = currentMemorySessionKey(),
+            runtimeContextProfile = runtimeContextProfile()
         )
 
         var processingComplete = true
@@ -1613,6 +1611,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                     reasoning = response.reasoning
                 )
                 repository.addMessage(workspaceId, _conversationId.value, assistantMessage, agent.id)
+                completeTerminalPlanAfterSuccessfulWork(messagesForApi)
                 processingComplete = true
             } else {
                 val assistantMessage = Message(
@@ -1666,7 +1665,8 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             messages = messagesForApi,
             overrideModel = extractModelId(fullKey),
             overrideProvider = provider,
-            memorySessionKey = currentMemorySessionKey()
+            memorySessionKey = currentMemorySessionKey(),
+            runtimeContextProfile = runtimeContextProfile()
         )
         val response = result.getOrElse {
             handleError(it)
@@ -1921,7 +1921,11 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                             return ToolResult(
                                 toolCall.id,
                                 toolCall.function.name,
-                                "Error: ${error.message ?: "Google Workspace no está autorizado."}"
+                                userFacingError(
+                                    error,
+                                    "google_workspace_authorization",
+                                    toolCall.function.name
+                                )
                             )
                         }
                     val result = repository.getGoogleWorkspaceToolHandler().executeTool(
@@ -2015,7 +2019,11 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             }
         } catch (e: Exception) {
             Log.e("WorkspaceDetailVM", "Error executing tool for sub-agent: ${toolCall.function.name}", e)
-            ToolResult(toolCall.id, toolCall.function.name, "Error: ${e.message}")
+            ToolResult(
+                toolCall.id,
+                toolCall.function.name,
+                userFacingError(e, "isolated_tool_execution", toolCall.function.name)
+            )
         }
     }
 
@@ -2269,7 +2277,11 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             )
         }
         val batch = SubagentRequestParser.parse(toolCall.function.arguments).getOrElse { error ->
-            return ToolResult(toolCall.id, toolCall.function.name, "Error: ${error.message}")
+            return ToolResult(
+                toolCall.id,
+                toolCall.function.name,
+                userFacingError(error, "subagent_request_parse", toolCall.function.name)
+            )
         }
         val resolved = batch.tasks.mapNotNull { parsed ->
             val childAgent = resolveSubagent(
@@ -2348,7 +2360,8 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                     messages = synthesisMessages,
                     overrideModel = extractModelId(fullKey),
                     overrideProvider = extractProvider(fullKey),
-                    memorySessionKey = currentMemorySessionKey()
+                    memorySessionKey = currentMemorySessionKey(),
+                    runtimeContextProfile = runtimeContextProfile()
                 )
                 val content = result.getOrNull()?.trim().orEmpty()
                 if (content.isNotBlank()) return content
@@ -2374,10 +2387,10 @@ Directorio de trabajo: $workspacePath""".trimIndent())
 
         // External integrations are executed in a child conversation so discovery, tool calls,
         // raw API payloads and retries never accumulate in Cortex's durable chat context.
-        if (tryProcessIsolatedIntegrationRequest(orchestrator, userMessage)) return
+        if (!assistantModeEnabled && tryProcessIsolatedIntegrationRequest(orchestrator, userMessage)) return
 
         // --- Hybrid routing: try local model first if enabled ---
-        if (orchestrator.useLocalRouting) {
+        if (!assistantModeEnabled && orchestrator.useLocalRouting) {
             val localResult = tryLocalRouting(userMessage.content)
             when (localResult) {
                 is DelegationResult.DelegateToAgent -> {
@@ -2421,12 +2434,10 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             it.role == userMessage.role && it.content == userMessage.content
         } == true) msgsFromDb else msgsFromDb + userMessage
 
-        val enhancedPrompt = agentOrchestrator.buildPrompt(orchestrator).let { prompt ->
-            if (assistantModeEnabled) {
-                CortexAssistantPrompt.appendTo(prompt, assistantLanguageTag)
-            } else {
-                prompt
-            }
+        val enhancedPrompt = if (assistantModeEnabled) {
+            CortexAssistantPrompt.instructionsFor(assistantLanguageTag)
+        } else {
+            agentOrchestrator.buildPrompt(orchestrator)
         }
         val agentWithEnhancedPrompt = orchestrator.copy(systemPrompt = enhancedPrompt)
         val workspacePath = fileRepository.getWorkspaceFolderPath(workspaceId)
@@ -2449,7 +2460,9 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             overrideProvider = extractProvider(fullKey),
             enableTerminal = orchestrator.enableTerminal,
             workspaceFolderPath = workspacePath,
-            memorySessionKey = currentMemorySessionKey()
+            allowedToolNames = assistantAllowedTools(),
+            memorySessionKey = currentMemorySessionKey(),
+            runtimeContextProfile = runtimeContextProfile()
         )
 
         streamFlow.collect { chunk ->
@@ -2511,7 +2524,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         // ── PRIORITY 1: Typed subagent spawning ──
         // Structured tool calls are the most reliable delegation mechanism.
         val capturedToolCalls = toolCalls // Capture for smart cast
-        val hasDelegationToolCalls = capturedToolCalls?.any {
+        val hasDelegationToolCalls = !assistantModeEnabled && capturedToolCalls?.any {
             it.function.name in DelegationToolHandler.ALL_TOOL_NAMES
         } == true
 
@@ -2532,9 +2545,14 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             handleToolCalls(agentWithEnhancedPrompt, capturedToolCalls)
         } else {
             // ── PRIORITY 2: Text-based delegation (regex fallback) ──
-            val parallelDelegation = agentOrchestrator.parseDelegationParallel(content)
-            val sequentialDelegation = if (parallelDelegation == null) agentOrchestrator.parseDelegationSequence(content) else null
-            val singleDelegation = if (parallelDelegation == null && sequentialDelegation == null) agentOrchestrator.parseDelegation(content) else null
+            val parallelDelegation = if (assistantModeEnabled) null
+            else agentOrchestrator.parseDelegationParallel(content)
+            val sequentialDelegation = if (!assistantModeEnabled && parallelDelegation == null) {
+                agentOrchestrator.parseDelegationSequence(content)
+            } else null
+            val singleDelegation = if (!assistantModeEnabled && parallelDelegation == null && sequentialDelegation == null) {
+                agentOrchestrator.parseDelegation(content)
+            } else null
 
             when {
                 parallelDelegation != null -> {
@@ -2624,6 +2642,8 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                     if (!toolCalls.isNullOrEmpty()) {
                         shouldRestoreCortex = false
                         handleToolCalls(agentWithEnhancedPrompt, toolCalls!!)
+                    } else {
+                        completeTerminalPlanAfterSuccessfulWork(currentMessages)
                     }
                 }
             }
@@ -2649,15 +2669,50 @@ Directorio de trabajo: $workspacePath""".trimIndent())
      * Procesa la respuesta de un agente normal (no Cortex).
      * @return true si el procesamiento completó (sin tool calls pendientes), false si está en progreso
      */
+    private suspend fun committedConversationMessages(fallback: Message? = null): List<Message> {
+        val conversationId = _conversationId.value
+        val committed = if (conversationId != null && conversationId > 0) {
+            runCatching { repository.getMessagesForConversationOnce(conversationId) }
+                .onFailure { Log.w("WorkspaceDetailVM", "Unable to read committed conversation snapshot", it) }
+                .getOrElse { messages.value }
+        } else {
+            messages.value
+        }
+        if (fallback == null) return committed
+
+        val alreadyCommitted = committed.any { message ->
+            (fallback.id > 0 && message.id == fallback.id) ||
+                (message.role == fallback.role &&
+                    message.timestamp == fallback.timestamp &&
+                    message.content == fallback.content)
+        }
+        return if (alreadyCommitted) committed else committed + fallback
+    }
+
+    private suspend fun completeTerminalPlanAfterSuccessfulWork(history: List<Message>) {
+        val conversationId = _conversationId.value ?: return
+        if (conversationId <= 0) return
+        val todos = todoDao.getTodos(conversationId)
+        completeTerminalPlanAfterSuccessfulWork(conversationId, todos, history)
+    }
+
+    private suspend fun completeTerminalPlanAfterSuccessfulWork(
+        conversationId: Long,
+        todos: List<com.aiagents.app.data.model.TodoEntity>,
+        history: List<Message>
+    ) {
+        if (!TodoPlanCompletionPolicy.shouldAutoComplete(todos, history)) return
+
+        val completed = todoDao.completeInProgressForConversation(conversationId)
+        if (completed > 0) {
+            Log.i("WorkspaceDetailVM", "Auto-completed terminal task plan for conversation $conversationId")
+        }
+    }
+
     private suspend fun processWithNormalAgent(agent: Agent, lastUserMessage: Message): Boolean {
         val fullKey = effectiveSelectedModel()
         updateAgentStatus(agent.name, "Pensando...")
-        // Small delay to ensure Room Flow has emitted latest messages
-        kotlinx.coroutines.delay(50)
-        val msgsFromDb = messages.value
-        val currentMessages = if (msgsFromDb.lastOrNull()?.let {
-            it.role == lastUserMessage.role && it.content == lastUserMessage.content
-        } == true) msgsFromDb else msgsFromDb + lastUserMessage
+        val currentMessages = committedConversationMessages(lastUserMessage)
         val workspacePath = fileRepository.getWorkspaceFolderPath(workspaceId)
 
         // Inject parallel context if other agents are working
@@ -2685,7 +2740,9 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             overrideProvider = extractProvider(fullKey),
             enableTerminal = agent.enableTerminal,
             workspaceFolderPath = workspacePath,
-            memorySessionKey = currentMemorySessionKey()
+            allowedToolNames = assistantAllowedTools(),
+            memorySessionKey = currentMemorySessionKey(),
+            runtimeContextProfile = runtimeContextProfile()
         )
 
         streamFlow.collect { chunk ->
@@ -2759,6 +2816,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                 reasoning = finalReasoning
             )
             repository.addMessage(workspaceId, _conversationId.value, assistantMessage, agent.id)
+            completeTerminalPlanAfterSuccessfulWork(currentMessages)
             processingComplete = true
         } else {
             val assistantMessage = Message(
@@ -2830,9 +2888,6 @@ Directorio de trabajo: $workspacePath""".trimIndent())
 
     // ── Auto-continue on truncated responses ──────────────────────────────
 
-    /** Max auto-continue attempts to prevent infinite loops */
-    private val MAX_TOOL_CALL_DEPTH = 25
-    private val MAX_AUTO_CONTINUES = 15
     private var autoContinueCount = 0
 
     /**
@@ -2856,13 +2911,13 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             autoContinueCount = 0
             return false
         }
-        if (autoContinueCount >= MAX_AUTO_CONTINUES) {
-            Log.w("WorkspaceDetailVM", "Max auto-continues ($MAX_AUTO_CONTINUES) reached, stopping")
+        if (autoContinueCount >= ConversationExecutionBudget.MAX_AUTO_CONTINUES) {
+            Log.w("WorkspaceDetailVM", "Max auto-continues (${ConversationExecutionBudget.MAX_AUTO_CONTINUES}) reached, stopping")
             autoContinueCount = 0
             return false
         }
         autoContinueCount++
-        Log.d("WorkspaceDetailVM", "Response truncated (finishReason=${response.finishReason}), auto-continuing ($autoContinueCount/$MAX_AUTO_CONTINUES)")
+        Log.d("WorkspaceDetailVM", "Response truncated (finishReason=${response.finishReason}), auto-continuing ($autoContinueCount/${ConversationExecutionBudget.MAX_AUTO_CONTINUES})")
 
         // Save the truncated response as-is
         val assistantMessage = Message(
@@ -2876,9 +2931,6 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         val continueMessage = Message(role = MessageRole.USER, content = "Continúa donde te quedaste.")
         repository.addMessage(workspaceId, _conversationId.value, continueMessage, agent.id)
 
-        // Small delay to ensure messages are saved
-        kotlinx.coroutines.delay(50)
-
         // Re-invoke the agent
         processWithNormalAgent(agent, continueMessage)
         return true
@@ -2886,20 +2938,32 @@ Directorio de trabajo: $workspacePath""".trimIndent())
 
     private fun handleError(error: Throwable) {
         Log.e("WorkspaceDetailVM", "API error", error)
-        val errorMessage = when {
-            error.message?.contains("API Key") == true -> "API Key no configurada. Ve a Proveedores para agregarla."
-            error.message?.contains("Unable to resolve host") == true -> "Sin conexion a internet"
-            error.message?.contains("timeout") == true -> "Tiempo de espera agotado. Intenta de nuevo."
-            error.message?.contains("Connection refused") == true -> "No se pudo conectar al servidor. Verifica que Ollama esté corriendo o la URL del proveedor sea correcta."
-            error.message?.contains("Failed to connect") == true -> "No se pudo conectar al servidor. Verifica la URL y que el servidor esté activo."
-            error.message?.contains("401") == true -> "API Key invalida o expirada. Si usas Ollama, verifica que esté corriendo en la URL correcta."
-            error.message?.contains("403") == true -> "Acceso denegado. Verifica tu API Key."
-            error.message?.contains("429") == true -> "Limite de peticiones excedido. Espera un momento."
-            error.message?.contains("500") == true -> "Error del servidor. Intenta mas tarde."
-            else -> "Error: ${error.message ?: "Desconocido"}"
-        }
+        val errorMessage = userFacingError(error, "chat_response")
         _uiState.value = _uiState.value.copy(error = errorMessage, isLoading = false, currentReasoning = null)
         rememberTaskCompletionPreview(errorMessage)
+    }
+
+    private fun userFacingError(
+        error: Throwable,
+        operation: String,
+        tool: String? = null
+    ): String {
+        val selectedModel = effectiveSelectedModel()
+        val provider = selectedModel.substringBefore('|', missingDelimiterValue = "")
+            .takeIf { it.isNotBlank() }
+        val model = selectedModel.substringAfter('|', missingDelimiterValue = "")
+            .takeIf { it.isNotBlank() }
+            ?: selectedModel.takeIf { it.isNotBlank() }
+        return errorReporter.present(
+            error,
+            ErrorReportContext(
+                component = "workspace_detail",
+                operation = operation,
+                provider = provider,
+                model = model,
+                tool = tool
+            )
+        ).displayMessage
     }
 
     private val FILE_TOOL_NAMES = setOf(
@@ -2920,11 +2984,11 @@ Directorio de trabajo: $workspacePath""".trimIndent())
     )
 
     private suspend fun handleToolCalls(agent: Agent, toolCalls: List<ToolCall>, depth: Int = 0) {
-        if (depth >= MAX_TOOL_CALL_DEPTH) {
-            Log.w("WorkspaceDetailVM", "Max tool call depth ($MAX_TOOL_CALL_DEPTH) reached, stopping")
+        if (depth >= ConversationExecutionBudget.MAX_TOOL_ROUNDS) {
+            Log.w("WorkspaceDetailVM", "Max tool call depth (${ConversationExecutionBudget.MAX_TOOL_ROUNDS}) reached, stopping")
             val limitMsg = Message(
                 role = MessageRole.ASSISTANT,
-                content = "⚠️ Se alcanzó el límite de $MAX_TOOL_CALL_DEPTH iteraciones de herramientas. Puedes enviar otro mensaje para que continúe."
+                content = "⚠️ Se alcanzó el límite de ${ConversationExecutionBudget.MAX_TOOL_ROUNDS} iteraciones de herramientas. Puedes enviar otro mensaje para que continúe."
             )
             repository.addMessage(workspaceId, _conversationId.value, limitMsg, agent.id)
             _uiState.value = _uiState.value.copy(isLoading = false, currentReasoning = null)
@@ -2942,7 +3006,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         // ── spawn_subagents: structured, bounded delegation ──
         // Multiple calls in a single response → true parallel execution via IsolatedAgentExecutor.
         val delegationCalls = toolCalls.filter { it.function.name in DelegationToolHandler.ALL_TOOL_NAMES }
-        if (delegationCalls.isNotEmpty() && agent.isOrchestrator) {
+        if (!assistantModeEnabled && delegationCalls.isNotEmpty() && agent.isOrchestrator) {
             handleDelegationToolCalls(agent, delegationCalls, toolCalls, depth)
             return
         }
@@ -2950,6 +3014,21 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         try {
             for ((index, toolCall) in toolCalls.withIndex()) {
                 Log.d("WorkspaceDetailVM", "Processing tool call ${index + 1}/${toolCalls.size}: ${toolCall.function.name}")
+
+                if (assistantModeEnabled && toolCall.function.name !in CortexAssistantPrompt.ALLOWED_TOOL_NAMES) {
+                    val content = "Error: '${toolCall.function.name}' no está disponible en el modo asistente aislado."
+                    repository.addMessage(
+                        workspaceId,
+                        _conversationId.value,
+                        Message(
+                            role = MessageRole.TOOL,
+                            content = content,
+                            toolResults = listOf(ToolResult(toolCall.id, toolCall.function.name, content))
+                        ),
+                        agent.id
+                    )
+                    continue
+                }
 
                 // Update agent activity status based on tool type
                 val toolStatus = getToolStatusLabel(toolCall.function.name)
@@ -3052,6 +3131,19 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                                 pendingCameraPermission = true,
                                 pendingCameraToolCall = toolCall,
                                 pendingCameraAgent = agent
+                            )
+                            return
+                        }
+                        val requiredPermissions = requiredAssistantActionPermissions(toolCall)
+                        val missingPermissions = requiredPermissions.filter { permission ->
+                            ContextCompat.checkSelfPermission(appContext, permission) !=
+                                PackageManager.PERMISSION_GRANTED
+                        }
+                        if (assistantModeEnabled && missingPermissions.isNotEmpty()) {
+                            _uiState.value = _uiState.value.copy(
+                                pendingAssistantActionPermissions = missingPermissions,
+                                pendingAssistantActionToolCall = toolCall,
+                                pendingAssistantActionAgent = agent
                             )
                             return
                         }
@@ -3244,15 +3336,12 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                 postToBoard(agent.name, "Usó: $toolSummary")
             }
 
-            // Pequeño delay para asegurar que todos los mensajes TOOL se hayan guardado
-            // en la BD y el Flow haya emitido el nuevo valor
-            kotlinx.coroutines.delay(100)
             continueConversationAfterTools(agent, depth)
         } catch (e: Exception) {
             Log.e("WorkspaceDetailVM", "Error in handleToolCalls", e)
             _uiState.value = _uiState.value.copy(
                 executingCommand = null,
-                error = "Error al ejecutar herramienta: ${e.message}"
+                error = userFacingError(e, "tool_execution")
             )
         }
     }
@@ -3541,8 +3630,6 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             !isParallel && outcomes.size > 1 -> "Revisando resultado final del pipeline..."
             else -> "Finalizando..."
         })
-        kotlinx.coroutines.delay(100) // Ensure TOOL messages are persisted
-
         // Delegation completion is a synthesis-only phase. Use a clean request with no
         // tool-call history or tool definitions, then persist a deterministic fallback.
         val results = outcomes.map { it.second }
@@ -3743,8 +3830,6 @@ Directorio de trabajo: $workspacePath""".trimIndent())
 
                 _uiState.value = _uiState.value.copy(executingCommand = null)
 
-                // Pequeño delay para asegurar que el mensaje se haya guardado
-                kotlinx.coroutines.delay(100)
                 continueConversationAfterTools(agent)
             } catch (error: CancellationException) {
                 cancelled = true
@@ -3753,7 +3838,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                 Log.e("WorkspaceDetailVM", "Error in grantPermissionAndExecute", e)
                 _uiState.value = _uiState.value.copy(
                     executingCommand = null,
-                    error = "Error al ejecutar comando: ${e.message}",
+                    error = userFacingError(e, "command_execution"),
                     isLoading = false
                 )
             } finally {
@@ -3808,7 +3893,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         completionRecoveryUsed: Boolean = false,
         ephemeralInstruction: String? = null
     ) {
-        if (depth >= 10) {
+        if (depth >= ConversationExecutionBudget.MAX_TOOL_ROUNDS) {
             Log.w("WorkspaceDetailVM", "Max depth reached in continueConversationAfterTools")
             _uiState.value = _uiState.value.copy(isLoading = false, currentReasoning = null)
             return
@@ -3818,7 +3903,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         val workspacePath = fileRepository.getWorkspaceFolderPath(workspaceId)
         
         // Log el estado actual de los mensajes para debuggear
-        val currentMessages = messages.value
+        val currentMessages = committedConversationMessages()
         Log.d("WorkspaceDetailVM", "Continuing conversation at depth $depth with ${currentMessages.size} messages")
         currentMessages.lastOrNull()?.let { lastMsg ->
             Log.d("WorkspaceDetailVM", "Last message role=${lastMsg.role}, chars=${lastMsg.content.length}")
@@ -3829,9 +3914,9 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         var delegatedToRecovery = false
         try {
             val apiMessages = if (ephemeralInstruction == null) {
-                messages.value
+                currentMessages
             } else {
-                messages.value + Message(
+                currentMessages + Message(
                     role = MessageRole.USER,
                     content = ephemeralInstruction
                 )
@@ -3843,7 +3928,9 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                 overrideProvider = extractProvider(fullKey),
                 enableTerminal = agent.enableTerminal,
                 workspaceFolderPath = workspacePath,
-                memorySessionKey = currentMemorySessionKey()
+                allowedToolNames = assistantAllowedTools(),
+                memorySessionKey = currentMemorySessionKey(),
+                runtimeContextProfile = runtimeContextProfile()
             )
             
             result.onSuccess { response ->
@@ -3857,7 +3944,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                     }
                     val cleanContent = checkAndSetOptions(response.content ?: "")
                     val recoveryInstruction = if (completionRecoveryUsed) null else
-                        ToolCompletionPolicy.recoveryInstruction(messages.value, cleanContent)
+                        ToolCompletionPolicy.recoveryInstruction(currentMessages, cleanContent)
                     if (recoveryInstruction != null) {
                         delegatedToRecovery = true
                         Log.w(
@@ -3878,6 +3965,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                         reasoning = response.reasoning
                     )
                     repository.addMessage(workspaceId, _conversationId.value, assistantMessage, agent.id)
+                    completeTerminalPlanAfterSuccessfulWork(currentMessages)
                     // Solo desactivar isLoading si no hay más tool calls
                     _uiState.value = _uiState.value.copy(isLoading = false, currentReasoning = null)
                     rememberTaskCompletionPreview(cleanContent.take(200))
@@ -3895,7 +3983,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             }.onFailure { error ->
                 Log.e("WorkspaceDetailVM", "Error continuing conversation", error)
                 _uiState.value = _uiState.value.copy(
-                    error = "Error: ${error.message}",
+                    error = userFacingError(error, "tool_followup"),
                     isLoading = false,
                     currentReasoning = null
                 )
@@ -3903,7 +3991,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         } catch (e: Exception) {
             Log.e("WorkspaceDetailVM", "Exception in continueConversationAfterTools", e)
             _uiState.value = _uiState.value.copy(
-                error = "Error: ${e.message}",
+                error = userFacingError(e, "tool_followup"),
                 isLoading = false,
                 currentReasoning = null
             )
@@ -3960,15 +4048,25 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         if (workspaceId <= 0) return null
         val title = firstMessageText?.take(50)?.trim()?.ifBlank { "Nuevo chat" } ?: "Nuevo chat"
         val id = repository.createConversation(
-            Conversation(workspaceId = workspaceId, title = title)
+            Conversation(
+                workspaceId = workspaceId,
+                title = title,
+                contextKind = if (assistantModeEnabled) {
+                    ConversationContextKind.VOICE_ASSISTANT
+                } else {
+                    ConversationContextKind.CHAT
+                }
+            )
         )
         updateConversationId(id)
         return id
     }
 
     fun setConversationId(id: Long?) {
+        if (_conversationId.value == id) return
+        persistCurrentDraftBeforeSwitch()
         updateConversationId(id)
-        _uiState.value = _uiState.value.copy(inputText = "")
+        restoreDraftForCurrentConversation()
     }
 
     private fun updateConversationId(id: Long?) {
@@ -4009,6 +4107,23 @@ Directorio de trabajo: $workspacePath""".trimIndent())
     fun dismissError() {
         _uiState.value = _uiState.value.copy(error = null)
     }
+
+    fun speakMessage(text: String) {
+        textToSpeechManager.speak(text)
+    }
+
+    fun stopSpeaking() {
+        textToSpeechManager.stop()
+    }
+
+    fun dismissTtsError() {
+        textToSpeechManager.dismissError()
+    }
+
+    fun presentTtsError(error: String): String = userFacingError(
+        IllegalStateException(error),
+        "voice_playback"
+    )
 
     private fun formatFileSize(bytes: Long): String {
         return when {
@@ -4079,13 +4194,11 @@ Directorio de trabajo: $workspacePath""".trimIndent())
 
             try {
                 handleCalendarToolCall(agent, toolCall)
-                // Pequeño delay para asegurar que el mensaje se haya guardado
-                kotlinx.coroutines.delay(100)
                 continueConversationAfterTools(agent)
             } catch (e: Exception) {
                 Log.e("WorkspaceDetailVM", "Error handling calendar tool after permission", e)
                 _uiState.value = _uiState.value.copy(
-                    error = "Error al acceder al calendario: ${e.message}",
+                    error = userFacingError(e, "calendar_tool", toolCall.function.name),
                     isLoading = false,
                     currentReasoning = null
                 )
@@ -4120,8 +4233,6 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                 pendingCalendarAgent = null
             )
 
-            // Pequeño delay para asegurar que el mensaje se haya guardado
-            kotlinx.coroutines.delay(100)
             continueConversationAfterTools(agent)
         }
     }
@@ -4160,6 +4271,63 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             toolResults = listOf(toolResult)
         )
         repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
+    }
+
+    private fun requiredAssistantActionPermissions(toolCall: ToolCall): List<String> {
+        if (toolCall.function.name != SystemAppToolHandler.TOOL_NAME) return emptyList()
+        val args = runCatching {
+            gson.fromJson(toolCall.function.arguments, JsonObject::class.java)
+        }.getOrNull() ?: return emptyList()
+        val action = args.get("action")?.asString ?: return emptyList()
+        val params = args.getAsJsonObject("params")
+        return when (action) {
+            "call_phone" -> buildList {
+                add(Manifest.permission.CALL_PHONE)
+                if (params?.get("phone_number")?.asString.isNullOrBlank()) {
+                    add(Manifest.permission.READ_CONTACTS)
+                }
+            }
+            "prepare_whatsapp_message" -> listOf(Manifest.permission.READ_CONTACTS)
+            else -> emptyList()
+        }
+    }
+
+    fun onAssistantActionPermissionsGranted() {
+        val toolCall = _uiState.value.pendingAssistantActionToolCall ?: return
+        val agent = _uiState.value.pendingAssistantActionAgent ?: _activeAgent.value ?: return
+        _uiState.value = _uiState.value.copy(
+            pendingAssistantActionPermissions = emptyList(),
+            pendingAssistantActionToolCall = null,
+            pendingAssistantActionAgent = null
+        )
+        viewModelScope.launch {
+            handleSystemAppIntentToolCall(agent, toolCall)
+            continueConversationAfterTools(agent)
+        }
+    }
+
+    fun onAssistantActionPermissionsDenied() {
+        val toolCall = _uiState.value.pendingAssistantActionToolCall ?: return
+        val agent = _uiState.value.pendingAssistantActionAgent ?: _activeAgent.value ?: return
+        viewModelScope.launch {
+            val content = "Permiso denegado: se necesitan los permisos solicitados para acceder al contacto o iniciar la llamada."
+            repository.addMessage(
+                workspaceId,
+                _conversationId.value,
+                Message(
+                    role = MessageRole.TOOL,
+                    content = content,
+                    toolResults = listOf(ToolResult(toolCall.id, toolCall.function.name, content))
+                ),
+                agent.id
+            )
+            _uiState.value = _uiState.value.copy(
+                pendingAssistantActionPermissions = emptyList(),
+                pendingAssistantActionToolCall = null,
+                pendingAssistantActionAgent = null
+            )
+            continueConversationAfterTools(agent)
+        }
     }
 
     private suspend fun handleSubtaskToolCall(agent: Agent, toolCall: ToolCall) {
@@ -4509,11 +4677,15 @@ Directorio de trabajo: $workspacePath""".trimIndent())
 
     private suspend fun handleGoogleWorkspaceToolCall(agent: Agent, toolCall: ToolCall) {
         val accessToken = repository.getGoogleWorkspaceOAuthManager().getValidAccessToken().getOrElse {
-            val detail = it.message ?: "Google Workspace no está autorizado."
+            val detail = userFacingError(
+                it,
+                "google_workspace_authorization",
+                toolCall.function.name
+            )
             val toolMessage = Message(role = MessageRole.TOOL,
-                content = "Error: $detail",
+                content = detail,
                 toolResults = listOf(ToolResult(toolCall.id, toolCall.function.name,
-                    "Error: $detail")))
+                    detail)))
             repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
             return
         }
@@ -4747,7 +4919,14 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         val handler = repository.getWeatherToolHandler()
         val result = when (toolCall.function.name) {
             WeatherToolHandler.TOOL_NAME_CURRENT -> handler.executeCurrentWeather(toolCall.id, toolCall.function.arguments)
-            WeatherToolHandler.TOOL_NAME_FORECAST -> handler.executeForecast(toolCall.id, toolCall.function.arguments)
+            WeatherToolHandler.TOOL_NAME_FORECAST -> {
+                val latestUserText = messages.value.lastOrNull { it.role == MessageRole.USER }?.content
+                val normalizedArguments = WeatherForecastRequestNormalizer.normalize(
+                    arguments = toolCall.function.arguments,
+                    latestUserText = latestUserText
+                )
+                handler.executeForecast(toolCall.id, normalizedArguments)
+            }
             WeatherToolHandler.TOOL_NAME_AIR_QUALITY -> handler.executeAirQuality(toolCall.id, toolCall.function.arguments)
             else -> return
         }
@@ -4888,7 +5067,6 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             } else {
                 handleLocationToolCall(agent, toolCall)
             }
-            kotlinx.coroutines.delay(100)
             continueConversationAfterTools(agent)
         }
     }
@@ -4995,9 +5173,6 @@ Directorio de trabajo: $workspacePath""".trimIndent())
 
             if (savedPath != null) scanWorkspaceFiles()
             
-            // Pequeño delay para asegurar que el mensaje se haya guardado en la BD
-            // y el Flow haya emitido el nuevo valor
-            kotlinx.coroutines.delay(100)
             continueConversationAfterTools(agent)
         }
     }
@@ -5010,6 +5185,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
      * The active conversation is excluded to avoid interfering with current chat.
      */
     private fun triggerInactiveConversationsExtraction() {
+        if (assistantModeEnabled) return
         val fullKey = effectiveSelectedModel()
         val modelId = extractModelId(fullKey).ifBlank { return }
         val provider = extractProvider(fullKey) ?: return
@@ -5036,8 +5212,9 @@ Directorio de trabajo: $workspacePath""".trimIndent())
      * that were added while the conversation was inactive.
      */
     fun onConversationResumed(conversationId: Long) {
+        if (assistantModeEnabled) return
         // Update our local tracking
-        updateConversationId(conversationId)
+        if (_conversationId.value != conversationId) setConversationId(conversationId)
         
         val fullKey = effectiveSelectedModel()
         val modelId = extractModelId(fullKey).ifBlank { return }
@@ -5069,11 +5246,13 @@ Directorio de trabajo: $workspacePath""".trimIndent())
      * Triggers extraction from all inactive conversations.
      */
     fun onNewConversationStarted() {
-        updateConversationId(null)
+        setConversationId(null)
         triggerInactiveConversationsExtraction()
     }
 
     override fun onCleared() {
+        draftSaveJob?.cancel()
+        draftSaveGuard.invalidate()
         pendingMemoryExtractionJob?.cancel()
         conversationResumeExtractionJob?.cancel()
         val runningTask = currentAgentJob

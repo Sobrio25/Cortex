@@ -3,6 +3,8 @@ package com.aiagents.app.data.repository
 import android.util.Log
 import com.aiagents.app.data.auth.OpenAIEndpointPolicy
 import com.aiagents.app.data.auth.ProviderCredentialResolver
+import com.aiagents.app.data.diagnostics.DiagnosticTraceStore
+import com.aiagents.app.data.diagnostics.TurnCorrelationId
 import com.aiagents.app.data.local.AgentDao
 import com.aiagents.app.data.local.CommandPermissionDao
 import com.aiagents.app.data.local.ConversationDao
@@ -26,6 +28,7 @@ import com.aiagents.app.data.remote.RemoteModelInfo
 import com.aiagents.app.data.remote.flattenToolHistoryForCompatibility
 import com.aiagents.app.data.remote.isHttp400
 import com.aiagents.app.data.runtime.RuntimeContextProvider
+import com.aiagents.app.data.runtime.RuntimeContextProfile
 import com.aiagents.app.data.skills.SkillReviewScheduler
 import com.aiagents.app.data.terminal.AgentCreatorToolHandler
 import com.aiagents.app.data.terminal.AgentSelectionToolHandler
@@ -63,6 +66,7 @@ import com.aiagents.app.data.terminal.ScheduledTaskToolHandler
 import com.aiagents.app.data.terminal.TodoToolHandler
 import com.aiagents.app.data.terminal.DelegationToolHandler
 import com.aiagents.app.data.terminal.ToolSearchHandler
+import com.aiagents.app.data.terminal.ToolOutputBudget
 import com.aiagents.app.data.terminal.UnifiedWebToolHandler
 import com.aiagents.app.data.terminal.SkillToolHandler
 import com.aiagents.app.domain.model.Agent
@@ -79,7 +83,11 @@ import com.aiagents.app.domain.model.ToolResult
 import com.aiagents.app.domain.model.WebSearchProvider
 import com.aiagents.app.domain.model.Workspace
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.CancellationException
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import com.google.gson.Gson
@@ -136,6 +144,7 @@ class AgentRepository @Inject constructor(
     private val scheduledTaskToolHandler: ScheduledTaskToolHandler,
     private val runtimeContextProvider: RuntimeContextProvider,
     private val skillReviewScheduler: SkillReviewScheduler,
+    private val diagnosticTraceStore: DiagnosticTraceStore,
     private val localModelRepository: com.aiagents.app.data.local.LocalModelRepository? = null
 ) {
     fun getAllAgents(): Flow<List<Agent>> {
@@ -214,12 +223,14 @@ class AgentRepository @Inject constructor(
 
     suspend fun addMessage(workspaceId: Long, message: Message, agentId: Long? = null): Long {
         val id = messageDao.insertMessage(MessageEntity.fromDomain(message, workspaceId, agentId))
+        diagnosticTraceStore.recordToolResults(message.toolResults)
         scheduleSelfImprovementIfEligible(workspaceId, null, message, agentId)
         return id
     }
 
     suspend fun addMessage(workspaceId: Long, conversationId: Long?, message: Message, agentId: Long? = null): Long {
         val id = messageDao.insertMessage(MessageEntity.fromDomain(message, workspaceId, agentId, conversationId))
+        diagnosticTraceStore.recordToolResults(message.toolResults)
         scheduleSelfImprovementIfEligible(workspaceId, conversationId, message, agentId)
         return id
     }
@@ -234,7 +245,11 @@ class AgentRepository @Inject constructor(
         // Assistant turns with tool calls are intermediate iterations, not the response boundary.
         if (message.toolCalls.isNotEmpty()) return
         // Delegated sub-conversation prompts are synthetic and must not count as user messages.
-        if (conversationId != null && conversationDao.getConversationById(conversationId)?.parentConversationId != null) return
+        if (conversationId != null) {
+            val conversation = conversationDao.getConversationById(conversationId)
+            if (conversation?.parentConversationId != null) return
+            if (conversation?.contextKind != com.aiagents.app.domain.model.ConversationContextKind.CHAT.name) return
+        }
         runCatching {
             val workspace = workspaceDao.getWorkspaceById(workspaceId) ?: return@runCatching
             val respondingAgentId = agentId ?: workspace.activeAgentId ?: return@runCatching
@@ -296,6 +311,10 @@ class AgentRepository @Inject constructor(
         }
     }
 
+    /** Reads the committed Room snapshot without waiting for the UI StateFlow to catch up. */
+    suspend fun getMessagesForConversationOnce(conversationId: Long): List<Message> =
+        messageDao.getMessagesForConversation(conversationId).first().map { it.toDomain() }
+
     suspend fun clearConversation(conversationId: Long) {
         messageDao.deleteMessagesForConversation(conversationId)
     }
@@ -333,9 +352,12 @@ class AgentRepository @Inject constructor(
         messages: List<Message>,
         overrideModel: String? = null,
         overrideProvider: ProviderType? = null,
-        memorySessionKey: String? = null
+        memorySessionKey: String? = null,
+        runtimeContextProfile: RuntimeContextProfile = RuntimeContextProfile.STANDARD
     ): Result<String> {
-        runtimeContextProvider.refreshIdentityFromMemory()
+        if (runtimeContextProfile == RuntimeContextProfile.STANDARD) {
+            runtimeContextProvider.refreshIdentityFromMemory()
+        }
         val activeProvider = overrideProvider ?: getActiveProvider() ?: getFirstConfiguredProvider()
         if (activeProvider == null) {
             Log.e("AgentRepository", "No provider configured")
@@ -361,23 +383,53 @@ class AgentRepository @Inject constructor(
         val chatMessages = contextMessages.map { msg ->
             ChatMessage(
                 role = msg.role.name.lowercase(),
-                content = msg.content
+                content = providerMessageContent(
+                    content = msg.content,
+                    isToolMessage = msg.role == MessageRole.TOOL,
+                    isImageResult = false
+                )
             )
         }
         
         Log.d("AgentRepository", "Sending ${chatMessages.size} messages to API")
-        return client.chat(
+        val traceId = beginDiagnosticTrace(
+            agent = agent,
+            messages = messages,
+            provider = activeProvider,
+            model = modelToUse,
+            exposedToolCount = 0
+        )
+        val diagnosticStartedAt = System.nanoTime()
+        val result = client.chat(
             model = modelToUse,
             messages = chatMessages,
             systemPrompt = runtimeContextProvider.enrich(
                 basePrompt = agent.systemPrompt,
                 agentName = agent.name,
                 agentRole = agent.role,
-                memorySessionKey = memorySessionKey ?: deriveMemorySessionKey(agent, messages)
+                memorySessionKey = memorySessionKey ?: deriveMemorySessionKey(agent, messages),
+                profile = runtimeContextProfile
             ),
             temperature = agent.temperature,
             maxTokens = agent.maxTokens
         )
+        result.fold(
+            onSuccess = {
+                diagnosticTraceStore.completeProviderRequest(
+                    traceId = traceId,
+                    durationMs = elapsedMs(diagnosticStartedAt),
+                    toolCalls = emptyList()
+                )
+            },
+            onFailure = { error ->
+                diagnosticTraceStore.failProviderRequest(
+                    traceId = traceId,
+                    durationMs = elapsedMs(diagnosticStartedAt),
+                    throwable = error
+                )
+            }
+        )
+        return result
     }
 
     /**
@@ -392,7 +444,6 @@ class AgentRepository @Inject constructor(
         maxTokens: Int,
         provider: ProviderType?
     ): Result<String> {
-        runtimeContextProvider.refreshIdentityFromMemory()
         val activeProvider = provider ?: getActiveProvider() ?: getFirstConfiguredProvider()
             ?: return Result.failure(Exception("No provider configured"))
         val credentials = providerCredentialResolver.resolve(activeProvider)
@@ -402,11 +453,10 @@ class AgentRepository @Inject constructor(
         return client.chat(
             model,
             messages,
-            runtimeContextProvider.enrich(
-                basePrompt = systemPrompt,
-                agentName = "Internal agent",
-                agentRole = "Internal operation"
-            ),
+            // Internal summarization/export prompts are deliberately self-contained. Injecting
+            // identity, memory, skill index, device and tool state here wastes context and can
+            // distract the model from the transformation being requested.
+            systemPrompt,
             temperature,
             maxTokens
         )
@@ -569,9 +619,12 @@ class AgentRepository @Inject constructor(
         enableTerminal: Boolean = false,
         workspaceFolderPath: String? = null,
         allowedToolNames: Set<String>? = null,
-        memorySessionKey: String? = null
+        memorySessionKey: String? = null,
+        runtimeContextProfile: RuntimeContextProfile = RuntimeContextProfile.STANDARD
     ): Result<ChatResponseWithTools> {
-        runtimeContextProvider.refreshIdentityFromMemory()
+        if (runtimeContextProfile == RuntimeContextProfile.STANDARD) {
+            runtimeContextProvider.refreshIdentityFromMemory()
+        }
         val activeProvider = overrideProvider ?: getActiveProvider() ?: getFirstConfiguredProvider()
         if (activeProvider == null) {
             Log.e("AgentRepository", "No provider configured")
@@ -608,7 +661,7 @@ class AgentRepository @Inject constructor(
             
             ChatMessage(
                 role = msg.role.name.lowercase(),
-                content = msg.content,
+                content = providerMessageContent(msg.content, isToolMessage, isImageResult),
                 clientMessageId = if (msg.role == MessageRole.USER && msg.id > 0) {
                     "${msg.id}:${msg.timestamp}"
                 } else null,
@@ -622,6 +675,14 @@ class AgentRepository @Inject constructor(
         }
         
         val tools = buildToolDefinitions(agent, enableTerminal, workspaceFolderPath, allowedToolNames)
+        val traceId = beginDiagnosticTrace(
+            agent = agent,
+            messages = messages,
+            provider = activeProvider,
+            model = modelToUse,
+            exposedToolCount = tools.size
+        )
+        val diagnosticStartedAt = System.nanoTime()
 
         val sanitized = sanitizeToolCallHistory(chatMessages)
         val runtimePrompt = buildRuntimeSystemPrompt(
@@ -631,7 +692,8 @@ class AgentRepository @Inject constructor(
             enableTerminal,
             workspaceFolderPath,
             allowedToolNames,
-            memorySessionKey
+            memorySessionKey,
+            runtimeContextProfile
         )
         val requiresTextToolHistory = activeProvider == ProviderType.KILO &&
             modelToUse.startsWith("tencent/hy3", ignoreCase = true) &&
@@ -660,13 +722,16 @@ class AgentRepository @Inject constructor(
             activeProvider == ProviderType.KILO &&
             firstAttempt.exceptionOrNull()?.isHttp400() == true &&
             sanitized.any { it.role == "tool" }
-        if (!shouldRetryWithTextToolHistory) return firstAttempt
+        if (!shouldRetryWithTextToolHistory) {
+            recordDiagnosticResult(traceId, diagnosticStartedAt, firstAttempt)
+            return firstAttempt
+        }
 
         Log.w(
             "AgentRepository",
             "Kilo rejected native tool history with HTTP 400; retrying once with text-compatible history"
         )
-        return client.chatWithTools(
+        val retry = client.chatWithTools(
             model = modelToUse,
             messages = flattenToolHistoryForCompatibility(sanitized),
             systemPrompt = runtimePrompt,
@@ -674,6 +739,8 @@ class AgentRepository @Inject constructor(
             maxTokens = agent.maxTokens,
             tools = tools
         )
+        recordDiagnosticResult(traceId, diagnosticStartedAt, retry)
+        return retry
     }
 
     /**
@@ -687,9 +754,12 @@ class AgentRepository @Inject constructor(
         enableTerminal: Boolean = false,
         workspaceFolderPath: String? = null,
         allowedToolNames: Set<String>? = null,
-        memorySessionKey: String? = null
+        memorySessionKey: String? = null,
+        runtimeContextProfile: RuntimeContextProfile = RuntimeContextProfile.STANDARD
     ): Flow<StreamingChunk> {
-        runtimeContextProvider.refreshIdentityFromMemory()
+        if (runtimeContextProfile == RuntimeContextProfile.STANDARD) {
+            runtimeContextProvider.refreshIdentityFromMemory()
+        }
         val activeProvider = overrideProvider ?: getActiveProvider() ?: getFirstConfiguredProvider()
         if (activeProvider == null) {
             return kotlinx.coroutines.flow.flow {
@@ -722,7 +792,7 @@ class AgentRepository @Inject constructor(
 
             ChatMessage(
                 role = msg.role.name.lowercase(),
-                content = msg.content,
+                content = providerMessageContent(msg.content, isToolMessage, isImageResult),
                 toolCalls = msg.toolCalls.ifEmpty { null },
                 toolCallId = toolResult?.toolCallId,
                 name = toolResult?.name,
@@ -735,7 +805,15 @@ class AgentRepository @Inject constructor(
 
         val sanitized = sanitizeToolCallHistory(chatMessages)
         Log.d("AgentRepository", "Streaming ${sanitized.size} messages to API with ${tools.size} tools")
-        return client.chatWithToolsStreaming(
+        val traceId = beginDiagnosticTrace(
+            agent = agent,
+            messages = messages,
+            provider = activeProvider,
+            model = modelToUse,
+            exposedToolCount = tools.size
+        )
+        val diagnosticStartedAt = System.nanoTime()
+        val upstream = client.chatWithToolsStreaming(
             model = modelToUse,
             messages = sanitized,
             systemPrompt = buildRuntimeSystemPrompt(
@@ -745,12 +823,65 @@ class AgentRepository @Inject constructor(
                 enableTerminal,
                 workspaceFolderPath,
                 allowedToolNames,
-                memorySessionKey
+                memorySessionKey,
+                runtimeContextProfile
             ),
             temperature = agent.temperature,
             maxTokens = agent.maxTokens,
             tools = tools
         )
+        return flow {
+            var terminalEventRecorded = false
+            try {
+                upstream.collect { chunk ->
+                    when {
+                        chunk.error != null -> {
+                            val diagnosticError = listOfNotNull(
+                                chunk.errorStatusCode?.let { "HTTP $it" },
+                                chunk.error
+                            ).joinToString(": ")
+                            diagnosticTraceStore.failProviderRequest(
+                                traceId = traceId,
+                                durationMs = elapsedMs(diagnosticStartedAt),
+                                throwable = IllegalStateException(diagnosticError)
+                            )
+                            terminalEventRecorded = true
+                        }
+                        chunk.done -> {
+                            diagnosticTraceStore.completeProviderRequest(
+                                traceId = traceId,
+                                durationMs = elapsedMs(diagnosticStartedAt),
+                                toolCalls = chunk.toolCalls.orEmpty()
+                            )
+                            terminalEventRecorded = true
+                        }
+                    }
+                    emit(chunk)
+                }
+                if (!terminalEventRecorded) {
+                    diagnosticTraceStore.failProviderRequest(
+                        traceId = traceId,
+                        durationMs = elapsedMs(diagnosticStartedAt),
+                        throwable = IllegalStateException("Provider stream ended without a terminal event")
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                diagnosticTraceStore.failProviderRequest(
+                    traceId = traceId,
+                    durationMs = elapsedMs(diagnosticStartedAt),
+                    throwable = cancelled,
+                    cancelled = true
+                )
+                throw cancelled
+            } catch (error: Throwable) {
+                diagnosticTraceStore.failProviderRequest(
+                    traceId = traceId,
+                    durationMs = elapsedMs(diagnosticStartedAt),
+                    throwable = error
+                )
+                throw error
+            }
+        }
     }
 
     /**
@@ -766,9 +897,12 @@ class AgentRepository @Inject constructor(
         workspaceFolderPath: String? = null,
         imageDataUris: List<String> = emptyList(),
         allowedToolNames: Set<String>? = null,
-        memorySessionKey: String? = null
+        memorySessionKey: String? = null,
+        runtimeContextProfile: RuntimeContextProfile = RuntimeContextProfile.STANDARD
     ): Result<ChatResponseWithTools> {
-        runtimeContextProvider.refreshIdentityFromMemory()
+        if (runtimeContextProfile == RuntimeContextProfile.STANDARD) {
+            runtimeContextProvider.refreshIdentityFromMemory()
+        }
         val activeProvider = overrideProvider ?: getActiveProvider() ?: getFirstConfiguredProvider()
         if (activeProvider == null) {
             Log.e("AgentRepository", "No provider configured")
@@ -802,7 +936,7 @@ class AgentRepository @Inject constructor(
             
             ChatMessage(
                 role = msg.role.name.lowercase(),
-                content = msg.content,
+                content = providerMessageContent(msg.content, isToolMessage, isImageResult),
                 toolCalls = msg.toolCalls.ifEmpty { null },
                 toolCallId = toolResult?.toolCallId,
                 name = toolResult?.name,
@@ -815,7 +949,15 @@ class AgentRepository @Inject constructor(
 
         val sanitized = sanitizeToolCallHistory(chatMessages)
         Log.d("AgentRepository", "Sending ${sanitized.size} messages with ${imageDataUris.size} images")
-        return client.chatWithTools(
+        val traceId = beginDiagnosticTrace(
+            agent = agent,
+            messages = messages,
+            provider = activeProvider,
+            model = modelToUse,
+            exposedToolCount = tools.size
+        )
+        val diagnosticStartedAt = System.nanoTime()
+        val result = client.chatWithTools(
             model = modelToUse,
             messages = sanitized,
             systemPrompt = buildRuntimeSystemPrompt(
@@ -825,13 +967,68 @@ class AgentRepository @Inject constructor(
                 enableTerminal,
                 workspaceFolderPath,
                 allowedToolNames,
-                memorySessionKey
+                memorySessionKey,
+                runtimeContextProfile
             ),
             temperature = agent.temperature,
             maxTokens = agent.maxTokens,
             tools = tools
         )
+        recordDiagnosticResult(traceId, diagnosticStartedAt, result)
+        return result
     }
+
+    private fun beginDiagnosticTrace(
+        agent: Agent,
+        messages: List<Message>,
+        provider: ProviderType,
+        model: String,
+        exposedToolCount: Int
+    ): String {
+        val traceId = TurnCorrelationId.from(agent.id, messages)
+        val lastUserIndex = messages.indexOfLast { it.role == MessageRole.USER }
+        val currentTurnMessages = if (lastUserIndex >= 0) {
+            messages.drop(lastUserIndex + 1)
+        } else {
+            messages
+        }
+        diagnosticTraceStore.beginProviderRequest(
+            traceId = traceId,
+            provider = provider.name,
+            model = model,
+            agent = "agent-${agent.id}",
+            messageCount = messages.size,
+            exposedToolCount = exposedToolCount,
+            existingToolResults = currentTurnMessages.flatMap { it.toolResults }
+        )
+        return traceId
+    }
+
+    private fun recordDiagnosticResult(
+        traceId: String,
+        startedAtNanos: Long,
+        result: Result<ChatResponseWithTools>
+    ) {
+        result.fold(
+            onSuccess = { response ->
+                diagnosticTraceStore.completeProviderRequest(
+                    traceId = traceId,
+                    durationMs = elapsedMs(startedAtNanos),
+                    toolCalls = response.toolCalls.orEmpty()
+                )
+            },
+            onFailure = { error ->
+                diagnosticTraceStore.failProviderRequest(
+                    traceId = traceId,
+                    durationMs = elapsedMs(startedAtNanos),
+                    throwable = error
+                )
+            }
+        )
+    }
+
+    private fun elapsedMs(startedAtNanos: Long): Long =
+        ((System.nanoTime() - startedAtNanos) / 1_000_000L).coerceAtLeast(0L)
 
     fun getShellExecutor(): ShellExecutor = shellExecutor
 
@@ -922,6 +1119,36 @@ class AgentRepository @Inject constructor(
         Log.d("AgentRepository", "Activated ${names.size} tools for agent ${agent.id}")
     }
 
+    /**
+     * Locally routes the current request to a small task-specific schema pack.
+     *
+     * This avoids paying an additional model round for obvious requests such as weather, GitHub
+     * or scheduling while retaining search_tools as the fallback for ambiguous requests.
+     */
+    fun activateRelevantTools(
+        agent: Agent,
+        workspaceFolderPath: String?,
+        request: String
+    ): Set<String> {
+        if (request.isBlank()) return emptySet()
+        val available = getAllAvailableToolNames(agent, agent.enableTerminal, workspaceFolderPath)
+        val routed = toolSearchHandler.search(request, available)
+        if (!routed.found) return emptySet()
+
+        val isolatedGoogleTools = if (agent.isOrchestrator) {
+            GoogleWorkspaceToolHandler.ALL_TOOL_NAMES + GoogleDriveToolHandler.ALL_TOOL_NAMES
+        } else {
+            emptySet()
+        }
+        val selected = routed.rankedToolNames.asSequence()
+            .filterNot { it in ToolSearchHandler.CORE_TOOL_NAMES }
+            .filterNot { it in isolatedGoogleTools }
+            .take(ToolSearchHandler.MAX_PREACTIVATED_TOOLS)
+            .toSet()
+        if (selected.isNotEmpty()) activateTools(agent, workspaceFolderPath, selected)
+        return selected
+    }
+
     /** Reset activated tools (call at the start of each new user message) */
     fun resetActivatedTools(agent: Agent, workspaceFolderPath: String?) {
         activatedToolNamesByScope.remove(toolActivationScope(agent, workspaceFolderPath))
@@ -962,7 +1189,8 @@ class AgentRepository @Inject constructor(
         enableTerminal: Boolean,
         workspaceFolderPath: String?,
         allowedToolNames: Set<String>? = null,
-        memorySessionKey: String? = null
+        memorySessionKey: String? = null,
+        runtimeContextProfile: RuntimeContextProfile = RuntimeContextProfile.STANDARD
     ): String = runtimeContextProvider.enrich(
         basePrompt = agent.systemPrompt,
         agentName = agent.name,
@@ -970,7 +1198,8 @@ class AgentRepository @Inject constructor(
         exposedToolNames = extractToolNames(exposedTools),
         allAvailableToolNames = getAllAvailableToolNames(agent, enableTerminal, workspaceFolderPath)
             .let { names -> allowedToolNames?.let(names::intersect) ?: names },
-        memorySessionKey = memorySessionKey ?: deriveMemorySessionKey(agent, messages)
+        memorySessionKey = memorySessionKey ?: deriveMemorySessionKey(agent, messages),
+        profile = runtimeContextProfile
     )
 
     /** Stable for every continuation/tool round in one conversation, without storing content. */
@@ -984,6 +1213,16 @@ class AgentRepository @Inject constructor(
         @Suppress("UNCHECKED_CAST")
         val function = tool["function"] as? Map<String, Any>
         function?.get("name") as? String
+    }
+
+    private fun providerMessageContent(
+        content: String,
+        isToolMessage: Boolean,
+        isImageResult: Boolean
+    ): String = if (isToolMessage && !isImageResult) {
+        ToolOutputBudget.compactForProvider(content)
+    } else {
+        content
     }
 
     /**

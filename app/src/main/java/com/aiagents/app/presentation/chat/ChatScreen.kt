@@ -3,6 +3,7 @@ package com.aiagents.app.presentation.chat
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aiagents.app.presentation.drawer.DrawerViewModel
 import com.aiagents.app.presentation.workspace_detail.WorkspaceDetailScreen
 
@@ -14,7 +15,7 @@ fun ChatScreen(
     drawerViewModel: DrawerViewModel,
     modifier: Modifier = Modifier
 ) {
-    val activeWorkspaceId by drawerViewModel.activeWorkspaceId.collectAsState()
+    val activeWorkspaceId by drawerViewModel.activeWorkspaceId.collectAsStateWithLifecycle()
 
     if (activeWorkspaceId > 0) {
         WorkspaceDetailScreen(

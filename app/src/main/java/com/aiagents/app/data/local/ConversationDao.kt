@@ -47,6 +47,7 @@ interface ConversationDao {
         WHERE id != :excludeConversationId 
         AND (lastMemoryExtraction IS NULL OR updatedAt > lastMemoryExtraction)
         AND status = 'active'
+        AND contextKind = 'CHAT'
         ORDER BY updatedAt DESC
         LIMIT :limit
     """)
@@ -62,6 +63,7 @@ interface ConversationDao {
         SELECT * FROM conversations 
         WHERE (lastMemoryExtraction IS NULL OR updatedAt > lastMemoryExtraction)
         AND status = 'active'
+        AND contextKind = 'CHAT'
         ORDER BY updatedAt DESC
         LIMIT :limit
     """)

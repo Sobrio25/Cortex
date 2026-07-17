@@ -2,8 +2,8 @@ package com.aiagents.app.data.speech
 
 import android.content.Context
 import android.util.Log
+import com.aiagents.app.data.local.AssistantPreferences
 import com.aiagents.app.data.model.CloudSTTProvider
-import java.io.File
 import com.aiagents.app.data.model.STTMode
 import com.aiagents.app.data.model.STTSettingsEntity
 import com.aiagents.app.domain.service.STTConfig
@@ -17,7 +17,9 @@ import javax.inject.Singleton
 
 @Singleton
 class STTManager @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val assistantPreferences: AssistantPreferences,
+    private val selfHostedVoiceApi: SelfHostedVoiceApi
 ) {
     private val _currentService = MutableStateFlow<STTService?>(null)
     val currentService: StateFlow<STTService?> = _currentService.asStateFlow()
@@ -28,7 +30,36 @@ class STTManager @Inject constructor(
     private val _isEnabled = MutableStateFlow(false)
     val isEnabled: StateFlow<Boolean> = _isEnabled.asStateFlow()
 
+    @Volatile
+    private var assistantSessionActive = false
+    private var lastWorkspaceSettings: STTSettingsEntity? = null
+
+    @Synchronized
     fun initializeFromSettings(settings: STTSettingsEntity?) {
+        lastWorkspaceSettings = settings
+        if (assistantSessionActive) {
+            Log.d("STTManager", "Workspace STT update deferred while assistant owns the microphone")
+            return
+        }
+        initializeFromSettingsInternal(settings)
+    }
+
+    @Synchronized
+    fun beginAssistantSession(settings: STTSettingsEntity) {
+        assistantSessionActive = true
+        initializeFromSettingsInternal(settings)
+        Log.d("STTManager", "Assistant acquired exclusive STT session")
+    }
+
+    @Synchronized
+    fun endAssistantSession() {
+        if (!assistantSessionActive) return
+        assistantSessionActive = false
+        initializeFromSettingsInternal(lastWorkspaceSettings)
+        Log.d("STTManager", "Assistant released STT session")
+    }
+
+    private fun initializeFromSettingsInternal(settings: STTSettingsEntity?) {
         if (settings == null) {
             _isEnabled.value = false
             releaseService()
@@ -62,20 +93,22 @@ class STTManager @Inject constructor(
             STTConfig.STTMode.LOCAL
         }
 
+        val remoteConfig = assistantPreferences.remoteSttConfig.value
         val config = STTConfig(
             mode = mode,
             language = settings.language,
-            apiKey = settings.apiKey,
+            apiKey = if (cloudProvider == STTConfig.CloudSTTProvider.SELF_HOSTED) {
+                remoteConfig.apiKey
+            } else {
+                settings.apiKey
+            },
             cloudProvider = cloudProvider,
             localEngine = localEngine,
-            voskModelId = if (settings.language.substringBefore('-').equals("en", ignoreCase = true)) {
-                "vosk-small-en"
-            } else {
-                "vosk-small-es"
-            }
+            remoteEndpointUrl = remoteConfig.endpointUrl,
+            remoteModel = remoteConfig.model
         )
 
-        initializeService(config)
+        replaceService(config)
     }
 
     /**
@@ -85,6 +118,7 @@ class STTManager @Inject constructor(
         return when (providerName) {
             "ANDROID_SPEECH_RECOGNIZER" -> "ANDROID_SPEECH_RECOGNIZER"
             "WHISPER_API" -> "WHISPER_API"
+            "SELF_HOSTED", "FASTER_WHISPER" -> "SELF_HOSTED"
             "GOOGLE_FREE" -> "GOOGLE_SPEECH"
             "ASSEMBLY_AI" -> "ASSEMBLY_AI"
             "DEEPGRAM" -> "DEEPGRAM"
@@ -92,7 +126,16 @@ class STTManager @Inject constructor(
         }
     }
 
+    @Synchronized
     fun initializeService(config: STTConfig) {
+        if (assistantSessionActive) {
+            Log.d("STTManager", "Direct workspace STT update deferred while assistant is active")
+            return
+        }
+        replaceService(config)
+    }
+
+    private fun replaceService(config: STTConfig) {
         releaseService()
 
         val service = when (config.mode) {
@@ -113,16 +156,23 @@ class STTManager @Inject constructor(
             STTConfig.CloudSTTProvider.ANDROID_SPEECH_RECOGNIZER ->
                 AndroidSpeechRecognizerSTTService(context)
             else ->
-                WhisperCloudSTTService(context, config.apiKey, config.cloudProvider)
+                WhisperCloudSTTService(
+                    context = context,
+                    apiKey = config.apiKey,
+                    provider = config.cloudProvider,
+                    remoteEndpointUrl = config.remoteEndpointUrl,
+                    remoteModel = config.remoteModel,
+                    selfHostedVoiceApi = selfHostedVoiceApi
+                )
         }
     }
 
     private fun createLocalService(config: STTConfig): STTService {
-        val modelInfo = ModelDownloader.getVoskModelInfo(config.voskModelId)
-        val dirName = modelInfo?.dirName ?: "vosk-model-small-es"
-        val modelPath = VoskSTTService.getModelPath(context, dirName)
-        if (config.localEngine == STTConfig.LocalSTTEngine.VOSK) {
-            return VoskSTTService(context, modelPath)
+        if (config.localEngine == STTConfig.LocalSTTEngine.SHERPA_ONNX) {
+            OnDemandVoiceFeatureLoader.createOfflineService(context, config.language)?.let { service ->
+                return service
+            }
+            Log.w("STTManager", "Offline STT was selected but its feature or model is unavailable")
         }
 
         return when {
@@ -132,11 +182,9 @@ class STTManager @Inject constructor(
                     onDeviceOnly = true,
                     fallbackToSystemRecognizer = true
                 )
-            VoskSTTService.isModelDownloaded(context, dirName) ->
-                VoskSTTService(context, modelPath)
             AndroidSpeechRecognizerSTTService.isSystemRecognitionAvailable(context) ->
                 AndroidSpeechRecognizerSTTService(context)
-            else -> VoskSTTService(context, modelPath)
+            else -> AndroidSpeechRecognizerSTTService(context)
         }
     }
 

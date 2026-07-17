@@ -31,6 +31,7 @@ import com.aiagents.app.presentation.onboarding.OnboardingViewModel
 import com.aiagents.app.presentation.providers.ProvidersScreen
 import com.aiagents.app.presentation.scheduled_tasks.ScheduledTasksScreen
 import com.aiagents.app.presentation.settings.GoogleWorkspaceSettingsScreen
+import com.aiagents.app.presentation.settings.DiagnosticsScreen
 import com.aiagents.app.presentation.settings.SettingsScreen
 import com.aiagents.app.presentation.subscription.SubscriptionScreen
 import com.aiagents.app.presentation.skills.SkillsScreen
@@ -56,6 +57,7 @@ sealed class Screen(val route: String) {
     data object ScheduledTasks : Screen("settings/scheduled_tasks")
     data object Assistant : Screen("settings/assistant")
     data object GoogleWorkspace : Screen("settings/google_workspace")
+    data object Diagnostics : Screen("settings/diagnostics")
     data object WorkspaceDetail : Screen("workspace/{workspaceId}") {
         fun createRoute(workspaceId: Long) = "workspace/$workspaceId"
     }
@@ -117,6 +119,7 @@ private fun OnboardingFlowContent(onboardingViewModel: OnboardingViewModel) {
             OnboardingScreen(
                 viewModel = onboardingViewModel,
                 onNavigateToProviders = { navController.navigate(Screen.Providers.route) },
+                onNavigateToLocalModels = { navController.navigate(Screen.LocalModels.route) },
                 onNavigateToMCP = { navController.navigate(Screen.MCP.route) },
                 onNavigateToAgents = { navController.navigate(Screen.Agents.route) },
                 onNavigateToWorkspaces = { navController.navigate(Screen.Workspaces.route) },
@@ -330,6 +333,9 @@ private fun MainAppContent(
                     onNavigateToMCP = { navController.navigate(Screen.MCP.route) },
                     onNavigateToGoogleWorkspace = {
                         navController.navigate(Screen.GoogleWorkspace.route)
+                    },
+                    onNavigateToDiagnostics = {
+                        navController.navigate(Screen.Diagnostics.route)
                     }
                 )
             }
@@ -390,6 +396,11 @@ private fun MainAppContent(
             composable(Screen.GoogleWorkspace.route) {
                 GoogleWorkspaceSettingsScreen(
                     onNavigateBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.Diagnostics.route) {
+                DiagnosticsScreen(
+                    onBack = { navController.popBackStack() }
                 )
             }
             composable(

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   FREE_TOKENS_LIMIT,
+  EntitlementError,
+  freeTokenReservationAmount,
   quotaPeriodKey,
   requireFreeDataConsent,
   requireGoogleSignInForFree,
@@ -28,6 +30,18 @@ test("free reservation caps the requested completion", () => {
   const capped = estimateFreeTokenReservation({ maxTokens: 1_000_000 });
   const oneToken = estimateFreeTokenReservation({ maxTokens: 1 });
   assert.equal(capped - oneToken, 65_535);
+});
+
+test("final free request reserves only the balance needed to reach one hundred percent", () => {
+  assert.equal(freeTokenReservationAmount(499_900, FREE_TOKENS_LIMIT, 25_000), 100);
+  assert.equal(freeTokenReservationAmount(0, FREE_TOKENS_LIMIT, 900_000), FREE_TOKENS_LIMIT);
+});
+
+test("free requests are rejected only after the weekly allowance reaches one hundred percent", () => {
+  assert.throws(
+    () => freeTokenReservationAmount(FREE_TOKENS_LIMIT, FREE_TOKENS_LIMIT, 1),
+    (error: unknown) => error instanceof EntitlementError && error.status === 429,
+  );
 });
 
 test("free plan requires a Google-backed Firebase session", () => {

@@ -44,6 +44,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.aiagents.app.R
+import com.aiagents.app.domain.model.ManagedInferenceUsage
+import com.aiagents.app.domain.model.ManagedModel
 import com.aiagents.app.domain.model.SubscriptionPlan
 import java.text.NumberFormat
 
@@ -54,6 +56,8 @@ fun SubscriptionScreen(
     viewModel: SubscriptionViewModel = hiltViewModel()
 ) {
     val usage by viewModel.usage.collectAsState()
+    val catalog by viewModel.catalog.collectAsState()
+    val lastInferenceUsage by viewModel.lastInferenceUsage.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
     val products by viewModel.products.collectAsState()
     val privacyAccepted by viewModel.privacyAccepted.collectAsState()
@@ -81,16 +85,45 @@ fun SubscriptionScreen(
             item {
                 UsageCard(
                     planName = usage.plan.displayName,
-                    remainingPercentage = usage.remainingPercentage,
+                    percentage = if (usage.plan == SubscriptionPlan.FREE) {
+                        usage.freeUsedPercentage
+                    } else {
+                        usage.remainingPercentage
+                    },
                     detail = if (usage.plan == SubscriptionPlan.FREE) {
                         stringResource(
                             R.string.subscription_free_usage,
-                            NumberFormat.getIntegerInstance().format(usage.freeTokensUsed),
-                            NumberFormat.getIntegerInstance().format(usage.freeTokensLimit)
+                            usage.freeUsedPercentage
                         )
                     } else {
                         stringResource(R.string.subscription_budget_remaining, usage.remainingPercentage)
                     }
+                )
+            }
+
+            lastInferenceUsage?.let { inference ->
+                item { LastInferenceCard(inference) }
+            }
+
+            item {
+                Text(
+                    "Modelos disponibles",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+
+            items(catalog, key = { "managed-model-${it.id}" }) { model ->
+                ManagedModelCard(model)
+            }
+
+            item {
+                Text(
+                    "Planes",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 4.dp)
                 )
             }
 
@@ -135,7 +168,77 @@ fun SubscriptionScreen(
 }
 
 @Composable
-private fun UsageCard(planName: String, remainingPercentage: Int, detail: String) {
+private fun LastInferenceCard(usage: ManagedInferenceUsage) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f)
+        )
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text("Última inferencia", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                listOfNotNull(usage.provider, usage.modelUsed).joinToString(" · ").ifBlank { "Modelo no informado" },
+                style = MaterialTheme.typography.bodyMedium
+            )
+            val estimated = if (usage.estimated) " (estimados)" else ""
+            Text(
+                "${NumberFormat.getIntegerInstance().format(usage.totalTokens)} tokens$estimated · ${usage.costLabel()}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            if (usage.fallback) {
+                Text(
+                    "Fallback: ${usage.fallbackReason ?: usage.fallbackCategory ?: "motivo no informado"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ManagedModelCard(model: ManagedModel) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        )
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(model.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("Desde ${model.minimumPlan.displayName}", style = MaterialTheme.typography.labelMedium)
+            }
+            Text("Contexto: ${model.contextLabel()}", style = MaterialTheme.typography.bodySmall)
+            Text(
+                "Tools: ${model.capabilities.tools.displayLabel()} · " +
+                    "visión: ${model.capabilities.vision.displayLabel()} · " +
+                    "streaming: ${model.capabilities.streaming.displayLabel()} · " +
+                    "razonamiento: ${model.capabilities.reasoning.displayLabel()}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(model.priceLabel(), style = MaterialTheme.typography.bodySmall)
+            if (!model.selectable) {
+                Text(
+                    "Lo utiliza la selección automática; la selección manual está disponible desde Pro.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            if (model.requiresFreeToolsWarning) {
+                Text(
+                    "Aviso: el modelo asignado por una ruta gratuita puede ignorar las tools; no están garantizadas.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun UsageCard(planName: String, percentage: Int, detail: String) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
@@ -151,7 +254,7 @@ private fun UsageCard(planName: String, remainingPercentage: Int, detail: String
                 )
             }
             LinearProgressIndicator(
-                progress = { remainingPercentage.coerceIn(0, 100) / 100f },
+                progress = { percentage.coerceIn(0, 100) / 100f },
                 modifier = Modifier.fillMaxWidth()
             )
             Text(detail, style = MaterialTheme.typography.bodyMedium)
@@ -169,20 +272,19 @@ private fun PlanCard(
 ) {
     val features = when (plan) {
         SubscriptionPlan.FREE -> listOf(stringResource(R.string.plan_free_feature))
-        SubscriptionPlan.STARTER -> listOf("DeepSeek V4 Flash · MiMo 2.5", stringResource(R.string.plan_fallback_feature))
-        SubscriptionPlan.PLUS -> listOf("DeepSeek V4 Pro · MiMo 2.5 Pro", stringResource(R.string.plan_fallback_feature))
+        SubscriptionPlan.STARTER -> listOf("Selección automática esencial", stringResource(R.string.plan_fallback_feature))
+        SubscriptionPlan.PLUS -> listOf("Selección automática avanzada", stringResource(R.string.plan_fallback_feature))
         SubscriptionPlan.PRO -> listOf(
-            "GPT-5.6 Luna · DeepSeek V4 Pro · MiMo 2.5 Pro",
-            "Kimi K2.7 Code · MiniMax M3 · Grok 4.5",
+            stringResource(R.string.plan_everything_previous),
             stringResource(R.string.plan_auto_manual_feature)
         )
         SubscriptionPlan.MAX -> listOf(
             stringResource(R.string.plan_everything_previous),
-            "GPT-5.6 Terra · GLM 5.2 · Claude Sonnet 5 · Claude Opus 4.8"
+            "Más presupuesto y modelos avanzados"
         )
         SubscriptionPlan.ULTRA -> listOf(
             stringResource(R.string.plan_everything_previous),
-            "GPT-5.6 Sol · Claude Fable 5"
+            "Máximo presupuesto y catálogo completo"
         )
     }
     Card(

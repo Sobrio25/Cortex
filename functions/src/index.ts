@@ -9,7 +9,17 @@ import { setGlobalOptions } from "firebase-functions/v2";
 import { verifyAndGrantPurchase, tokenHash } from "./billing";
 import { paidFallbacks } from "./catalog";
 import { prepareConsentedFreeRequest } from "./consent";
-import { calculateCost, callFree, callPaid, estimateFreeTokenReservation } from "./upstream";
+import {
+  calculateCost,
+  callFree,
+  callPaid,
+  estimateFreeTokenReservation,
+  fallbackReason,
+  isRetryableUpstreamError,
+  providerNameForModel,
+  UpstreamFailureCategory,
+  UpstreamResult,
+} from "./upstream";
 import {
   acceptFreeDataConsent,
   EntitlementError,
@@ -23,6 +33,17 @@ import {
   revokePlan,
   settleFreeTokens,
 } from "./store";
+import {
+  getUsageDashboard,
+  isUsageAdmin,
+  parseUsageDays,
+  recordUsageEvent,
+} from "./usage";
+import {
+  getAppUsageDashboard,
+  parseClientAppUsageEvent,
+  recordAppUsageEvent,
+} from "./app-usage";
 
 initializeApp();
 getFirestore().settings({ ignoreUndefinedProperties: true });
@@ -32,10 +53,14 @@ const vercelKey = defineSecret("VERCEL_AI_GATEWAY_KEY");
 const openRouterKey = defineSecret("OPENROUTER_API_KEY");
 const kiloKey = defineSecret("KILO_GATEWAY_API_KEY");
 const openCodeKey = defineSecret("OPENCODE_API_KEY");
+const adminEmails = defineSecret("ADMIN_EMAILS");
 
 interface AuthenticatedRequest extends Request {
   uid: string;
   signInProvider?: string;
+  email?: string;
+  emailVerified?: boolean;
+  admin?: unknown;
 }
 const app = express();
 app.disable("x-powered-by");
@@ -55,6 +80,9 @@ app.use((req, _res, next) => {
       const authenticated = req as AuthenticatedRequest;
       authenticated.uid = decoded.uid;
       authenticated.signInProvider = decoded.firebase?.sign_in_provider;
+      authenticated.email = decoded.email;
+      authenticated.emailVerified = decoded.email_verified;
+      authenticated.admin = decoded.admin;
       next();
     })
     .catch(next);
@@ -67,6 +95,46 @@ app.get("/v1/account", asyncRoute(async (req, res) => {
 app.get("/v1/models", asyncRoute(async (req, res) => {
   const account = await getAccount((req as AuthenticatedRequest).uid);
   res.json(publicModels(account.plan));
+}));
+
+app.get("/v1/admin/usage", asyncRoute(async (req, res) => {
+  const authenticated = req as AuthenticatedRequest;
+  if (!isUsageAdmin({
+    admin: authenticated.admin,
+    email: authenticated.email,
+    email_verified: authenticated.emailVerified,
+  }, adminEmails.value())) {
+    throw new EntitlementError(403, "Esta cuenta no tiene acceso al panel de uso");
+  }
+  res.set("Cache-Control", "private, no-store");
+  res.json(await getUsageDashboard(parseUsageDays(req.query.days)));
+}));
+
+app.get("/v1/admin/app-usage", asyncRoute(async (req, res) => {
+  const authenticated = req as AuthenticatedRequest;
+  if (!isUsageAdmin({
+    admin: authenticated.admin,
+    email: authenticated.email,
+    email_verified: authenticated.emailVerified,
+  }, adminEmails.value())) {
+    throw new EntitlementError(403, "Esta cuenta no tiene acceso al panel de uso");
+  }
+  res.set("Cache-Control", "private, no-store");
+  res.json(await getAppUsageDashboard(parseUsageDays(req.query.days)));
+}));
+
+app.post("/v1/app-usage", asyncRoute(async (req, res) => {
+  let event;
+  try {
+    event = parseClientAppUsageEvent(req.body);
+  } catch (error) {
+    throw new EntitlementError(400, error instanceof Error ? error.message : "Evento de uso inválido");
+  }
+  await recordAppUsageEvent({
+    ...(event),
+    uid: (req as AuthenticatedRequest).uid,
+  });
+  res.status(202).json({ accepted: true });
 }));
 
 app.post("/v1/free-data-consent", asyncRoute(async (req, res) => {
@@ -88,6 +156,7 @@ app.post("/v1/inference/chat", asyncRoute(async (req, res) => {
   const uid = (req as AuthenticatedRequest).uid;
   const turnId = String(req.body?.turnId ?? "");
   const logicalModel = String(req.body?.logicalModel ?? "auto");
+  const startedAt = Date.now();
   const authorization = await authorizeOperation(
     uid,
     turnId,
@@ -95,6 +164,81 @@ app.post("/v1/inference/chat", asyncRoute(async (req, res) => {
     req.body,
     (req as AuthenticatedRequest).signInProvider,
   );
+  const agentName = typeof req.body?.assistantName === "string" ? req.body.assistantName : undefined;
+  const usageOperation = Array.isArray(req.body?.tools) && req.body.tools.length > 0
+    ? "chat_with_tools" as const
+    : "chat" as const;
+  const trackSuccess = async (
+    result: UpstreamResult,
+    free: boolean,
+    fallback: boolean,
+    costMicros = 0,
+    fallbackCategory?: UpstreamFailureCategory | "BUDGET_LIMIT",
+  ) => {
+    const durationMs = Date.now() - startedAt;
+    await Promise.all([
+      recordUsageEvent({
+        uid,
+        turnId,
+        plan: authorization.account.plan,
+        logicalModel,
+        model: result.upstream.model,
+        provider: result.upstream.provider,
+        gateway: result.upstream.gateway,
+        promptTokens: result.usage.promptTokens,
+        completionTokens: result.usage.completionTokens,
+        usageEstimated: result.usage.estimated,
+        costMicros,
+        durationMs,
+        free,
+        fallback,
+        fallbackCategory,
+        status: "success",
+        agentName,
+      }).catch(() => undefined),
+      recordAppUsageEvent({
+        uid,
+        source: "subscription",
+        provider: result.upstream.provider,
+        model: result.upstream.model,
+        promptTokens: result.usage.promptTokens,
+        completionTokens: result.usage.completionTokens,
+        usageEstimated: result.usage.estimated,
+        durationMs,
+        status: "success",
+        operation: usageOperation,
+      }).catch(() => undefined),
+    ]);
+  };
+
+  const publicUsage = (
+    result: UpstreamResult,
+    options: {
+      free: boolean;
+      costMicros?: number;
+      fallback?: boolean;
+      fallbackCategory?: UpstreamFailureCategory | "BUDGET_LIMIT";
+    },
+  ) => {
+    const category = options.fallbackCategory ?? result.upstream.fallbackCategory;
+    return {
+      promptTokens: result.usage.promptTokens,
+      completionTokens: result.usage.completionTokens,
+      totalTokens: result.usage.promptTokens + result.usage.completionTokens,
+      estimated: result.usage.estimated,
+      costMicros: options.costMicros ?? 0,
+      free: options.free,
+      requestedModel: logicalModel,
+      modelUsed: result.upstream.model,
+      provider: result.upstream.provider,
+      gateway: result.upstream.gateway,
+      fallback: options.fallback === true || result.upstream.fallback,
+      fallbackCategory: category,
+      fallbackReason: category === "BUDGET_LIMIT"
+        ? "Se agotó el presupuesto mensual del plan"
+        : category ? fallbackReason(category) : undefined,
+    };
+  };
 
   const freeSecrets = {
     openRouter: openRouterKey.value() || undefined,
@@ -124,34 +268,93 @@ app.post("/v1/inference/chat", asyncRoute(async (req, res) => {
     }
   };
 
-  if (authorization.useFree || !authorization.model) {
-    const result = await runFree();
-    res.json({ response: result.response, usage: { ...result.usage, free: true } });
-    return;
-  }
-
   try {
-    const result = await callPaid(authorization.model, req.body, vercelKey.value());
-    const costMicros = calculateCost(authorization.model, result.usage);
-    await recordCost(uid, costMicros);
-    res.json({ response: result.response, usage: { costMicros, free: false } });
-  } catch {
-    for (const fallbackModel of paidFallbacks(authorization.account.plan, authorization.model.id)) {
-      try {
-        const result = await callPaid(fallbackModel, req.body, vercelKey.value());
-        const costMicros = calculateCost(fallbackModel, result.usage);
-        await recordCost(uid, costMicros);
-        res.json({
-          response: result.response,
-          usage: { costMicros, free: false, fallback: true, fallbackModel: fallbackModel.displayName },
-        });
-        return;
-      } catch {
-        // Continue to a lower model authorized by the same plan.
-      }
+    if (authorization.useFree || !authorization.model) {
+      const result = await runFree();
+      const budgetFallback = authorization.freeReason === "BUDGET_EXHAUSTED";
+      const category = budgetFallback ? "BUDGET_LIMIT" : result.upstream.fallbackCategory;
+      const fallback = budgetFallback || result.upstream.fallback;
+      await trackSuccess(result, true, fallback, 0, category);
+      res.json({
+        response: result.response,
+        usage: publicUsage(result, { free: true, fallback, fallbackCategory: category }),
+      });
+      return;
     }
-    const freeResult = await runFree();
-    res.json({ response: freeResult.response, usage: { ...freeResult.usage, free: true, fallback: true } });
+
+    try {
+      const result = await callPaid(authorization.model, req.body, vercelKey.value());
+      const costMicros = calculateCost(authorization.model, result.usage);
+      await recordCost(uid, costMicros);
+      await trackSuccess(result, false, false, costMicros);
+      res.json({ response: result.response, usage: publicUsage(result, { costMicros, free: false }) });
+      return;
+    } catch (primaryError) {
+      if (!isRetryableUpstreamError(primaryError)) throw primaryError;
+      const primaryCategory = primaryError.category;
+      for (const fallbackModel of paidFallbacks(authorization.account.plan, authorization.model.id)) {
+        try {
+          const result = await callPaid(fallbackModel, req.body, vercelKey.value());
+          const costMicros = calculateCost(fallbackModel, result.usage);
+          await recordCost(uid, costMicros);
+          await trackSuccess(result, false, true, costMicros, primaryCategory);
+          res.json({
+            response: result.response,
+            usage: publicUsage(result, {
+              costMicros,
+              free: false,
+              fallback: true,
+              fallbackCategory: primaryCategory,
+            }),
+          });
+          return;
+        } catch (fallbackError) {
+          // A malformed request, invalid credential or denied request will fail for every
+          // model on the same route. Retrying it would waste quota and duplicate work.
+          if (!isRetryableUpstreamError(fallbackError)) throw fallbackError;
+        }
+      }
+      const freeResult = await runFree();
+      await trackSuccess(freeResult, true, true, 0, primaryCategory);
+      res.json({
+        response: freeResult.response,
+        usage: publicUsage(freeResult, {
+          free: true,
+          fallback: true,
+          fallbackCategory: primaryCategory,
+        }),
+      });
+    }
+  } catch (error) {
+    const failedModel = authorization.model?.vercelModel ?? logicalModel;
+    const failedProvider = providerNameForModel(failedModel, "Managed routing");
+    const durationMs = Date.now() - startedAt;
+    await Promise.all([
+      recordUsageEvent({
+        uid,
+        turnId,
+        plan: authorization.account.plan,
+        logicalModel,
+        model: failedModel,
+        provider: failedProvider,
+        gateway: authorization.model ? "Vercel AI Gateway" : "Managed routing",
+        durationMs,
+        free: authorization.useFree,
+        fallback: false,
+        status: "error",
+        agentName,
+      }).catch(() => undefined),
+      recordAppUsageEvent({
+        uid,
+        source: "subscription",
+        provider: failedProvider,
+        model: failedModel,
+        durationMs,
+        status: "error",
+        operation: usageOperation,
+      }).catch(() => undefined),
+    ]);
+    throw error;
   }
 }));
 
@@ -198,7 +401,7 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 export const api = onRequest({
-  secrets: [vercelKey, openRouterKey, kiloKey, openCodeKey],
+  secrets: [vercelKey, openRouterKey, kiloKey, openCodeKey, adminEmails],
   cors: false,
 }, app);
 

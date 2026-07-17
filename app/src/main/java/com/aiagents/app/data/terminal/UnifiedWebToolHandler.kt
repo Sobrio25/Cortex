@@ -1,5 +1,6 @@
 package com.aiagents.app.data.terminal
 
+import com.aiagents.app.BuildConfig
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.domain.model.WebSearchProvider
 import com.google.gson.Gson
@@ -174,7 +175,7 @@ class UnifiedWebToolHandler @Inject constructor(
                 WebUrlPolicy.resolvePublic(currentUrl.host).also { pinnedDns[currentUrl.host] = it }
                 val request = Request.Builder()
                     .url(currentUrl)
-                    .header("User-Agent", "AIAgents-Android/0.3.0 (+safe-web-fetch)")
+                    .header("User-Agent", "AIAgents-Android/${BuildConfig.VERSION_NAME} (+safe-web-fetch)")
                     .header("Accept", "text/html,application/xhtml+xml,text/plain,application/json;q=0.8")
                     .build()
                 client.newCall(request).execute().use { response ->

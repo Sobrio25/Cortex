@@ -3,6 +3,10 @@ package com.aiagents.app.data.remote
 import com.aiagents.app.data.auth.FirebaseAuthManager
 import com.aiagents.app.domain.model.ManagedModel
 import com.aiagents.app.domain.model.ManagedModelCatalog
+import com.aiagents.app.domain.model.ManagedCapabilitySupport
+import com.aiagents.app.domain.model.ManagedModelCapabilities
+import com.aiagents.app.domain.model.ManagedModelPricing
+import com.aiagents.app.domain.model.ManagedInferenceUsage
 import com.aiagents.app.domain.model.FREE_DATA_CONSENT_VERSION
 import com.aiagents.app.domain.model.SubscriptionPlan
 import com.aiagents.app.domain.model.ToolCall
@@ -11,6 +15,9 @@ import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -55,6 +62,51 @@ data class FreeDataConsentRequest(
     val version: Int = FREE_DATA_CONSENT_VERSION
 )
 
+/**
+ * Wire model for `/v1/models`.
+ *
+ * The managed backend can be deployed independently from the app. Nullable fields keep an older
+ * catalog response from creating invalid Kotlin objects through Gson's constructor-less adapter.
+ */
+internal data class ManagedModelResponse(
+    val id: String? = null,
+    val displayName: String? = null,
+    val minimumPlan: String? = null,
+    val contextWindow: Int? = null,
+    val capabilities: ManagedModelCapabilitiesResponse? = null,
+    val pricing: ManagedModelPricing? = null,
+    val available: Boolean? = null,
+    val selectable: Boolean? = null
+) {
+    fun toDomain(): ManagedModel? {
+        val safeId = id?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return ManagedModel(
+            id = safeId,
+            displayName = displayName?.trim()?.takeIf { it.isNotEmpty() } ?: safeId,
+            minimumPlan = SubscriptionPlan.fromId(minimumPlan),
+            contextWindow = contextWindow?.takeIf { it > 0 },
+            capabilities = capabilities?.toDomain() ?: ManagedModelCapabilities(),
+            pricing = pricing ?: ManagedModelPricing(),
+            available = available ?: true,
+            selectable = selectable ?: true
+        )
+    }
+}
+
+internal data class ManagedModelCapabilitiesResponse(
+    val tools: ManagedCapabilitySupport? = null,
+    val vision: ManagedCapabilitySupport? = null,
+    val streaming: ManagedCapabilitySupport? = null,
+    val reasoning: ManagedCapabilitySupport? = null
+) {
+    fun toDomain() = ManagedModelCapabilities(
+        tools = tools ?: ManagedCapabilitySupport.UNKNOWN,
+        vision = vision ?: ManagedCapabilitySupport.UNKNOWN,
+        streaming = streaming ?: ManagedCapabilitySupport.UNKNOWN,
+        reasoning = reasoning ?: ManagedCapabilitySupport.UNKNOWN
+    )
+}
+
 @Singleton
 class ManagedGatewayClient @Inject constructor(
     private val okHttpClient: OkHttpClient,
@@ -62,14 +114,15 @@ class ManagedGatewayClient @Inject constructor(
     private val gson: Gson
 ) {
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+    private val _lastInferenceUsage = MutableStateFlow<ManagedInferenceUsage?>(null)
+    val lastInferenceUsage: StateFlow<ManagedInferenceUsage?> = _lastInferenceUsage.asStateFlow()
 
     suspend fun account(): UsageSnapshot = authenticatedGet("/v1/account").let {
         gson.fromJson(it, ManagedAccountResponse::class.java).toDomain()
     }
 
     suspend fun models(): List<ManagedModel> {
-        val type = object : TypeToken<List<ManagedModel>>() {}.type
-        return gson.fromJson<List<ManagedModel>>(authenticatedGet("/v1/models"), type)
+        return parseManagedModels(gson, authenticatedGet("/v1/models"))
     }
 
     suspend fun verifyPurchase(request: PurchaseVerificationRequest): UsageSnapshot {
@@ -98,12 +151,12 @@ class ManagedGatewayClient @Inject constructor(
             "logicalModel" to logicalModel,
             "messages" to messages,
             "systemPrompt" to systemPrompt,
-            "assistantName" to extractManagedAgentName(systemPrompt),
             "temperature" to temperature,
             "maxTokens" to maxTokens,
             "tools" to tools
         )
         val root = gson.fromJson(authenticatedPost("/v1/inference/chat", gson.toJson(payload)), JsonObject::class.java)
+        _lastInferenceUsage.value = parseManagedInferenceUsage(root)
         val response = root.getAsJsonObject("response") ?: root
         return gson.fromJson(response, ChatResponseWithTools::class.java)
     }
@@ -144,9 +197,56 @@ class ManagedGatewayClient @Inject constructor(
     }
 }
 
-internal fun extractManagedAgentName(systemPrompt: String): String? = Regex(
-    pattern = "(?m)^- Current agent: (.+?) \\([^\\r\\n]+\\)$"
-).find(systemPrompt)?.groupValues?.getOrNull(1)?.trim()?.takeIf(String::isNotBlank)
+internal fun parseManagedModels(gson: Gson, json: String): List<ManagedModel> {
+    val type = object : TypeToken<List<ManagedModelResponse>>() {}.type
+    return gson.fromJson<List<ManagedModelResponse>?>(json, type)
+        .orEmpty()
+        .mapNotNull(ManagedModelResponse::toDomain)
+}
+
+/**
+ * Parses optional inference metadata without Gson reflection.
+ *
+ * This object must never make an otherwise successful inference fail. R8 cannot see reflective
+ * construction through Gson and may remove the concrete constructor in optimized builds; parsing
+ * the small payload explicitly keeps the release and debug paths equivalent.
+ */
+internal fun parseManagedInferenceUsage(root: JsonObject): ManagedInferenceUsage? {
+    val usage = root.get("usage")?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+    return ManagedInferenceUsage(
+        promptTokens = usage.longOrDefault("promptTokens"),
+        completionTokens = usage.longOrDefault("completionTokens"),
+        totalTokens = usage.optionalLong("totalTokens")
+            ?: usage.longOrDefault("promptTokens") + usage.longOrDefault("completionTokens"),
+        estimated = usage.booleanOrDefault("estimated"),
+        costMicros = usage.optionalLong("costMicros"),
+        free = usage.booleanOrDefault("free"),
+        requestedModel = usage.optionalString("requestedModel"),
+        modelUsed = usage.optionalString("modelUsed"),
+        provider = usage.optionalString("provider"),
+        gateway = usage.optionalString("gateway"),
+        fallback = usage.booleanOrDefault("fallback"),
+        fallbackCategory = usage.optionalString("fallbackCategory"),
+        fallbackReason = usage.optionalString("fallbackReason")
+    )
+}
+
+private fun JsonObject.optionalLong(name: String): Long? =
+    get(name)?.takeUnless { it.isJsonNull }?.let { element ->
+        runCatching { element.asLong }.getOrNull()
+    }
+
+private fun JsonObject.longOrDefault(name: String): Long = optionalLong(name) ?: 0L
+
+private fun JsonObject.booleanOrDefault(name: String): Boolean =
+    get(name)?.takeUnless { it.isJsonNull }?.let { element ->
+        runCatching { element.asBoolean }.getOrNull()
+    } ?: false
+
+private fun JsonObject.optionalString(name: String): String? =
+    get(name)?.takeUnless { it.isJsonNull }?.let { element ->
+        runCatching { element.asString }.getOrNull()
+    }
 
 class ManagedGatewayException(val statusCode: Int, override val message: String) : Exception(message)
 

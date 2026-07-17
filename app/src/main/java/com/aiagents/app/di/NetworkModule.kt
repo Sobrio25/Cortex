@@ -3,8 +3,10 @@ package com.aiagents.app.di
 import android.content.Context
 import com.aiagents.app.data.local.LocalModelRepository
 import com.aiagents.app.data.local.SecurePreferences
+import com.aiagents.app.data.auth.FirebaseBootstrap
 import com.aiagents.app.data.remote.AIClientFactory
 import com.aiagents.app.data.remote.ManagedAIClient
+import com.aiagents.app.data.telemetry.AppUsageTelemetry
 import com.aiagents.app.data.remote.OpenRouterClient
 import com.aiagents.app.data.remote.GoogleAIClient
 import com.aiagents.app.data.remote.OpenAIClient
@@ -33,7 +35,8 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    fun provideFirebaseAuth(): FirebaseAuth = FirebaseAuth.getInstance()
+    fun provideFirebaseAuth(@ApplicationContext context: Context): FirebaseAuth =
+        FirebaseAuth.getInstance(FirebaseBootstrap.ensureInitialized(context))
 
     @Provides
     @Singleton
@@ -69,8 +72,16 @@ object NetworkModule {
         localModelRepository: LocalModelRepository,
         @ApplicationContext context: Context,
         securePreferences: SecurePreferences,
-        managedAIClient: ManagedAIClient
+        managedAIClient: ManagedAIClient,
+        appUsageTelemetry: AppUsageTelemetry
     ): AIClientFactory {
-        return AIClientFactory(okHttpClient, localModelRepository, context, securePreferences, managedAIClient)
+        return AIClientFactory(
+            okHttpClient,
+            localModelRepository,
+            context,
+            securePreferences,
+            managedAIClient,
+            appUsageTelemetry
+        )
     }
 }

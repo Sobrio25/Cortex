@@ -65,7 +65,7 @@ object SkillCreatorBuiltin {
     const val DESCRIPTION = "Diseña skills reutilizables, seguras y fáciles de revisar."
     const val WHEN_TO_USE =
         "crear skill,crear habilidad,nueva skill,automatizar flujo,create skill,reusable workflow"
-    const val VERSION = 1
+    const val VERSION = 2
 
     val instructions: String = """
         # Skill Creator
@@ -110,11 +110,13 @@ object AndroidAppControlBuiltin {
         1. Si no conoces la app o su package, usa `list_installed_apps` con filtro.
         2. Usa `get_app_info` para ver únicamente intents realmente resolubles; los permisos solicitados por una app no significan que puedas controlarla.
         3. Para descubrir handlers usa `query_capable_apps` con tipos allowlisted.
-        4. Ejecuta solo acciones soportadas: `open_app`, `open_url`, `map_search`, `navigate`, `dial_phone`, `share_text` y `open_app_settings`.
+        4. Ejecuta solo acciones soportadas: `open_app`, `open_url`, `map_search`, `navigate`, `dial_phone`, `call_phone`, `prepare_whatsapp_message`, `share_text` y `open_app_settings`.
         5. Explica al usuario cuándo Android abrirá un chooser o pantalla de confirmación.
 
         ## Seguridad
         - `dial_phone` abre ACTION_DIAL; nunca realiza una llamada directamente.
+        - `call_phone` usa ACTION_CALL sólo después de obtener permisos y resolver una coincidencia inequívoca.
+        - `prepare_whatsapp_message` crea un borrador confirmable; no afirma que WhatsApp lo envió.
         - `share_text` siempre abre el chooser y requiere la acción visible del usuario.
         - Desinstalar, compartir, crear notas o cambiar ajustes siempre conserva confirmación/UI del sistema.
         - No uses intents arbitrarios, Accessibility, `file://`, esquemas no allowlisted ni supongas capacidades por permisos.
@@ -126,10 +128,11 @@ object AndroidAppControlBuiltin {
 object WeatherWidgetsBuiltin {
     const val SLUG = "weather-widgets"
     const val NAME = "Weather Widgets"
-    const val DESCRIPTION = "Consulta clima real y activa las tarjetas meteorológicas visuales nativas de la app."
+    const val DESCRIPTION =
+        "Consulta clima real y activa tarjetas meteorológicas nativas. En modo asistente responde muy breve y sin emojis."
     const val WHEN_TO_USE =
         "clima,tiempo,temperatura,pronóstico,va a llover,lluvia,calidad del aire,weather,forecast,air quality"
-    const val VERSION = 2
+    const val VERSION = 5
 
     val instructions: String = """
         # Weather Widgets
@@ -138,7 +141,10 @@ object WeatherWidgetsBuiltin {
 
         ## Flujo
         1. Usa `weather_current` para condiciones actuales o preguntas ambiguas sobre el clima.
-        2. Usa `weather_forecast` para mañana, próximos días o probabilidad de lluvia.
+        2. Usa `weather_forecast` para mañana, una fecha concreta, próximos días o probabilidad de lluvia.
+           - Para hoy usa `day_offset: 0`; para mañana usa `day_offset: 1`. Devuelve solo ese día.
+           - Para una fecha indicada usa `target_date` en formato `yyyy-MM-dd`. Devuelve solo esa fecha.
+           - Usa `days` únicamente cuando el usuario pida explícitamente varios días.
         3. Usa `weather_air_quality` cuando el usuario pregunte por contaminación o calidad del aire.
         4. Si el usuario no indica un lugar, omite `location`, `lat` y `lon`: la tool usará privadamente la ubicación del dispositivo Android.
         5. Cuando la tool devuelva `WEATHER_DATA`, termina el turno sin escribir ninguna respuesta adicional: el widget es la respuesta completa.
@@ -147,8 +153,16 @@ object WeatherWidgetsBuiltin {
         - El resultado de la tool ya contiene `WEATHER_DATA` para el widget bonito; no copies, edites ni vuelvas a imprimir ese marcador.
         - No escribas introducción, resumen, despedida ni texto debajo del widget.
         - No conviertas el resultado en una tabla Markdown ni en un bloque de código.
+        - Muestra y pronuncia todas las temperaturas como enteros redondeados, sin decimales.
         - Si falla el permiso de ubicación, explica cómo concederlo o pide una ciudad.
         - Conserva la atribución mostrada por la tool a Open-Meteo y, para calidad del aire, a CAMS.
+
+        ## Modo asistente
+        - La tarjeta meteorológica es la respuesta completa.
+        - La app construye el resumen hablado desde `WEATHER_DATA`; no uses el resumen visual como texto para TTS.
+        - Toda salida destinada a voz debe ser una frase natural: di "grados Celsius", "máxima", "mínima" y "por ciento" completos.
+        - No envíes al lector abreviaturas o separadores visuales como `°C`, `máx.`, `mín.`, `%`, `/` o `·`.
+        - Si un error impide mostrarla y necesitas responder con texto, usa una sola línea muy breve y sin emojis.
 
         Las skills no amplían permisos ni acceso a red: usa únicamente las tools meteorológicas disponibles.
     """.trimIndent()

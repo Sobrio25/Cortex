@@ -7,15 +7,30 @@ export interface PlanDefinition {
   rank: number;
 }
 
+export type CapabilitySupport = "SUPPORTED" | "UNSUPPORTED" | "BEST_EFFORT" | "UNKNOWN";
+
+export interface ModelCapabilities {
+  tools: CapabilitySupport;
+  vision: CapabilitySupport;
+  streaming: CapabilitySupport;
+  reasoning: CapabilitySupport;
+}
+
+export interface ModelPricing {
+  /** Micro-US dollars per token. Null means that no verified price is configured. */
+  inputMicrosPerToken: number | null;
+  /** Micro-US dollars per token. Null means that no verified price is configured. */
+  outputMicrosPerToken: number | null;
+}
+
 export interface ModelDefinition {
   id: string;
   displayName: string;
   minimumPlan: PlanId;
   vercelModel?: string;
-  contextWindow: number;
-  supportsVision?: boolean;
-  inputMicrosPerToken?: number;
-  outputMicrosPerToken?: number;
+  contextWindow: number | null;
+  capabilities: ModelCapabilities;
+  pricing: ModelPricing;
 }
 
 export const PLANS: Record<PlanId, PlanDefinition> = {
@@ -27,22 +42,48 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
   ULTRA: { id: "ULTRA", productId: "cortex_ultra", budgetMicros: 50_000_000, rank: 5 },
 };
 
+const unknownCapabilities = (vision: CapabilitySupport = "UNKNOWN"): ModelCapabilities => ({
+  // The managed endpoint forwards tools, but the existing catalog does not verify native
+  // tool/reasoning support model-by-model. Keep that uncertainty visible to clients.
+  tools: "UNKNOWN",
+  vision,
+  streaming: "UNSUPPORTED", // The managed API currently returns complete JSON responses.
+  reasoning: "UNKNOWN",
+});
+
+const priced = (input: number, output: number): ModelPricing => ({
+  inputMicrosPerToken: input,
+  outputMicrosPerToken: output,
+});
+
 const MODEL_LIST: ModelDefinition[] = [
-  { id: "auto", displayName: "Auto", minimumPlan: "FREE", contextWindow: 128_000 },
-  { id: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash", minimumPlan: "STARTER", vercelModel: "deepseek/deepseek-v4-flash", contextWindow: 1_000_000, inputMicrosPerToken: 0.14, outputMicrosPerToken: 0.28 },
-  { id: "mimo-v2.5", displayName: "MiMo 2.5", minimumPlan: "STARTER", vercelModel: "xiaomi/mimo-v2.5", contextWindow: 1_100_000, supportsVision: true, inputMicrosPerToken: 0.14, outputMicrosPerToken: 0.28 },
-  { id: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro", minimumPlan: "PLUS", vercelModel: "deepseek/deepseek-v4-pro", contextWindow: 1_000_000, inputMicrosPerToken: 0.435, outputMicrosPerToken: 0.87 },
-  { id: "mimo-v2.5-pro", displayName: "MiMo 2.5 Pro", minimumPlan: "PLUS", vercelModel: "xiaomi/mimo-v2.5-pro", contextWindow: 1_100_000, supportsVision: true, inputMicrosPerToken: 0.435, outputMicrosPerToken: 0.87 },
-  { id: "gpt-5.6-luna", displayName: "GPT-5.6 Luna", minimumPlan: "PRO", vercelModel: "openai/gpt-5.6-luna", contextWindow: 1_000_000, supportsVision: true, inputMicrosPerToken: 1, outputMicrosPerToken: 6 },
-  { id: "kimi-k2.7-code", displayName: "Kimi K2.7 Code", minimumPlan: "PRO", vercelModel: "moonshotai/kimi-k2.7-code", contextWindow: 262_144, supportsVision: true, inputMicrosPerToken: 0.95, outputMicrosPerToken: 4 },
-  { id: "minimax-m3", displayName: "MiniMax M3", minimumPlan: "PRO", vercelModel: "minimax/minimax-m3", contextWindow: 1_000_000, supportsVision: true, inputMicrosPerToken: 0.3, outputMicrosPerToken: 1.2 },
-  { id: "grok-4.5", displayName: "Grok 4.5", minimumPlan: "PRO", vercelModel: "xai/grok-4.5", contextWindow: 500_000, supportsVision: true, inputMicrosPerToken: 2, outputMicrosPerToken: 6 },
-  { id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra", minimumPlan: "MAX", vercelModel: "openai/gpt-5.6-terra", contextWindow: 1_000_000, supportsVision: true, inputMicrosPerToken: 2.5, outputMicrosPerToken: 15 },
-  { id: "glm-5.2", displayName: "GLM 5.2", minimumPlan: "MAX", vercelModel: "zai/glm-5.2", contextWindow: 1_000_000, inputMicrosPerToken: 1.4, outputMicrosPerToken: 4.4 },
-  { id: "claude-sonnet-5", displayName: "Claude Sonnet 5", minimumPlan: "MAX", vercelModel: "anthropic/claude-sonnet-5", contextWindow: 1_000_000, supportsVision: true, inputMicrosPerToken: 2, outputMicrosPerToken: 10 },
-  { id: "claude-opus-4.8", displayName: "Claude Opus 4.8", minimumPlan: "MAX", vercelModel: "anthropic/claude-opus-4.8", contextWindow: 1_000_000, supportsVision: true, inputMicrosPerToken: 5, outputMicrosPerToken: 25 },
-  { id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", minimumPlan: "ULTRA", vercelModel: "openai/gpt-5.6-sol", contextWindow: 1_000_000, supportsVision: true, inputMicrosPerToken: 5, outputMicrosPerToken: 30 },
-  { id: "claude-fable-5", displayName: "Claude Fable 5", minimumPlan: "ULTRA", vercelModel: "anthropic/claude-fable-5", contextWindow: 1_000_000, supportsVision: true, inputMicrosPerToken: 10, outputMicrosPerToken: 50 },
+  {
+    id: "auto",
+    displayName: "Auto",
+    minimumPlan: "FREE",
+    contextWindow: 128_000,
+    capabilities: {
+      tools: "BEST_EFFORT",
+      vision: "UNKNOWN",
+      streaming: "UNSUPPORTED",
+      reasoning: "UNKNOWN",
+    },
+    pricing: { inputMicrosPerToken: null, outputMicrosPerToken: null },
+  },
+  { id: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash", minimumPlan: "STARTER", vercelModel: "deepseek/deepseek-v4-flash", contextWindow: 1_000_000, capabilities: unknownCapabilities(), pricing: priced(0.14, 0.28) },
+  { id: "mimo-v2.5", displayName: "MiMo 2.5", minimumPlan: "STARTER", vercelModel: "xiaomi/mimo-v2.5", contextWindow: 1_100_000, capabilities: unknownCapabilities("SUPPORTED"), pricing: priced(0.14, 0.28) },
+  { id: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro", minimumPlan: "PLUS", vercelModel: "deepseek/deepseek-v4-pro", contextWindow: 1_000_000, capabilities: unknownCapabilities(), pricing: priced(0.435, 0.87) },
+  { id: "mimo-v2.5-pro", displayName: "MiMo 2.5 Pro", minimumPlan: "PLUS", vercelModel: "xiaomi/mimo-v2.5-pro", contextWindow: 1_100_000, capabilities: unknownCapabilities("SUPPORTED"), pricing: priced(0.435, 0.87) },
+  { id: "gpt-5.6-luna", displayName: "GPT-5.6 Luna", minimumPlan: "PRO", vercelModel: "openai/gpt-5.6-luna", contextWindow: 1_000_000, capabilities: unknownCapabilities("SUPPORTED"), pricing: priced(1, 6) },
+  { id: "kimi-k2.7-code", displayName: "Kimi K2.7 Code", minimumPlan: "PRO", vercelModel: "moonshotai/kimi-k2.7-code", contextWindow: 262_144, capabilities: unknownCapabilities("SUPPORTED"), pricing: priced(0.95, 4) },
+  { id: "minimax-m3", displayName: "MiniMax M3", minimumPlan: "PRO", vercelModel: "minimax/minimax-m3", contextWindow: 1_000_000, capabilities: unknownCapabilities("SUPPORTED"), pricing: priced(0.3, 1.2) },
+  { id: "grok-4.5", displayName: "Grok 4.5", minimumPlan: "PRO", vercelModel: "xai/grok-4.5", contextWindow: 500_000, capabilities: unknownCapabilities("SUPPORTED"), pricing: priced(2, 6) },
+  { id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra", minimumPlan: "MAX", vercelModel: "openai/gpt-5.6-terra", contextWindow: 1_000_000, capabilities: unknownCapabilities("SUPPORTED"), pricing: priced(2.5, 15) },
+  { id: "glm-5.2", displayName: "GLM 5.2", minimumPlan: "MAX", vercelModel: "zai/glm-5.2", contextWindow: 1_000_000, capabilities: unknownCapabilities(), pricing: priced(1.4, 4.4) },
+  { id: "claude-sonnet-5", displayName: "Claude Sonnet 5", minimumPlan: "MAX", vercelModel: "anthropic/claude-sonnet-5", contextWindow: 1_000_000, capabilities: unknownCapabilities("SUPPORTED"), pricing: priced(2, 10) },
+  { id: "claude-opus-4.8", displayName: "Claude Opus 4.8", minimumPlan: "MAX", vercelModel: "anthropic/claude-opus-4.8", contextWindow: 1_000_000, capabilities: unknownCapabilities("SUPPORTED"), pricing: priced(5, 25) },
+  { id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", minimumPlan: "ULTRA", vercelModel: "openai/gpt-5.6-sol", contextWindow: 1_000_000, capabilities: unknownCapabilities("SUPPORTED"), pricing: priced(5, 30) },
+  { id: "claude-fable-5", displayName: "Claude Fable 5", minimumPlan: "ULTRA", vercelModel: "anthropic/claude-fable-5", contextWindow: 1_000_000, capabilities: unknownCapabilities("SUPPORTED"), pricing: priced(10, 50) },
 ];
 
 export const MODELS: Record<string, ModelDefinition> = Object.fromEntries(
@@ -104,7 +145,8 @@ export function resolveModel(plan: PlanId, requested: string, body: unknown): Mo
 
 export function paidFallbacks(plan: PlanId, failedModelId: string): ModelDefinition[] {
   const failed = MODELS[failedModelId];
-  const failedPrice = (failed?.inputMicrosPerToken ?? 0) + (failed?.outputMicrosPerToken ?? 0);
+  const failedPrice = (failed?.pricing.inputMicrosPerToken ?? 0) +
+    (failed?.pricing.outputMicrosPerToken ?? 0);
   const preferredIds = plan === "ULTRA"
     ? ["claude-opus-4.8", "claude-sonnet-5", "glm-5.2", "mimo-v2.5-pro", "deepseek-v4-pro", "mimo-v2.5", "deepseek-v4-flash"]
     : plan === "MAX"
@@ -121,6 +163,7 @@ export function paidFallbacks(plan: PlanId, failedModelId: string): ModelDefinit
     .map((id) => MODELS[id])
     .filter((model) =>
       PLANS[model.minimumPlan].rank <= PLANS[plan].rank &&
-      ((model.inputMicrosPerToken ?? 0) + (model.outputMicrosPerToken ?? 0)) <= failedPrice,
+      ((model.pricing.inputMicrosPerToken ?? 0) +
+        (model.pricing.outputMicrosPerToken ?? 0)) <= failedPrice,
     );
 }

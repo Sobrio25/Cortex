@@ -36,11 +36,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aiagents.app.R
 import com.aiagents.app.presentation.agents.PersonalitySlider
+import com.aiagents.app.ui.theme.CortexMark
 
 @Composable
 fun OnboardingScreen(
     viewModel: OnboardingViewModel,
     onNavigateToProviders: () -> Unit,
+    onNavigateToLocalModels: () -> Unit,
     onNavigateToMCP: () -> Unit,
     onNavigateToAgents: () -> Unit,
     onNavigateToWorkspaces: () -> Unit,
@@ -56,6 +58,7 @@ fun OnboardingScreen(
     val formality by viewModel.formalityLevel.collectAsState()
     val empathy by viewModel.empathyLevel.collectAsState()
     val technical by viewModel.technicalPrecision.collectAsState()
+    val onboardingMode by viewModel.onboardingMode.collectAsState()
     val managedPrivacyAccepted by viewModel.managedPrivacyAccepted.collectAsState()
     val googleSignedIn by viewModel.googleSignedIn.collectAsState()
     val googleSignInLoading by viewModel.googleSignInLoading.collectAsState()
@@ -131,13 +134,17 @@ fun OnboardingScreen(
                         onEmpathyChange = { viewModel.setEmpathy(it) },
                         onTechnicalChange = { viewModel.setTechnicalPrecision(it) }
                     )
-                    2 -> ManagedFreePlanStep(
+                    2 -> InferenceSetupStep(
+                        selectedMode = onboardingMode,
                         privacyAccepted = managedPrivacyAccepted,
                         googleSignedIn = googleSignedIn,
                         signInLoading = googleSignInLoading,
                         signInError = googleSignInError,
+                        onModeSelected = viewModel::setOnboardingMode,
                         onPrivacyAcceptedChange = viewModel::setManagedPrivacyAccepted,
-                        onGoogleSignIn = { activity?.let(viewModel::signInWithGoogle) }
+                        onGoogleSignIn = { activity?.let(viewModel::signInWithGoogle) },
+                        onConfigureProviders = onNavigateToProviders,
+                        onConfigureLocalModels = onNavigateToLocalModels
                     )
                     3 -> FeatureStep(
                         icon = Icons.Default.Extension,
@@ -170,14 +177,22 @@ fun OnboardingScreen(
                 isNextEnabled = when (currentStep) {
                     0 -> userName.isNotBlank()
                     1 -> assistantName.isNotBlank()
-                    2 -> managedPrivacyAccepted && googleSignedIn && !googleSignInLoading
+                    2 -> OnboardingModePolicy.canContinue(
+                        mode = onboardingMode,
+                        managedPrivacyAccepted = managedPrivacyAccepted,
+                        googleSignedIn = googleSignedIn,
+                        googleSignInLoading = googleSignInLoading
+                    )
                     else -> true
                 },
                 onBack = { viewModel.previousStep() },
                 onNext = {
                     if (currentStep == lastStep) {
                         onComplete()
-                    } else if (currentStep == 2) {
+                    } else if (
+                        currentStep == 2 &&
+                        onboardingMode == OnboardingMode.MANAGED_CLOUD
+                    ) {
                         viewModel.acceptFreeDataDisclosure(viewModel::nextStep)
                     } else {
                         viewModel.nextStep()
@@ -190,13 +205,17 @@ fun OnboardingScreen(
 }
 
 @Composable
-private fun ManagedFreePlanStep(
+internal fun InferenceSetupStep(
+    selectedMode: OnboardingMode,
     privacyAccepted: Boolean,
     googleSignedIn: Boolean,
     signInLoading: Boolean,
     signInError: String?,
+    onModeSelected: (OnboardingMode) -> Unit,
     onPrivacyAcceptedChange: (Boolean) -> Unit,
-    onGoogleSignIn: () -> Unit
+    onGoogleSignIn: () -> Unit,
+    onConfigureProviders: () -> Unit,
+    onConfigureLocalModels: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -205,44 +224,150 @@ private fun ManagedFreePlanStep(
             .padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(Modifier.height(34.dp))
-        Box(
-            modifier = Modifier
-                .size(80.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(Icons.Default.AutoAwesome, null, Modifier.size(46.dp))
-        }
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(24.dp))
         Text(
-            stringResource(R.string.onboarding_free_plan_title),
+            stringResource(R.string.onboarding_mode_title),
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center
         )
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
         Text(
-            stringResource(R.string.onboarding_free_plan_desc),
-            style = MaterialTheme.typography.bodyLarge,
+            stringResource(R.string.onboarding_mode_desc),
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
-        Spacer(Modifier.height(22.dp))
+        Spacer(Modifier.height(20.dp))
+
+        OnboardingModeCard(
+            icon = Icons.Default.Cloud,
+            title = stringResource(R.string.onboarding_mode_cloud_title),
+            description = stringResource(R.string.onboarding_mode_cloud_desc),
+            selected = selectedMode == OnboardingMode.MANAGED_CLOUD,
+            onClick = { onModeSelected(OnboardingMode.MANAGED_CLOUD) }
+        )
+        Spacer(Modifier.height(10.dp))
+        OnboardingModeCard(
+            icon = Icons.Default.Key,
+            title = stringResource(R.string.onboarding_mode_byok_title),
+            description = stringResource(R.string.onboarding_mode_byok_desc),
+            selected = selectedMode == OnboardingMode.BRING_YOUR_OWN_KEY,
+            onClick = { onModeSelected(OnboardingMode.BRING_YOUR_OWN_KEY) }
+        )
+        Spacer(Modifier.height(10.dp))
+        OnboardingModeCard(
+            icon = Icons.Default.PhoneAndroid,
+            title = stringResource(R.string.onboarding_mode_local_title),
+            description = stringResource(R.string.onboarding_mode_local_desc),
+            selected = selectedMode == OnboardingMode.LOCAL,
+            onClick = { onModeSelected(OnboardingMode.LOCAL) }
+        )
+
+        Spacer(Modifier.height(16.dp))
+
+        when (selectedMode) {
+            OnboardingMode.MANAGED_CLOUD -> ManagedCloudSetup(
+                privacyAccepted = privacyAccepted,
+                googleSignedIn = googleSignedIn,
+                signInLoading = signInLoading,
+                signInError = signInError,
+                onPrivacyAcceptedChange = onPrivacyAcceptedChange,
+                onGoogleSignIn = onGoogleSignIn
+            )
+
+            OnboardingMode.BRING_YOUR_OWN_KEY -> SetupActionCard(
+                title = stringResource(R.string.onboarding_byok_setup_title),
+                description = stringResource(R.string.onboarding_byok_setup_desc),
+                actionLabel = stringResource(R.string.onboarding_configure_providers),
+                icon = Icons.Default.Key,
+                onAction = onConfigureProviders
+            )
+
+            OnboardingMode.LOCAL -> SetupActionCard(
+                title = stringResource(R.string.onboarding_local_setup_title),
+                description = stringResource(R.string.onboarding_local_setup_desc),
+                actionLabel = stringResource(R.string.onboarding_configure_local_models),
+                icon = Icons.Default.Download,
+                onAction = onConfigureLocalModels
+            )
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun OnboardingModeCard(
+    icon: ImageVector,
+    title: String,
+    description: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                width = if (selected) 2.dp else 1.dp,
+                color = if (selected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outlineVariant,
+                shape = RoundedCornerShape(16.dp)
+            )
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surface
+        ),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(28.dp))
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 14.dp)
+            ) {
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            RadioButton(selected = selected, onClick = onClick)
+        }
+    }
+}
+
+@Composable
+private fun ManagedCloudSetup(
+    privacyAccepted: Boolean,
+    googleSignedIn: Boolean,
+    signInLoading: Boolean,
+    signInError: String?,
+    onPrivacyAcceptedChange: (Boolean) -> Unit,
+    onGoogleSignIn: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Card(
+            modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
         ) {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     stringResource(R.string.onboarding_free_plan_messages),
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold
                 )
-                Text(stringResource(R.string.onboarding_free_plan_no_config))
+                Text(
+                    stringResource(R.string.onboarding_free_plan_no_config),
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
-        Spacer(Modifier.height(16.dp))
         if (googleSignedIn) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -295,7 +420,6 @@ private fun ManagedFreePlanStep(
                 )
             }
         }
-        Spacer(Modifier.height(8.dp))
         Card(
             modifier = Modifier.fillMaxWidth().clickable {
                 onPrivacyAcceptedChange(!privacyAccepted)
@@ -332,6 +456,35 @@ private fun ManagedFreePlanStep(
     }
 }
 
+@Composable
+private fun SetupActionCard(
+    title: String,
+    description: String,
+    actionLabel: String,
+    icon: ImageVector,
+    onAction: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(description, style = MaterialTheme.typography.bodyMedium)
+            OutlinedButton(onClick = onAction, modifier = Modifier.fillMaxWidth()) {
+                Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(actionLabel)
+            }
+        }
+    }
+}
+
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
@@ -356,21 +509,7 @@ private fun WelcomeStep(
     ) {
         Spacer(modifier = Modifier.height(32.dp))
 
-        // Cortex icon
-        Box(
-            modifier = Modifier
-                .size(80.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                Icons.Default.Psychology,
-                contentDescription = null,
-                modifier = Modifier.size(48.dp),
-                tint = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-        }
+        CortexMark(modifier = Modifier.size(80.dp))
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -472,12 +611,7 @@ private fun WelcomeStep(
                     modifier = Modifier.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        Icons.Default.Psychology,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                        modifier = Modifier.size(24.dp)
-                    )
+                    CortexMark(modifier = Modifier.size(24.dp))
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = stringResource(R.string.onboarding_greeting, displayName),
@@ -558,20 +692,7 @@ private fun AssistantPersonalityStep(
     ) {
         Spacer(modifier = Modifier.height(32.dp))
 
-        Box(
-            modifier = Modifier
-                .size(80.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                Icons.Default.Psychology,
-                contentDescription = null,
-                modifier = Modifier.size(48.dp),
-                tint = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-        }
+        CortexMark(modifier = Modifier.size(80.dp))
 
         Spacer(modifier = Modifier.height(16.dp))
 

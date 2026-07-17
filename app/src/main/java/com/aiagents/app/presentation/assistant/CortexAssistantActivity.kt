@@ -19,6 +19,7 @@ import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.local.AssistantPreferences
 import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.data.speech.AndroidTextToSpeechManager
+import com.aiagents.app.data.terminal.AssistantActionCoordinator
 import com.aiagents.app.domain.model.Workspace
 import com.aiagents.app.ui.theme.AIAgentsTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -33,11 +34,13 @@ class CortexAssistantActivity : AppCompatActivity() {
     @Inject lateinit var textToSpeech: AndroidTextToSpeechManager
     @Inject lateinit var securePreferences: SecurePreferences
     @Inject lateinit var assistantPreferences: AssistantPreferences
+    @Inject lateinit var assistantActionCoordinator: AssistantActionCoordinator
 
     private var workspaceId by mutableLongStateOf(0L)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) assistantActionCoordinator.reset()
         enableEdgeToEdge()
         configureGlassWindow()
 
@@ -56,6 +59,7 @@ class CortexAssistantActivity : AppCompatActivity() {
                             .ifBlank { Locale.getDefault().toLanguageTag() },
                         textToSpeech = textToSpeech,
                         preferences = assistantPreferences,
+                        assistantActionCoordinator = assistantActionCoordinator,
                         onDismiss = ::finish
                     )
                 } else {

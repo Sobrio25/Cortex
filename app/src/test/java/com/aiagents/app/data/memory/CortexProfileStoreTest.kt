@@ -35,6 +35,17 @@ class CortexProfileStoreTest {
     }
 
     @Test
+    fun assistantSoulIsDedicatedAndContainsNoUserMemoryTemplate() {
+        val soul = CortexProfileStore.defaultAssistantSoul()
+
+        assertTrue(soul.contains("ASSISTANT_SOUL.md"))
+        assertTrue(soul.contains("voice assistant"))
+        assertFalse(soul.contains("USER.md"))
+        assertFalse(soul.contains("MEMORY.md"))
+        assertFalse(soul.contains("central agent orchestrator"))
+    }
+
+    @Test
     fun renamePreservesCustomSoulPersonality() {
         val soul = """
             # SOUL.md

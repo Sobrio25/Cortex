@@ -16,5 +16,12 @@ class WeatherWidgetsBuiltinTest {
         assertTrue(WeatherWidgetsBuiltin.instructions.contains("WEATHER_DATA"))
         assertTrue(WeatherWidgetsBuiltin.instructions.contains("no copies"))
         assertTrue(WeatherWidgetsBuiltin.instructions.contains("sin escribir ninguna respuesta adicional"))
+        assertTrue(WeatherWidgetsBuiltin.DESCRIPTION.contains("muy breve y sin emojis"))
+        assertTrue(WeatherWidgetsBuiltin.instructions.contains("una sola línea muy breve y sin emojis"))
+        assertTrue(WeatherWidgetsBuiltin.instructions.contains("day_offset: 1"))
+        assertTrue(WeatherWidgetsBuiltin.instructions.contains("target_date"))
+        assertTrue(WeatherWidgetsBuiltin.instructions.contains("temperaturas como enteros"))
+        assertTrue(WeatherWidgetsBuiltin.instructions.contains("grados Celsius"))
+        assertTrue(WeatherWidgetsBuiltin.instructions.contains("No envíes al lector abreviaturas"))
     }
 }

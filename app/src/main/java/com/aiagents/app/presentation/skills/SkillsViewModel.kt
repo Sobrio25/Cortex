@@ -2,6 +2,8 @@ package com.aiagents.app.presentation.skills
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aiagents.app.data.diagnostics.AppErrorReporter
+import com.aiagents.app.data.diagnostics.ErrorReportContext
 import com.aiagents.app.data.repository.SkillRepository
 import com.aiagents.app.data.skills.SkillReviewScheduler
 import com.aiagents.app.domain.model.SkillDraftInput
@@ -19,7 +21,8 @@ import javax.inject.Inject
 @HiltViewModel
 class SkillsViewModel @Inject constructor(
     private val repository: SkillRepository,
-    private val reviewScheduler: SkillReviewScheduler
+    private val reviewScheduler: SkillReviewScheduler,
+    private val errorReporter: AppErrorReporter
 ) : ViewModel() {
     val skills = repository.observeSkills().stateIn(
         scope = viewModelScope,
@@ -54,7 +57,7 @@ class SkillsViewModel @Inject constructor(
                     onSaved()
                 }
                 .onFailure { error ->
-                    _events.emit(error.message ?: "No se pudo guardar la skill")
+                    _events.emit(skillError(error, "skill_save"))
                 }
         }
     }
@@ -63,7 +66,7 @@ class SkillsViewModel @Inject constructor(
         viewModelScope.launch {
             repository.activate(id)
                 .onSuccess { _events.emit("Skill activada") }
-                .onFailure { _events.emit(it.message ?: "No se pudo activar") }
+                .onFailure { _events.emit(skillError(it, "skill_activate")) }
         }
     }
 
@@ -74,11 +77,17 @@ class SkillsViewModel @Inject constructor(
                     _selectedSkillId.value = null
                     _events.emit("Skill archivada")
                 }
-                .onFailure { _events.emit(it.message ?: "No se pudo archivar") }
+                .onFailure { _events.emit(skillError(it, "skill_archive")) }
         }
     }
 
     fun setAutomaticReviewEnabled(enabled: Boolean) = reviewScheduler.setEnabled(enabled)
 
     fun setReviewInterval(interval: Int) = reviewScheduler.setMessageInterval(interval)
+
+    private fun skillError(error: Throwable, operation: String): String =
+        errorReporter.present(
+            error,
+            ErrorReportContext(component = "skills", operation = operation)
+        ).displayMessage
 }

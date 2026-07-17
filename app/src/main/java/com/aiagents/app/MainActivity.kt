@@ -5,11 +5,13 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.doOnPreDraw
 import androidx.lifecycle.lifecycleScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
@@ -20,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import com.aiagents.app.presentation.MainScreen
 import com.aiagents.app.data.auth.GoogleWorkspaceOAuthManager
+import com.aiagents.app.data.diagnostics.AppHealthMonitor
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.scheduling.ScheduledTaskWorker
 import com.aiagents.app.ui.theme.AIAgentsTheme
@@ -39,6 +42,9 @@ class MainActivity : AppCompatActivity() {
 
     @Inject
     lateinit var securePreferences: SecurePreferences
+
+    @Inject
+    lateinit var appHealthMonitor: AppHealthMonitor
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -67,6 +73,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        window.decorView.doOnPreDraw {
+            appHealthMonitor.recordFirstDraw(SystemClock.elapsedRealtime())
+            reportFullyDrawn()
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -90,6 +100,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        // Do not front-load a permission prompt before the user has even chosen an app mode.
+        if (!securePreferences.isOnboardingCompleted()) return
         if (!securePreferences.isTaskNotificationsEnabled()) return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED

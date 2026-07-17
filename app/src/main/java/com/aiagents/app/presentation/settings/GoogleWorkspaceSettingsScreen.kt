@@ -42,7 +42,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -55,6 +55,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aiagents.app.data.auth.GoogleAuthorizationOutcome
 import com.aiagents.app.data.auth.GoogleWorkspaceOAuthManager
+import com.aiagents.app.data.diagnostics.AppErrorReporter
+import com.aiagents.app.data.diagnostics.ErrorReportContext
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -84,7 +86,8 @@ data class GoogleWorkspaceSettingsState(
 
 @HiltViewModel
 class GoogleWorkspaceSettingsViewModel @Inject constructor(
-    private val oAuthManager: GoogleWorkspaceOAuthManager
+    private val oAuthManager: GoogleWorkspaceOAuthManager,
+    private val errorReporter: AppErrorReporter
 ) : ViewModel() {
     private val _state = MutableStateFlow(GoogleWorkspaceSettingsState())
     val state: StateFlow<GoogleWorkspaceSettingsState> = _state.asStateFlow()
@@ -154,7 +157,7 @@ class GoogleWorkspaceSettingsViewModel @Inject constructor(
                 isLoading = false,
                 success = if (result.isSuccess) "Acceso de Google revocado." else null,
                 error = result.exceptionOrNull()?.let {
-                    "La sesión local se eliminó, pero Google no confirmó la revocación: ${it.message}"
+                    workspaceError(it, "google_workspace_disconnect")
                 }
             )
         }
@@ -185,9 +188,19 @@ class GoogleWorkspaceSettingsViewModel @Inject constructor(
     private fun onAuthorizationFailure(error: Throwable) {
         _state.value = _state.value.copy(
             isLoading = false,
-            error = "No se pudo autorizar Google Workspace: ${error.message}"
+            error = workspaceError(error, "google_workspace_authorization")
         )
     }
+
+    private fun workspaceError(error: Throwable, operation: String): String =
+        errorReporter.present(
+            error,
+            ErrorReportContext(
+                component = "google_workspace_settings",
+                operation = operation,
+                provider = "GOOGLE"
+            )
+        ).displayMessage
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -196,7 +209,7 @@ fun GoogleWorkspaceSettingsScreen(
     onNavigateBack: () -> Unit,
     viewModel: GoogleWorkspaceSettingsViewModel = hiltViewModel()
 ) {
-    val state by viewModel.state.collectAsState()
+    val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
     val consentLauncher = rememberLauncherForActivityResult(

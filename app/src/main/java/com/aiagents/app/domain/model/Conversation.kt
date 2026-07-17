@@ -10,5 +10,11 @@ data class Conversation(
     val delegationAgentName: String? = null,
     val delegationTask: String? = null,
     val status: String = "active",
-    val lastMemoryExtraction: Long? = null
+    val lastMemoryExtraction: Long? = null,
+    val contextKind: ConversationContextKind = ConversationContextKind.CHAT
 )
+
+enum class ConversationContextKind {
+    CHAT,
+    VOICE_ASSISTANT
+}

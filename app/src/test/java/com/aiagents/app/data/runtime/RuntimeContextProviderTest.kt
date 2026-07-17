@@ -1,11 +1,22 @@
 package com.aiagents.app.data.runtime
 
 import com.aiagents.app.data.memory.CortexMemorySnapshot
+import java.time.ZonedDateTime
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RuntimeContextProviderTest {
+    @Test
+    fun runtimeTimestampUsesMinutePrecisionForStableToolRounds() {
+        val timestamp = RuntimeContextProvider.promptTimestamp(
+            ZonedDateTime.parse("2026-07-13T12:30:47.123-06:00")
+        )
+
+        assertTrue(timestamp.contains("12:30"))
+        assertFalse(timestamp.contains("12:30:47"))
+    }
+
     @Test
     fun configuredAssistantNameIsAuthoritative() {
         val identity = RuntimeContextProvider.renderIdentity("Clawdy")
@@ -17,11 +28,38 @@ class RuntimeContextProviderTest {
     }
 
     @Test
+    fun voiceIdentityContainsOnlyConfiguredNamesAndNoMemoryBlocks() {
+        val identity = RuntimeContextProvider.renderVoiceIdentity(
+            agentName = "Clawdy",
+            userName = "Gabriel",
+            preferredUserName = "Gabo"
+        )
+
+        assertTrue(identity.contains("Clawdy"))
+        assertTrue(identity.contains("Gabo"))
+        assertTrue(identity.contains(RuntimeContextProvider.VOICE_USER_MARKER))
+        assertFalse(identity.contains(RuntimeContextProvider.MEMORY_MARKER))
+        assertFalse(identity.contains(RuntimeContextProvider.USER_MARKER))
+    }
+
+    @Test
+    fun voiceSoulUsesDedicatedAssistantDocument() {
+        val voiceSoul = RuntimeContextProvider.renderVoiceSoul(
+            snapshot("# ASSISTANT_SOUL.md\n\nSé cálido y conciso.", maxChars = 20_000),
+            fallbackAgentName = "Clawdy"
+        )
+
+        assertTrue(voiceSoul.contains(RuntimeContextProvider.VOICE_SOUL_MARKER))
+        assertTrue(voiceSoul.contains("Sé cálido y conciso"))
+        assertFalse(voiceSoul.contains("MEMORY.md"))
+        assertFalse(voiceSoul.contains("USER.md"))
+    }
+
+    @Test
     fun renderIncludesTimeAndroidAndCompactToolCountsWithoutUserIdentity() {
         val text = RuntimeContextProvider.render(
             RuntimeSnapshot(
                 isoDateTime = "2026-07-13T12:30:00-06:00",
-                localizedDateTime = "lunes, 13 de julio de 2026, 12:30:00",
                 timeZone = "America/Mexico_City",
                 localeTag = "es-MX",
                 agentName = "Atlas",
@@ -145,7 +183,6 @@ class RuntimeContextProviderTest {
         discoverableTools: List<String>
     ) = RuntimeSnapshot(
         isoDateTime = "2026-07-14T19:55:00-06:00",
-        localizedDateTime = "martes, 14 de julio de 2026, 19:55:00",
         timeZone = "America/Mexico_City",
         localeTag = "es-MX",
         agentName = "Clawdy",

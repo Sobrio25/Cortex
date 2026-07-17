@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
+    <!-- User-configured Ollama, LM Studio and voice servers commonly listen on a private-LAN
+         HTTP address. The settings UI warns before credentials are sent without TLS. -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system"/>

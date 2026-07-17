@@ -110,27 +110,14 @@ class FileRepository @Inject constructor(
     }
 
     private fun getWorkspaceRootFolder(): File {
-        // Usar directorio interno de la app para evitar problemas de permisos con Scoped Storage
-        // El directorio interno (/data/data/<package>/files/) es accesible desde la shell
+        // App-private storage avoids broad storage permissions and is shared only through
+        // short-lived FileProvider URI grants when another app needs access.
         val folder = File(context.filesDir, WORKSPACE_ROOT)
         if (!folder.exists()) {
             folder.mkdirs()
         }
-        // Asegurar permisos en todo el árbol de directorios
-        ensureDirectoryPermissions(folder)
         Log.v("FileRepository", "Using workspace root: ${folder.absolutePath}")
         return folder
-    }
-
-    private fun ensureDirectoryPermissions(directory: File) {
-        // Establecer permisos 755 (rwxr-xr-x) recursivamente en todos los directorios
-        var current: File? = directory
-        while (current != null && current.absolutePath.startsWith(context.filesDir.absolutePath)) {
-            current.setReadable(true, false)
-            current.setWritable(true, true)
-            current.setExecutable(true, false)
-            current = current.parentFile
-        }
     }
 
     private suspend fun getWorkspaceFolder(workspaceId: Long): File {
@@ -148,8 +135,6 @@ class FileRepository @Inject constructor(
         if (!folder.exists()) {
             folder.mkdirs()
         }
-        // Asegurar permisos en todo el árbol
-        ensureDirectoryPermissions(folder)
         Log.v("FileRepository", "Workspace folder: ${folder.absolutePath}, canWrite: ${folder.canWrite()}")
         return folder
     }
@@ -224,8 +209,6 @@ class FileRepository @Inject constructor(
                         input.copyTo(output)
                     }
                 }
-                file.setReadable(true, false)
-                file.setWritable(true, true)
                 Result.success(file)
             }
         } catch (e: Exception) {
@@ -261,8 +244,6 @@ class FileRepository @Inject constructor(
                 // Create parent directories if needed (e.g. src/components/)
                 file.parentFile?.mkdirs()
                 file.writeText(content)
-                file.setReadable(true, false)
-                file.setWritable(true, true)
                 Result.success(file)
             }
         } catch (e: Exception) {

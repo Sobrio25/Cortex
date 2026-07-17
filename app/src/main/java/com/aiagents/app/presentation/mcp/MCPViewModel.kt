@@ -2,6 +2,8 @@ package com.aiagents.app.presentation.mcp
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aiagents.app.data.diagnostics.AppErrorReporter
+import com.aiagents.app.data.diagnostics.ErrorReportContext
 import com.aiagents.app.data.local.MCPDao
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.model.BraveSearchConfig
@@ -56,7 +58,8 @@ data class MCPUiState(
 @HiltViewModel
 class MCPViewModel @Inject constructor(
     private val securePreferences: SecurePreferences,
-    private val mcpDao: MCPDao
+    private val mcpDao: MCPDao,
+    private val errorReporter: AppErrorReporter
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MCPUiState())
@@ -445,7 +448,7 @@ class MCPViewModel @Inject constructor(
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    errorMessage = e.message
+                    errorMessage = mcpError(e, "brave_configuration")
                 )
             }
         }
@@ -487,7 +490,7 @@ class MCPViewModel @Inject constructor(
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    errorMessage = e.message
+                    errorMessage = mcpError(e, "maps_configuration")
                 )
             }
         }
@@ -744,9 +747,15 @@ class MCPViewModel @Inject constructor(
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    errorMessage = e.message
+                    errorMessage = mcpError(e, "serpapi_configuration")
                 )
             }
         }
     }
+
+    private fun mcpError(error: Throwable, operation: String): String =
+        errorReporter.present(
+            error,
+            ErrorReportContext(component = "mcp_settings", operation = operation)
+        ).displayMessage
 }

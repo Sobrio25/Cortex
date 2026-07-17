@@ -24,13 +24,57 @@ enum class SubscriptionPlan(
 
 enum class RoutingMode { AUTO, MANUAL }
 
+enum class ManagedCapabilitySupport {
+    SUPPORTED,
+    UNSUPPORTED,
+    BEST_EFFORT,
+    UNKNOWN
+}
+
+data class ManagedModelCapabilities(
+    val tools: ManagedCapabilitySupport = ManagedCapabilitySupport.UNKNOWN,
+    val vision: ManagedCapabilitySupport = ManagedCapabilitySupport.UNKNOWN,
+    val streaming: ManagedCapabilitySupport = ManagedCapabilitySupport.UNKNOWN,
+    val reasoning: ManagedCapabilitySupport = ManagedCapabilitySupport.UNKNOWN
+)
+
+data class ManagedModelPricing(
+    val inputMicrosPerToken: Double? = null,
+    val outputMicrosPerToken: Double? = null
+)
+
 data class ManagedModel(
     val id: String,
     val displayName: String,
     val minimumPlan: SubscriptionPlan,
-    val contextWindow: Int,
-    val supportsVision: Boolean = false,
-    val available: Boolean = true
+    val contextWindow: Int? = null,
+    val capabilities: ManagedModelCapabilities = ManagedModelCapabilities(),
+    val pricing: ManagedModelPricing = ManagedModelPricing(),
+    val available: Boolean = true,
+    val selectable: Boolean = true
+) {
+    val supportsVision: Boolean
+        get() = capabilities.vision == ManagedCapabilitySupport.SUPPORTED
+
+    val requiresFreeToolsWarning: Boolean
+        get() = minimumPlan == SubscriptionPlan.FREE &&
+            capabilities.tools != ManagedCapabilitySupport.SUPPORTED
+}
+
+data class ManagedInferenceUsage(
+    val promptTokens: Long = 0,
+    val completionTokens: Long = 0,
+    val totalTokens: Long = promptTokens + completionTokens,
+    val estimated: Boolean = false,
+    val costMicros: Long? = null,
+    val free: Boolean = false,
+    val requestedModel: String? = null,
+    val modelUsed: String? = null,
+    val provider: String? = null,
+    val gateway: String? = null,
+    val fallback: Boolean = false,
+    val fallbackCategory: String? = null,
+    val fallbackReason: String? = null
 )
 
 data class UsageSnapshot(
@@ -46,6 +90,15 @@ data class UsageSnapshot(
     val hasCurrentFreeDataConsent: Boolean
         get() = freeDataConsentVersion >= freeDataConsentRequiredVersion
 
+    val freeUsedPercentage: Int
+        get() = if (freeTokensLimit <= 0) {
+            0
+        } else {
+            ((freeTokensUsed.coerceIn(0, freeTokensLimit).toDouble() / freeTokensLimit) * 100)
+                .toInt()
+                .coerceIn(0, 100)
+        }
+
     val remainingPercentage: Int
         get() = if (budgetMicros <= 0) {
             if (freeTokensLimit <= 0) 0 else
@@ -58,22 +111,21 @@ data class UsageSnapshot(
 object ManagedModelCatalog {
     const val AUTO = "auto"
 
+    /**
+     * Minimal offline fallback. The managed `/v1/models` endpoint is the sole source
+     * of truth for named models, capabilities and prices so the app cannot drift.
+     */
     val defaults = listOf(
-        ManagedModel(AUTO, "Auto", SubscriptionPlan.FREE, 128_000),
-        ManagedModel("deepseek-v4-flash", "DeepSeek V4 Flash", SubscriptionPlan.STARTER, 1_000_000),
-        ManagedModel("mimo-v2.5", "MiMo 2.5", SubscriptionPlan.STARTER, 1_100_000, true),
-        ManagedModel("deepseek-v4-pro", "DeepSeek V4 Pro", SubscriptionPlan.PLUS, 1_000_000),
-        ManagedModel("mimo-v2.5-pro", "MiMo 2.5 Pro", SubscriptionPlan.PLUS, 1_100_000, true),
-        ManagedModel("gpt-5.6-luna", "GPT-5.6 Luna", SubscriptionPlan.PRO, 1_000_000, true),
-        ManagedModel("kimi-k2.7-code", "Kimi K2.7 Code", SubscriptionPlan.PRO, 262_144, true),
-        ManagedModel("minimax-m3", "MiniMax M3", SubscriptionPlan.PRO, 1_000_000, true),
-        ManagedModel("grok-4.5", "Grok 4.5", SubscriptionPlan.PRO, 500_000, true),
-        ManagedModel("gpt-5.6-terra", "GPT-5.6 Terra", SubscriptionPlan.MAX, 1_000_000, true),
-        ManagedModel("glm-5.2", "GLM 5.2", SubscriptionPlan.MAX, 1_000_000),
-        ManagedModel("claude-sonnet-5", "Claude Sonnet 5", SubscriptionPlan.MAX, 1_000_000, true),
-        ManagedModel("claude-opus-4.8", "Claude Opus 4.8", SubscriptionPlan.MAX, 1_000_000, true),
-        ManagedModel("gpt-5.6-sol", "GPT-5.6 Sol", SubscriptionPlan.ULTRA, 1_000_000, true),
-        ManagedModel("claude-fable-5", "Claude Fable 5", SubscriptionPlan.ULTRA, 1_000_000, true)
+        ManagedModel(
+            id = AUTO,
+            displayName = "Auto",
+            minimumPlan = SubscriptionPlan.FREE,
+            contextWindow = 128_000,
+            capabilities = ManagedModelCapabilities(
+                tools = ManagedCapabilitySupport.BEST_EFFORT,
+                streaming = ManagedCapabilitySupport.UNSUPPORTED
+            )
+        )
     )
 
     fun availableFor(plan: SubscriptionPlan): List<ManagedModel> = defaults.filter {

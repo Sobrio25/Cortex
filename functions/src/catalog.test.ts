@@ -21,7 +21,24 @@ test("public model catalog never exposes routing or gateway identity", () => {
     assert.equal("vercelModel" in model, false);
     assert.equal("provider" in model, false);
     assert.equal("gateway" in model, false);
+    assert.equal(typeof model.capabilities, "object");
+    assert.equal(typeof model.pricing, "object");
   }
+});
+
+test("catalog represents unknown capabilities and prices instead of inventing values", () => {
+  assert.equal(MODELS.auto.capabilities.tools, "BEST_EFFORT");
+  assert.equal(MODELS.auto.capabilities.vision, "UNKNOWN");
+  assert.equal(MODELS.auto.pricing.inputMicrosPerToken, null);
+  assert.equal(MODELS["deepseek-v4-flash"].capabilities.tools, "UNKNOWN");
+  assert.equal(MODELS["mimo-v2.5"].capabilities.vision, "SUPPORTED");
+});
+
+test("automatic-only plans receive model metadata without enabling manual selection", () => {
+  const starter = publicModels("STARTER");
+  assert.deepEqual(starter.map((model) => model.id), ["auto", "deepseek-v4-flash", "mimo-v2.5"]);
+  assert.equal(starter.find((model) => model.id === "auto")?.selectable, true);
+  assert.equal(starter.find((model) => model.id === "mimo-v2.5")?.selectable, false);
 });
 
 test("manual selection never exceeds entitlement", () => {

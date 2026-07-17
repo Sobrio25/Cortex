@@ -19,6 +19,7 @@ export interface OperationAuthorization {
   account: AccountState;
   useFree: boolean;
   model?: ModelDefinition;
+  freeReason?: "PLAN_FREE" | "BUDGET_EXHAUSTED";
 }
 
 export class EntitlementError extends Error {
@@ -119,7 +120,14 @@ export async function authorizeOperation(
       updatedAt: FieldValue.serverTimestamp(),
       createdAt: turnSnapshot.exists ? turnSnapshot.data()?.createdAt : FieldValue.serverTimestamp(),
     }, { merge: true });
-    return { account, useFree, model };
+    return {
+      account,
+      useFree,
+      model,
+      freeReason: useFree
+        ? (account.plan === "FREE" ? "PLAN_FREE" : "BUDGET_EXHAUSTED")
+        : undefined,
+    };
   });
 }
 
@@ -156,18 +164,42 @@ export interface FreeTokenReservation {
   period: string;
 }
 
-export async function reserveFreeTokens(uid: string, requestedTokens: number): Promise<FreeTokenReservation> {
-  const tokens = Math.max(1, Math.ceil(requestedTokens));
-  if (!Number.isFinite(tokens) || tokens > FREE_TOKENS_LIMIT) {
-    throw new EntitlementError(429, "Esta solicitud supera la cuota gratuita disponible");
+/**
+ * Reserves at most the account's remaining allowance.
+ *
+ * The request estimate is intentionally conservative, so rejecting whenever the estimate is
+ * larger than the remaining balance can strand usable quota below 100%. Reserving the remainder
+ * lets one final request run while the Firestore transaction still prevents concurrent requests
+ * from exceeding the visible weekly allowance.
+ */
+export function freeTokenReservationAmount(
+  usedTokens: number,
+  tokenLimit: number,
+  requestedTokens: number,
+): number {
+  const requested = Math.max(1, Math.ceil(requestedTokens));
+  if (!Number.isFinite(requested)) {
+    throw new EntitlementError(429, "No se pudo calcular la cuota necesaria para esta solicitud");
   }
+  const limit = Math.max(0, Math.floor(tokenLimit));
+  const used = Math.min(limit, Math.max(0, Math.ceil(usedTokens)));
+  const remaining = limit - used;
+  if (remaining <= 0) {
+    throw new EntitlementError(429, "Alcanzaste tus 500,000 tokens gratuitos de esta semana");
+  }
+  return Math.min(requested, remaining);
+}
+
+export async function reserveFreeTokens(uid: string, requestedTokens: number): Promise<FreeTokenReservation> {
   const accountRef = db().collection("accounts").doc(uid);
   return db().runTransaction(async (transaction) => {
     const accountSnapshot = await transaction.get(accountRef);
     const account = normalize(accountSnapshot.data());
-    if (account.freeTokensUsed + tokens > account.freeTokensLimit) {
-      throw new EntitlementError(429, "Alcanzaste tus 500,000 tokens gratuitos de esta semana");
-    }
+    const tokens = freeTokenReservationAmount(
+      account.freeTokensUsed,
+      account.freeTokensLimit,
+      requestedTokens,
+    );
     transaction.set(accountRef, {
       ...account,
       freeTokensUsed: account.freeTokensUsed + tokens,
@@ -193,7 +225,10 @@ export async function settleFreeTokens(
     const storedUsed = Number(raw?.freeTokensUsed ?? reservation.tokens);
     const used = Number.isFinite(storedUsed) ? Math.max(0, storedUsed) : reservation.tokens;
     transaction.set(accountRef, {
-      freeTokensUsed: Math.max(0, used - reservation.tokens + actual),
+      freeTokensUsed: Math.min(
+        FREE_TOKENS_LIMIT,
+        Math.max(0, used - reservation.tokens + actual),
+      ),
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
   });
@@ -266,13 +301,15 @@ export async function revokePlan(uid: string): Promise<void> {
 export function publicModels(plan: PlanId): Array<Record<string, unknown>> {
   const rank = PLANS[plan].rank;
   return Object.values(MODELS)
-    .filter((model) => PLANS[model.minimumPlan].rank <= rank && (rank >= PLANS.PRO.rank || model.id === "auto"))
+    .filter((model) => PLANS[model.minimumPlan].rank <= rank)
     .map((model) => ({
       id: model.id,
       displayName: model.displayName,
       minimumPlan: model.minimumPlan,
       contextWindow: model.contextWindow,
-      supportsVision: model.supportsVision ?? false,
+      capabilities: model.capabilities,
+      pricing: model.pricing,
       available: true,
+      selectable: rank >= PLANS.PRO.rank || model.id === "auto",
     }));
 }

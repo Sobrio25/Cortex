@@ -25,7 +25,8 @@ data class STTConfig(
     val apiKey: String = "",
     val cloudProvider: CloudSTTProvider = CloudSTTProvider.ANDROID_SPEECH_RECOGNIZER,
     val localEngine: LocalSTTEngine = LocalSTTEngine.AUTO,
-    val voskModelId: String = "vosk-small-es"
+    val remoteEndpointUrl: String = "",
+    val remoteModel: String = "whisper-1"
 ) {
     enum class STTMode {
         OFF, LOCAL, CLOUD
@@ -34,6 +35,7 @@ data class STTConfig(
     enum class CloudSTTProvider {
         ANDROID_SPEECH_RECOGNIZER,
         WHISPER_API,
+        SELF_HOSTED,
         GOOGLE_SPEECH,
         ASSEMBLY_AI,
         DEEPGRAM
@@ -41,6 +43,6 @@ data class STTConfig(
 
     enum class LocalSTTEngine {
         AUTO,
-        VOSK
+        SHERPA_ONNX
     }
 }

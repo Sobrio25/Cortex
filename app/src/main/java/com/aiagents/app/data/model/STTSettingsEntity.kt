@@ -35,12 +35,13 @@ enum class LocalModelType {
 
 enum class LocalSTTEngine {
     AUTO,
-    VOSK
+    SHERPA_ONNX
 }
 
 enum class CloudSTTProvider {
     ANDROID_SPEECH_RECOGNIZER,  // Google integrado - gratis, sin API key
     WHISPER_API,                // OpenAI Whisper API
+    SELF_HOSTED,                // Endpoint Whisper compatible con OpenAI, configurado por el usuario
     FASTER_WHISPER,             // Self-hosted
     GOOGLE_FREE,                // Google Speech Recognition (API key)
     ASSEMBLY_AI,                // AssemblyAI

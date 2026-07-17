@@ -2,6 +2,7 @@ package com.aiagents.app.data.local
 
 import android.content.Context
 import android.util.Log
+import com.aiagents.app.BuildConfig
 import com.aiagents.app.data.model.CustomLocalModelEntity
 import com.aiagents.app.domain.model.LocalModel
 import com.aiagents.app.domain.model.RecommendedModels
@@ -126,7 +127,7 @@ class LocalModelRepository @Inject constructor(
             // Construir request con headers necesarios
             val requestBuilder = Request.Builder()
                 .url(model.huggingFaceUrl)
-                .header("User-Agent", "AIAgents-Android/0.3.0")
+                .header("User-Agent", "AIAgents-Android/${BuildConfig.VERSION_NAME}")
                 .header("Accept", "*/*")
                 .header("Accept-Encoding", "identity")
 

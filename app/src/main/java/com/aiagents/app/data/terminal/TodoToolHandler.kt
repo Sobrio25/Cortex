@@ -38,6 +38,8 @@ Rules:
 - Create a plan BEFORE starting work on complex tasks
 - Keep ONE task "in_progress" at a time
 - Update status to "completed" as you finish each step
+- Before the final answer, call todo_write with every finished item marked "completed". A fully
+  completed plan is automatically removed from the active chat.
 - Keep items concise (< 80 chars)
 - Send the FULL array every time (replaces previous list)
 

@@ -14,7 +14,6 @@ class SpokenTextFormatterTest {
 
         assertTrue(spoken.contains("la guía"))
         assertTrue(spoken.contains("Aceptar"))
-        assertTrue(spoken.contains("Código omitido"))
         assertFalse(spoken.contains("https://"))
         assertFalse(spoken.contains("secret"))
     }
@@ -51,5 +50,20 @@ class SpokenTextFormatterTest {
         assertTrue(chunks.size > 1)
         assertTrue(chunks.all { it.length <= 32 })
         assertEquals(SpokenTextFormatter.clean(input), chunks.joinToString(" "))
+    }
+
+    @Test
+    fun `clean removes emoji urls and structured payload while preserving measurements`() {
+        val spoken = SpokenTextFormatter.clean(
+            "🌦️ Mañana: **23 °C**, viento de 12 km/h. " +
+                "Más datos: https://weather.example/path?q=1. WEATHER_DATA {\\\"temp\\\":23.4}"
+        )
+
+        assertEquals("Mañana: 23 °C, viento de 12 km/h. Más datos:", spoken)
+        assertTrue(spoken.contains("23 °C"))
+        assertTrue(spoken.contains("12 km/h"))
+        assertFalse(spoken.contains("🌦"))
+        assertFalse(spoken.contains("http"))
+        assertFalse(spoken.contains("WEATHER_DATA"))
     }
 }

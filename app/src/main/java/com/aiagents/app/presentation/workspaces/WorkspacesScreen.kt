@@ -28,6 +28,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aiagents.app.domain.model.Workspace
 import com.aiagents.app.ui.theme.ShapeTokens
 
@@ -38,9 +39,9 @@ fun WorkspacesScreen(
     onBack: (() -> Unit)? = null,
     viewModel: WorkspacesViewModel = hiltViewModel()
 ) {
-    val workspaces by viewModel.workspaces.collectAsState()
-    val agents by viewModel.agents.collectAsState()
-    val uiState by viewModel.uiState.collectAsState()
+    val workspaces by viewModel.workspaces.collectAsStateWithLifecycle()
+    val agents by viewModel.agents.collectAsStateWithLifecycle()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {

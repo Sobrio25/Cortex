@@ -5,6 +5,7 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.aiagents.app.domain.model.Conversation
+import com.aiagents.app.domain.model.ConversationContextKind
 
 @Entity(
     tableName = "conversations",
@@ -29,7 +30,8 @@ data class ConversationEntity(
     val delegationAgentName: String? = null,
     val delegationTask: String? = null,
     val status: String = "active",
-    val lastMemoryExtraction: Long? = null  // Timestamp of last successful memory extraction
+    val lastMemoryExtraction: Long? = null,  // Timestamp of last successful memory extraction
+    val contextKind: String = ConversationContextKind.CHAT.name
 ) {
     fun toDomain(): Conversation = Conversation(
         id = id,
@@ -41,7 +43,9 @@ data class ConversationEntity(
         delegationAgentName = delegationAgentName,
         delegationTask = delegationTask,
         status = status,
-        lastMemoryExtraction = lastMemoryExtraction
+        lastMemoryExtraction = lastMemoryExtraction,
+        contextKind = runCatching { ConversationContextKind.valueOf(contextKind) }
+            .getOrDefault(ConversationContextKind.CHAT)
     )
 
     /**
@@ -62,7 +66,8 @@ data class ConversationEntity(
             delegationAgentName = conversation.delegationAgentName,
             delegationTask = conversation.delegationTask,
             status = conversation.status,
-            lastMemoryExtraction = conversation.lastMemoryExtraction
+            lastMemoryExtraction = conversation.lastMemoryExtraction,
+            contextKind = conversation.contextKind.name
         )
     }
 }

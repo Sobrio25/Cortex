@@ -43,6 +43,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -50,7 +51,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,16 +78,16 @@ fun ScheduledTasksScreen(
     onOpenConversation: (workspaceId: Long, conversationId: Long) -> Unit,
     viewModel: ScheduledTasksViewModel = hiltViewModel()
 ) {
-    val tasks by viewModel.tasks.collectAsState()
-    val workspaces by viewModel.workspaces.collectAsState()
-    val agents by viewModel.agents.collectAsState()
-    val uiState by viewModel.uiState.collectAsState()
+    val tasks by viewModel.tasks.collectAsStateWithLifecycle()
+    val workspaces by viewModel.workspaces.collectAsStateWithLifecycle()
+    val agents by viewModel.agents.collectAsStateWithLifecycle()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(uiState.errorMessage, uiState.showEditor) {
         val message = uiState.errorMessage
         if (message != null && !uiState.showEditor) {
-            snackbarHostState.showSnackbar(message)
+            snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Long)
             viewModel.clearError()
         }
     }

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080b10">
+  <meta name="description" content="Panel privado de uso de modelos de Cortex">
+  <title>Cortex · Uso de modelos</title>
+  <link rel="stylesheet" href="/styles.css?v=3">
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+
+  <main id="auth-view" class="auth-shell">
+    <section class="auth-card">
+      <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <p class="eyebrow">Cortex Admin</p>
+      <h1>Toda la actividad de IA, en un solo lugar.</h1>
+      <p class="auth-copy">Consulta modelos, proveedores, consumo y rendimiento desde un panel privado y seguro.</p>
+      <button id="sign-in" class="primary-button" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M21.6 12.23c0-.71-.06-1.4-.18-2.07H12v3.92h5.38a4.6 4.6 0 0 1-2 3.02v2.54h3.24c1.9-1.75 2.98-4.33 2.98-7.41Z"/><path fill="#34A853" d="M12 22c2.7 0 4.97-.9 6.62-2.36l-3.24-2.54c-.9.6-2.05.96-3.38.96-2.61 0-4.82-1.76-5.61-4.13H3.04v2.62A10 10 0 0 0 12 22Z"/><path fill="#FBBC05" d="M6.39 13.93A6 6 0 0 1 6.07 12c0-.67.11-1.32.32-1.93V7.45H3.04A10 10 0 0 0 2 12c0 1.64.39 3.19 1.04 4.55l3.35-2.62Z"/><path fill="#EA4335" d="M12 5.94c1.47 0 2.78.5 3.82 1.49l2.87-2.87A9.63 9.63 0 0 0 12 2a10 10 0 0 0-8.96 5.45l3.35 2.62C7.18 7.7 9.39 5.94 12 5.94Z"/></svg>
+        Entrar con Google
+      </button>
+      <p id="auth-message" class="auth-message" role="status"></p>
+      <p class="privacy-note">Acceso limitado a administradores. No se almacenan prompts ni respuestas.</p>
+    </section>
+  </main>
+
+  <div id="dashboard-view" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-mark small" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div><strong>Cortex</strong><small>Admin</small></div>
+      </div>
+      <nav aria-label="Navegación principal">
+        <a class="nav-item active" href="#overview" aria-current="page">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z"/></svg>
+          Resumen
+        </a>
+        <a class="nav-item" href="#models">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 4.5-8 4.5-8-4.5L12 3Zm-8 9 8 4.5 8-4.5M4 16.5l8 4.5 8-4.5"/></svg>
+          Modelos
+        </a>
+        <a class="nav-item" href="#activity">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9m5 10V5m6 14v-7m5 7V3"/></svg>
+          Actividad
+        </a>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="privacy-chip"><span></span> Sin contenido sensible</div>
+        <button id="sign-out" class="ghost-button" type="button">Cerrar sesión</button>
+      </div>
+    </aside>
+
+    <main class="content" id="overview">
+      <header class="topbar">
+        <div>
+          <p id="dashboard-eyebrow" class="eyebrow">Suscripciones</p>
+          <h1 id="dashboard-title">Uso de suscripciones</h1>
+          <p id="range-label" class="subtitle">Resumen de los últimos 30 días</p>
+        </div>
+        <div class="topbar-actions">
+          <div class="panel-switch" role="tablist" aria-label="Panel de estadísticas">
+            <button type="button" role="tab" data-dashboard-mode="subscriptions" class="active" aria-selected="true">Suscripciones</button>
+            <button type="button" role="tab" data-dashboard-mode="global" aria-selected="false">Uso global</button>
+          </div>
+          <div class="range-control" role="group" aria-label="Rango de tiempo">
+            <button type="button" data-days="7">7D</button>
+            <button type="button" data-days="30" class="active">30D</button>
+            <button type="button" data-days="90">90D</button>
+          </div>
+          <button id="refresh" class="icon-button" type="button" title="Actualizar" aria-label="Actualizar datos">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66L20 8.68M20 4v4.68h-4.68"/></svg>
+          </button>
+          <div class="user-avatar" id="user-avatar" aria-label="Cuenta actual">A</div>
+        </div>
+      </header>
+
+      <div id="loading" class="loading-line" aria-hidden="true"></div>
+      <section class="metric-grid" aria-label="Métricas principales">
+        <article class="metric-card accent-violet">
+          <div class="metric-head"><span>Solicitudes</span><span class="metric-icon">↗</span></div>
+          <strong id="metric-requests">—</strong>
+          <small id="metric-requests-note">Cargando actividad</small>
+        </article>
+        <article class="metric-card accent-cyan">
+          <div class="metric-head"><span>Tokens totales</span><span class="metric-icon">◈</span></div>
+          <strong id="metric-tokens">—</strong>
+          <small id="metric-tokens-note">Entrada + salida</small>
+        </article>
+        <article class="metric-card accent-green">
+          <div class="metric-head"><span id="metric-third-label">Coste estimado</span><span id="metric-third-icon" class="metric-icon">$</span></div>
+          <strong id="metric-third-value">—</strong>
+          <small id="metric-third-note">Modelos administrados</small>
+        </article>
+        <article class="metric-card accent-amber">
+          <div class="metric-head"><span>Tasa de éxito</span><span class="metric-icon">✓</span></div>
+          <strong id="metric-success">—</strong>
+          <small id="metric-success-note">Solicitudes completadas</small>
+        </article>
+      </section>
+
+      <section class="overview-grid">
+        <article class="panel chart-panel">
+          <div class="panel-heading">
+            <div><p class="panel-kicker">Tendencia</p><h2>Consumo diario</h2></div>
+            <div class="segmented" role="group" aria-label="Métrica de la gráfica">
+              <button type="button" data-metric="totalTokens" class="active">Tokens</button>
+              <button type="button" data-metric="requests">Requests</button>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <svg id="usage-chart" viewBox="0 0 760 250" role="img" aria-label="Gráfica diaria de consumo"></svg>
+          </div>
+          <div class="chart-legend"><span><i class="legend-primary"></i><b id="chart-legend-label">Tokens totales</b></span><span id="chart-total">—</span></div>
+        </article>
+
+        <article class="panel providers-panel">
+          <div class="panel-heading"><div><p class="panel-kicker">Distribución</p><h2>Proveedores</h2></div></div>
+          <div id="provider-list" class="provider-list"></div>
+          <p id="providers-empty" class="empty-copy" hidden>Sin uso registrado en este periodo.</p>
+        </article>
+      </section>
+
+      <section class="panel table-panel" id="models">
+        <div class="panel-heading table-heading">
+          <div><p class="panel-kicker">Catálogo activo</p><h2>Modelos utilizados</h2></div>
+          <div class="search-box">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+            <input id="model-search" type="search" placeholder="Buscar modelo o proveedor" aria-label="Buscar modelo o proveedor">
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Modelo</th><th>Proveedor</th><th id="models-context-heading">Gateway</th><th>Solicitudes</th><th>Tokens</th><th id="models-detail-heading">Coste</th><th>Latencia prom.</th></tr></thead>
+            <tbody id="models-body"></tbody>
+          </table>
+        </div>
+        <p id="models-empty" class="empty-copy table-empty" hidden>No hay modelos que coincidan.</p>
+      </section>
+
+      <section class="panel table-panel" id="activity">
+        <div class="panel-heading table-heading">
+          <div><p class="panel-kicker">Eventos recientes</p><h2>Actividad reciente</h2></div>
+          <span class="live-indicator"><i></i> Últimos 100 eventos</span>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Fecha</th><th>Modelo</th><th>Proveedor</th><th>Usuario</th><th id="recent-context-heading">Plan / agente</th><th>Tokens</th><th id="recent-detail-heading">Coste</th><th>Estado</th></tr></thead>
+            <tbody id="recent-body"></tbody>
+          </table>
+        </div>
+        <p id="recent-empty" class="empty-copy table-empty" hidden>Aún no hay solicitudes registradas.</p>
+      </section>
+
+      <footer><span id="last-updated">Sin actualizar</span><span id="footer-note">Datos agregados en UTC · Costes estimados en USD</span></footer>
+    </main>
+  </div>
+
+  <script type="module" src="/app.js?v=3"></script>
+</body>
+</html>

@@ -7,26 +7,27 @@ import org.junit.Test
 
 class SubscriptionTest {
     @Test
-    fun freeStarterAndPlusOnlyExposeAutoSelection() {
-        listOf(SubscriptionPlan.FREE, SubscriptionPlan.STARTER, SubscriptionPlan.PLUS).forEach { plan ->
+    fun offlineCatalogOnlyExposesAutoBecauseServerIsAuthoritative() {
+        SubscriptionPlan.entries.forEach { plan ->
             assertEquals(listOf(ManagedModelCatalog.AUTO), ManagedModelCatalog.availableFor(plan).map { it.id })
         }
     }
 
     @Test
-    fun proAndHigherCatalogsAreCumulative() {
-        val pro = ManagedModelCatalog.availableFor(SubscriptionPlan.PRO).map { it.id }.toSet()
-        val max = ManagedModelCatalog.availableFor(SubscriptionPlan.MAX).map { it.id }.toSet()
-        val ultra = ManagedModelCatalog.availableFor(SubscriptionPlan.ULTRA).map { it.id }.toSet()
-        assertTrue(max.containsAll(pro))
-        assertTrue(ultra.containsAll(max))
-        assertFalse(pro.contains("gpt-5.6-terra"))
-        assertTrue(ultra.contains("claude-fable-5"))
+    fun freeAutoWarnsThatToolsAreBestEffortAndPricesUnknown() {
+        val auto = ManagedModelCatalog.defaults.single()
+        assertEquals(ManagedCapabilitySupport.BEST_EFFORT, auto.capabilities.tools)
+        assertTrue(auto.requiresFreeToolsWarning)
+        assertEquals(null, auto.pricing.inputMicrosPerToken)
+        assertFalse(auto.supportsVision)
     }
 
     @Test
     fun usagePercentageUsesTokensOrBudget() {
         assertEquals(50, UsageSnapshot(freeTokensUsed = 250_000).remainingPercentage)
+        assertEquals(50, UsageSnapshot(freeTokensUsed = 250_000).freeUsedPercentage)
+        assertEquals(100, UsageSnapshot(freeTokensUsed = 750_000).freeUsedPercentage)
+        assertEquals(0, UsageSnapshot(freeTokensLimit = 0).freeUsedPercentage)
         assertEquals(
             75,
             UsageSnapshot(

@@ -13,6 +13,8 @@ class CortexAssistantPromptTest {
         assertTrue(prompt.contains("at most 30 words"))
         assertTrue(prompt.contains("1–2 short sentences"))
         assertTrue(prompt.contains("ALWAYS-READY PHONE CAPABILITIES"))
+        assertTrue(prompt.contains("plain, natural spoken sentences"))
+        assertTrue(prompt.contains("Spell out units, percentages, labels, and abbreviations"))
     }
 
     @Test
@@ -23,6 +25,8 @@ class CortexAssistantPromptTest {
         assertTrue("set_reminder" in tools)
         assertTrue("add_calendar_event" in tools)
         assertTrue("device_control" in tools)
+        assertTrue(CortexAssistantPrompt.ALLOWED_TOOL_NAMES == tools)
+        assertTrue("memory" !in CortexAssistantPrompt.ALLOWED_TOOL_NAMES)
     }
 
     @Test
@@ -30,6 +34,8 @@ class CortexAssistantPromptTest {
         assertTrue(CortexAssistantPrompt.SYSTEM_INSTRUCTIONS.contains(WeatherWidgetsBuiltin.instructions))
         assertTrue(CortexAssistantPrompt.SYSTEM_INSTRUCTIONS.contains(AndroidAppControlBuiltin.instructions))
         assertTrue(CortexAssistantPrompt.SYSTEM_INSTRUCTIONS.contains("without calling `skill_view`"))
+        assertTrue(CortexAssistantPrompt.SYSTEM_INSTRUCTIONS.contains("prepare_whatsapp_message"))
+        assertTrue(CortexAssistantPrompt.SYSTEM_INSTRUCTIONS.contains("call_phone"))
     }
 
     @Test
@@ -54,5 +60,7 @@ class CortexAssistantPromptTest {
         assertTrue(instructions.contains("mathematical operation"))
         assertTrue(instructions.contains("at most 12 words"))
         assertTrue(instructions.contains("Timer, alarm, reminder"))
+        assertTrue(instructions.contains("derives natural speech from `WEATHER_DATA`"))
+        assertTrue(instructions.contains("Never send visual shorthand"))
     }
 }

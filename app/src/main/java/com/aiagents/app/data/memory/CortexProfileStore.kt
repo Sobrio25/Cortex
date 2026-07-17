@@ -51,6 +51,11 @@ class CortexProfileStore @Inject constructor(
             )
         }
     )
+    private val assistantSoulDocument = ProfileDocument(
+        file = File(directory, ASSISTANT_SOUL_FILE_NAME),
+        maxChars = HERMES_CONTEXT_FILE_MAX_CHARS,
+        defaultContent = ::defaultAssistantSoul
+    )
 
     private val _soulSnapshots = MutableStateFlow(soulDocument.loadOrCreate())
     val soulSnapshots: StateFlow<CortexMemorySnapshot> = _soulSnapshots.asStateFlow()
@@ -58,8 +63,13 @@ class CortexProfileStore @Inject constructor(
     private val _userSnapshots = MutableStateFlow(userDocument.loadOrCreate())
     val userSnapshots: StateFlow<CortexMemorySnapshot> = _userSnapshots.asStateFlow()
 
+    private val _assistantSoulSnapshots = MutableStateFlow(assistantSoulDocument.loadOrCreate())
+    val assistantSoulSnapshots: StateFlow<CortexMemorySnapshot> =
+        _assistantSoulSnapshots.asStateFlow()
+
     fun soulSnapshot(): CortexMemorySnapshot = _soulSnapshots.value
     fun userSnapshot(): CortexMemorySnapshot = _userSnapshots.value
+    fun assistantSoulSnapshot(): CortexMemorySnapshot = _assistantSoulSnapshots.value
 
     /** One-time onboarding seed. The user has not had an opportunity to customize these files yet. */
     fun seedFromOnboarding(
@@ -159,6 +169,15 @@ class CortexProfileStore @Inject constructor(
         synchronized(lock) {
             userDocument.replace(markdown, expectedRevision).also { _userSnapshots.value = it.snapshot }
         }
+
+    fun replaceAssistantSoul(
+        markdown: String,
+        expectedRevision: String? = null
+    ): CortexMemoryMutationResult = synchronized(lock) {
+        assistantSoulDocument.replace(markdown, expectedRevision).also {
+            _assistantSoulSnapshots.value = it.snapshot
+        }
+    }
 
     fun applyUserOperations(
         operations: List<CortexMemoryOperation>,
@@ -321,6 +340,7 @@ class CortexProfileStore @Inject constructor(
     companion object {
         const val SOUL_FILE_NAME = "SOUL.md"
         const val USER_FILE_NAME = "USER.md"
+        const val ASSISTANT_SOUL_FILE_NAME = "ASSISTANT_SOUL.md"
         const val HERMES_USER_MAX_CHARS = 1_375
         const val HERMES_CONTEXT_FILE_MAX_CHARS = 20_000
         const val DEFAULT_AGENT_NAME = "Assistant"
@@ -376,6 +396,14 @@ class CortexProfileStore @Inject constructor(
                 - Address the user as: $safePreferred
             """.trimIndent()
         }
+
+        internal fun defaultAssistantSoul(): String = """
+            # ASSISTANT_SOUL.md
+
+            You are the user's personal voice assistant on Android. Keep the configured assistant name and a warm, capable, concise personality. Sound natural when spoken aloud, lead with the useful result, and use device capabilities when they are available.
+
+            Be honest about uncertainty and completed actions. Protect the user's privacy, ask before consequential or ambiguous external actions, and never imply that a message was sent when it was only prepared in another app.
+        """.trimIndent()
 
         private fun singleLine(value: String?): String = value.orEmpty()
             .replace(Regex("[\\r\\n\\t]+"), " ")

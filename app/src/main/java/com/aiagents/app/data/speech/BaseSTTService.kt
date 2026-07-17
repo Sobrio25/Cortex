@@ -13,6 +13,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -28,10 +30,9 @@ abstract class BaseSTTService(protected val context: Context) : STTService {
     protected val _transcription = MutableStateFlow("")
     override val transcription: StateFlow<String> = _transcription.asStateFlow()
 
-    protected var audioRecord: AudioRecord? = null
-    protected var recordingJob: Job? = null
+    private var recordingJob: Job? = null
     protected val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val audioRecordLock = Any()
+    private val recordingSessionMutex = Mutex()
 
     companion object {
         const val SAMPLE_RATE = 16000
@@ -39,115 +40,153 @@ abstract class BaseSTTService(protected val context: Context) : STTService {
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         const val BUFFER_SIZE_MULTIPLIER = 2
 
-        // Silence detection
-        private const val VOICE_THRESHOLD = 300.0
-        private const val SILENCE_TIMEOUT_SECONDS = 2
-        private const val NO_SPEECH_TIMEOUT_SECONDS = 5
-        private const val MAX_RECORDING_SECONDS = 60
+        private const val NON_BLOCKING_READ_POLL_MS = 10L
+        private const val ANALYSIS_FRAME_MS = 100
     }
 
-    protected fun startRecording(): ByteArray? {
+    /**
+     * Starts at most one microphone/transcription session and does not return until AudioRecord is
+     * actually recording (or startup fails). Keeping job ownership here prevents subclasses from
+     * replacing the job while a previous AudioRecord is still alive.
+     */
+    protected suspend fun startRecordingSession(
+        onAudioCaptured: suspend (ByteArray) -> Unit
+    ): Boolean = recordingSessionMutex.withLock {
+        val previousJob = recordingJob
+        if (previousJob?.isActive == true) {
+            if (_isListening.value) return@withLock true
+            previousJob.join()
+        }
+        if (!serviceScope.isActive) return@withLock false
+
+        val started = CompletableDeferred<Boolean>()
+        recordingJob = serviceScope.launch {
+            try {
+                startRecording(started)
+                    ?.takeIf(ByteArray::isNotEmpty)
+                    ?.let { onAudioCaptured(it) }
+            } finally {
+                started.complete(false)
+            }
+        }
+        started.await()
+    }
+
+    private suspend fun startRecording(started: CompletableDeferred<Boolean>): ByteArray? {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {
             Log.w("BaseSTTService", "Permiso de micrófono no concedido")
+            started.complete(false)
             return null
         }
-        val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+        val audioRecordBufferSize = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE,
+            CHANNEL_CONFIG,
+            AUDIO_FORMAT
+        )
             .coerceAtLeast(SAMPLE_RATE * BUFFER_SIZE_MULTIPLIER)
 
+        var record: AudioRecord? = null
         try {
-            audioRecord = AudioRecord(
+            record = AudioRecord(
                 MediaRecorder.AudioSource.MIC,
                 SAMPLE_RATE,
                 CHANNEL_CONFIG,
                 AUDIO_FORMAT,
-                bufferSize
+                audioRecordBufferSize
             )
 
-            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+            if (record.state != AudioRecord.STATE_INITIALIZED) {
                 Log.e("BaseSTTService", "AudioRecord no se pudo inicializar")
-                stopCurrentAudioRecord(release = true)
+                started.complete(false)
                 return null
             }
 
-            audioRecord?.startRecording()
+            record.startRecording()
+            if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                Log.e("BaseSTTService", "AudioRecord no entro en estado de grabacion")
+                started.complete(false)
+                return null
+            }
             _isListening.value = true
+            started.complete(true)
 
             val outputStream = ByteArrayOutputStream()
-            val buffer = ByteArray(bufferSize)
+            // Read in short frames even though AudioRecord owns a larger internal buffer. This
+            // gives endpoint detection enough temporal resolution to notice natural pauses.
+            val buffer = ByteArray(SAMPLE_RATE * 2 * ANALYSIS_FRAME_MS / 1_000)
+            val voiceActivityDetector = AdaptiveVoiceActivityDetector(SAMPLE_RATE)
+            var lastLoggedSecond = -1
 
-            // Silence detection state
-            var silentSamples = 0
-            var totalSamples = 0
-            var hasSpoken = false
-            val silenceLimit = SAMPLE_RATE * SILENCE_TIMEOUT_SECONDS
-            val noSpeechLimit = SAMPLE_RATE * NO_SPEECH_TIMEOUT_SECONDS
-            val maxSamples = SAMPLE_RATE * MAX_RECORDING_SECONDS
-
-            while (_isListening.value && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
-                if (read > 0) {
-                    outputStream.write(buffer, 0, read)
-                    val samplesRead = read / 2 // 16-bit = 2 bytes per sample
-                    totalSamples += samplesRead
-
-                    val rms = calculateRMS(buffer, read)
-                    if (rms > VOICE_THRESHOLD) {
-                        hasSpoken = true
-                        silentSamples = 0
-                    } else if (hasSpoken) {
-                        silentSamples += samplesRead
-                        if (silentSamples >= silenceLimit) {
-                            Log.d("BaseSTTService", "Auto-stop: silencio detectado tras habla")
+            while (_isListening.value && currentCoroutineContext().isActive) {
+                val read = record.read(
+                    buffer,
+                    0,
+                    buffer.size,
+                    AudioRecord.READ_NON_BLOCKING
+                )
+                when {
+                    read > 0 -> {
+                        outputStream.write(buffer, 0, read)
+                        val samplesRead = read / 2 // 16-bit = 2 bytes per sample
+                        val rms = calculateRMS(buffer, read)
+                        val vad = voiceActivityDetector.accept(rms, samplesRead)
+                        val elapsedSecond = vad.elapsedSeconds.toInt()
+                        if (elapsedSecond != lastLoggedSecond) {
+                            lastLoggedSecond = elapsedSecond
+                            Log.v(
+                                "BaseSTTService",
+                                "VAD rms=${rms.toInt()} floor=${vad.noiseFloorRms.toInt()} " +
+                                    "speech=${vad.speechThresholdRms.toInt()} " +
+                                    "silence=${vad.silenceThresholdRms.toInt()} " +
+                                    "spoken=${vad.hasSpoken}"
+                            )
+                        }
+                        if (vad.shouldStop) {
+                            val reason = when (vad.stopReason) {
+                                VoiceStopReason.SILENCE_AFTER_SPEECH -> "silencio detectado tras habla"
+                                VoiceStopReason.NO_SPEECH -> "sin habla detectada"
+                                VoiceStopReason.MAX_DURATION -> "duracion maxima alcanzada"
+                                null -> "fin de captura"
+                            }
+                            Log.d("BaseSTTService", "Auto-stop: $reason")
                             break
                         }
                     }
-
-                    // No speech at all timeout
-                    if (!hasSpoken && totalSamples >= noSpeechLimit) {
-                        Log.d("BaseSTTService", "Auto-stop: sin habla detectada")
-                        break
+                    read == AudioRecord.ERROR_DEAD_OBJECT -> {
+                        throw IllegalStateException("AudioRecord perdio el dispositivo de audio")
                     }
-
-                    // Max duration
-                    if (totalSamples >= maxSamples) {
-                        Log.d("BaseSTTService", "Auto-stop: duracion maxima alcanzada")
-                        break
+                    read < 0 -> {
+                        throw IllegalStateException("AudioRecord.read fallo con codigo $read")
                     }
+                    else -> delay(NON_BLOCKING_READ_POLL_MS)
                 }
             }
-
-            // Cleanup audio hardware (handles both auto-stop and manual stop)
-            _isListening.value = false
-            stopCurrentAudioRecord(release = true)
 
             return outputStream.toByteArray()
 
         } catch (e: Exception) {
             Log.e("BaseSTTService", "Error grabando audio", e)
-            _isListening.value = false
-            stopCurrentAudioRecord(release = true)
             return null
+        } finally {
+            started.complete(false)
+            _isListening.value = false
+            record?.let(::stopAndReleaseOwnedRecord)
         }
     }
 
-    /** Serializes manual and silence-triggered cleanup so AudioRecord.stop() is idempotent. */
-    private fun stopCurrentAudioRecord(release: Boolean) {
-        synchronized(audioRecordLock) {
-            val record = audioRecord ?: return
-            try {
-                if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                    record.stop()
-                }
-            } catch (error: IllegalStateException) {
-                Log.w("BaseSTTService", "AudioRecord ya estaba detenido")
+    /** Called only by the coroutine that owns and reads this AudioRecord instance. */
+    private fun stopAndReleaseOwnedRecord(record: AudioRecord) {
+        try {
+            if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                record.stop()
             }
-            if (release) {
-                runCatching { record.release() }
-                    .onFailure { Log.w("BaseSTTService", "No se pudo liberar AudioRecord", it) }
-                audioRecord = null
-            }
+        } catch (error: IllegalStateException) {
+            Log.w("BaseSTTService", "AudioRecord ya estaba detenido")
+        } finally {
+            runCatching { record.release() }
+                .onFailure { Log.w("BaseSTTService", "No se pudo liberar AudioRecord", it) }
         }
     }
 
@@ -212,11 +251,16 @@ abstract class BaseSTTService(protected val context: Context) : STTService {
     }
 
     override suspend fun stopListening() {
-        _isListening.value = false
-        // Calling stop() unblocks the read() call in startRecording() for immediate response.
-        // startRecording() handles release() and cleanup after the loop exits.
-        stopCurrentAudioRecord(release = false)
-        recordingJob?.join()
+        val activeJob = recordingSessionMutex.withLock {
+            // The owner uses non-blocking reads, observes this flag within 10 ms and performs
+            // stop()/release() itself. Never stop AudioRecord concurrently with read().
+            _isListening.value = false
+            recordingJob
+        }
+        activeJob?.join()
+        recordingSessionMutex.withLock {
+            if (recordingJob === activeJob) recordingJob = null
+        }
     }
 
     override fun release() {
