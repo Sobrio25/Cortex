@@ -1,15 +1,9 @@
 package com.aiagents.app.presentation.assistant
 
-import android.app.Activity
-import android.app.role.RoleManager
 import android.content.Context
-import android.content.ContextWrapper
 import android.content.Intent
-import android.os.Build
 import android.provider.Settings
 import android.service.voice.VoiceInteractionService
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -120,12 +114,6 @@ fun AssistantSettingsScreen(
     var assistantSoulDraft by remember(assistantSoul.revision) {
         mutableStateOf(assistantSoul.content)
     }
-    val assistantRoleLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        roleHeld = context.isAssistantRoleHeld()
-    }
-
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -137,16 +125,13 @@ fun AssistantSettingsScreen(
     }
 
     fun requestAssistantRole() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val roleManager = context.getSystemService(RoleManager::class.java)
-            if (roleManager?.isRoleAvailable(RoleManager.ROLE_ASSISTANT) == true) {
-                assistantRoleLauncher.launch(
-                    roleManager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT)
-                )
-                return
-            }
-        }
-        context.startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
+        val destination = listOf(
+            Intent(Settings.ACTION_VOICE_INPUT_SETTINGS),
+            Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS),
+            Intent(Settings.ACTION_SETTINGS)
+        ).first { intent -> intent.resolveActivity(context.packageManager) != null }
+
+        context.startActivity(destination)
     }
 
     Scaffold(
@@ -1238,11 +1223,4 @@ private fun Context.isAssistantRoleHeld(): Boolean {
         this,
         android.content.ComponentName(this, CortexVoiceInteractionService::class.java)
     )
-}
-
-@Suppress("unused")
-private tailrec fun Context.findActivity(): Activity? = when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
 }

@@ -171,7 +171,7 @@
     <string name="assistant_role_active">%1$s is the default assistant</string>
     <string name="assistant_role_inactive">%1$s is not the default assistant yet</string>
     <string name="assistant_role_active_detail">Use your device’s assistant gesture to open it.</string>
-    <string name="assistant_role_inactive_detail">Choose %1$s once in the Android system dialog.</string>
+    <string name="assistant_role_inactive_detail">Choose %1$s as the digital assistant app in Android settings.</string>
     <string name="assistant_enable_role">Use %1$s</string>
     <string name="assistant_change_role">Review</string>
     <string name="assistant_try_now">Try</string>

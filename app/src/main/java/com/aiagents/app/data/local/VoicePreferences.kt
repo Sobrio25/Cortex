@@ -42,7 +42,7 @@ fun interface LegacyVoiceSettingsImporter {
 /** Single source of truth for voice engines used by chat and the Android assistant. */
 @Singleton
 class VoicePreferences @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val securePreferences: SecurePreferences
 ) : LegacyVoiceSettingsImporter {
     // Keep the existing file and keys so assistant voice selections survive the split.
@@ -93,8 +93,26 @@ class VoicePreferences @Inject constructor(
     }
 
     fun setTtsMode(mode: AssistantTtsMode) {
-        preferences.edit().putString(KEY_TTS_MODE, mode.id).apply()
+        preferences.edit()
+            .putString(KEY_TTS_MODE, mode.id)
+            .also { editor ->
+                if (mode != AssistantTtsMode.NONE) {
+                    editor.putString(KEY_LAST_ENABLED_TTS_MODE, mode.id)
+                }
+            }
+            .apply()
         _ttsMode.value = mode
+    }
+
+    fun toggleTts() {
+        val nextMode = if (_ttsMode.value == AssistantTtsMode.NONE) {
+            AssistantTtsMode.fromId(
+                preferences.getString(KEY_LAST_ENABLED_TTS_MODE, AssistantTtsMode.GOOGLE.id)
+            ).takeUnless { it == AssistantTtsMode.NONE } ?: AssistantTtsMode.GOOGLE
+        } else {
+            AssistantTtsMode.NONE
+        }
+        setTtsMode(nextMode)
     }
 
     fun setGoogleVoiceId(voiceId: String) {
@@ -265,6 +283,7 @@ class VoicePreferences @Inject constructor(
         private const val KEY_STT_MODE = "assistant_stt_mode"
         private const val KEY_STT_LANGUAGE = "voice_stt_language"
         private const val KEY_TTS_MODE = "assistant_tts_mode"
+        private const val KEY_LAST_ENABLED_TTS_MODE = "assistant_last_enabled_tts_mode"
         private const val KEY_GOOGLE_VOICE_ID = "assistant_google_voice_id"
         private const val KEY_REMOTE_STT_ENDPOINT = "assistant_remote_stt_endpoint"
         private const val KEY_REMOTE_STT_MODEL = "assistant_remote_stt_model"

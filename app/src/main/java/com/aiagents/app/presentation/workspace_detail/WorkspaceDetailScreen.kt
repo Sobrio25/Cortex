@@ -45,7 +45,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.foundation.rememberScrollState
@@ -63,6 +66,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -385,89 +389,36 @@ fun WorkspaceDetailScreen(
     Scaffold(
         containerColor = Color.Transparent,
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = if (workspace?.name == "__global__") activeAgent?.name ?: "Assistant" else workspace?.name ?: "Chat",
-                            style = MaterialTheme.typography.titleLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.horizontalScroll(rememberScrollState())
-                        ) {
-                            if (workingAgents.isNotEmpty()) {
-                                workingAgents.forEach { agentName ->
-                                    AgentWorkingChip(agentName = agentName)
-                                }
-                                if (selectedModel.isNotEmpty()) {
-                                    Text("·", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-
-                            if (selectedModel.isNotEmpty()) {
-                                Text(
-                                    text = if ("|" in selectedModel) selectedModel.substringAfter("|") else selectedModel,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f, fill = false)
-                                )
-                            }
-
-                            if (workingAgents.isEmpty()) {
-                                activeAgent?.let { agent ->
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(8.dp)
-                                                .clip(CircleShape)
-                                                .background(agentColor(agent.name))
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = agent.name,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = agentColor(agent.name)
-                                        )
-                                    }
-                                } ?: Text(
-                                    text = "Sin agente",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                            }
-                        }
-                    }
+            ChatHeader(
+                title = if (workspace?.name == "__global__") {
+                    activeAgent?.name ?: "Cortex"
+                } else {
+                    workspace?.name ?: "Chat"
                 },
-                navigationIcon = {
-                    if (isDrawerMode) {
-                        IconButton(onClick = { onOpenDrawer?.invoke() }) {
-                            Icon(Icons.Default.Menu, contentDescription = "Menu")
-                        }
-                    } else {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
-                        }
-                    }
+                selectedModel = selectedModel,
+                allModels = viewModel.getAllModels(),
+                fileCount = files.size,
+                filesSelected = uiState.activeTab == WorkspaceTab.Files,
+                ttsEnabled = ttsMode != AssistantTtsMode.NONE,
+                isDrawerMode = isDrawerMode,
+                showNewChat = onNewChat != null,
+                onNavigationClick = {
+                    if (isDrawerMode) onOpenDrawer?.invoke() else onBack()
                 },
-                actions = {
-                    if (isDrawerMode && onNewChat != null) {
-                        IconButton(onClick = onNewChat) {
-                            Icon(Icons.Default.EditNote, contentDescription = "Nuevo chat")
-                        }
-                    }
-                    IconButton(onClick = { showSettingsDialog = true }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Configuracion")
-                    }
+                onNewChat = { onNewChat?.invoke() },
+                onToggleFiles = {
+                    viewModel.setActiveTab(
+                        if (uiState.activeTab == WorkspaceTab.Files) WorkspaceTab.Chat
+                        else WorkspaceTab.Files
+                    )
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+                onToggleTts = {
+                    if (ttsMode != AssistantTtsMode.NONE) viewModel.stopSpeaking()
+                    sttViewModel.toggleTts()
+                },
+                onModelSelected = viewModel::setSelectedModel,
+                onOpenConversationSettings = { showSettingsDialog = true },
+                modifier = Modifier.statusBarsPadding()
             )
         },
         snackbarHost = {
@@ -479,31 +430,6 @@ fun WorkspaceDetailScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            TabRow(
-                selectedTabIndex = uiState.activeTab.ordinal,
-                modifier = Modifier
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                    .cortexGlass(
-                        shape = RoundedCornerShape(22.dp),
-                        tint = CortexTheme.colors.glass
-                    ),
-                containerColor = Color.Transparent,
-                divider = {}
-            ) {
-                Tab(
-                    selected = uiState.activeTab == WorkspaceTab.Chat,
-                    onClick = { viewModel.setActiveTab(WorkspaceTab.Chat) },
-                    text = { Text("Chat") },
-                    icon = { Icon(Icons.Default.Chat, contentDescription = null) }
-                )
-                Tab(
-                    selected = uiState.activeTab == WorkspaceTab.Files,
-                    onClick = { viewModel.setActiveTab(WorkspaceTab.Files) },
-                    text = { Text("Archivos (${files.size})") },
-                    icon = { Icon(Icons.Default.Folder, contentDescription = null) }
-                )
-            }
-
             when (uiState.activeTab) {
                 WorkspaceTab.Chat -> {
                     ChatContent(
@@ -746,6 +672,223 @@ fun WorkspaceDetailScreen(
             title = uiState.webPreviewTitle,
             onDismiss = { viewModel.dismissWebPreview() }
         )
+    }
+}
+
+@Composable
+private fun ChatHeader(
+    title: String,
+    selectedModel: String,
+    allModels: List<ModelInfo>,
+    fileCount: Int,
+    filesSelected: Boolean,
+    ttsEnabled: Boolean,
+    isDrawerMode: Boolean,
+    showNewChat: Boolean,
+    onNavigationClick: () -> Unit,
+    onNewChat: () -> Unit,
+    onToggleFiles: () -> Unit,
+    onToggleTts: () -> Unit,
+    onModelSelected: (String) -> Unit,
+    onOpenConversationSettings: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            ChatHeaderIconButton(
+                icon = if (isDrawerMode) Icons.Default.Menu else Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = if (isDrawerMode) "Abrir menú" else "Volver",
+                onClick = onNavigationClick
+            )
+
+            ChatModelPicker(
+                title = title,
+                selectedModel = selectedModel,
+                allModels = allModels,
+                onModelSelected = onModelSelected,
+                onOpenConversationSettings = onOpenConversationSettings,
+                modifier = Modifier.weight(1f)
+            )
+
+            if (showNewChat) {
+                ChatHeaderIconButton(
+                    icon = Icons.Default.EditNote,
+                    contentDescription = "Nuevo chat",
+                    onClick = onNewChat
+                )
+            }
+
+            ChatHeaderIconButton(
+                icon = if (filesSelected) Icons.AutoMirrored.Filled.Chat else Icons.Default.Folder,
+                contentDescription = if (filesSelected) "Volver al chat" else "Ver archivos",
+                active = filesSelected,
+                badgeCount = if (filesSelected) 0 else fileCount,
+                onClick = onToggleFiles
+            )
+
+            ChatHeaderIconButton(
+                icon = if (ttsEnabled) Icons.AutoMirrored.Filled.VolumeUp
+                else Icons.AutoMirrored.Filled.VolumeOff,
+                contentDescription = if (ttsEnabled) "Desactivar TTS" else "Activar TTS",
+                active = ttsEnabled,
+                onClick = onToggleTts
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChatHeaderIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    active: Boolean = false,
+    badgeCount: Int = 0
+) {
+    Surface(
+        color = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+        else Color.Transparent,
+        contentColor = if (active) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.onSurfaceVariant,
+        shape = CircleShape,
+        modifier = Modifier
+            .size(44.dp)
+            .cortexGlass(
+                shape = CircleShape,
+                tint = CortexTheme.colors.glassStrong
+            )
+            .clickable(onClick = onClick)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            if (badgeCount > 0) {
+                BadgedBox(
+                    badge = {
+                        Badge {
+                            Text(if (badgeCount > 99) "99+" else badgeCount.toString())
+                        }
+                    }
+                ) {
+                    Icon(icon, contentDescription = contentDescription, modifier = Modifier.size(21.dp))
+                }
+            } else {
+                Icon(icon, contentDescription = contentDescription, modifier = Modifier.size(21.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatModelPicker(
+    title: String,
+    selectedModel: String,
+    allModels: List<ModelInfo>,
+    onModelSelected: (String) -> Unit,
+    onOpenConversationSettings: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val modelName = extractModelId(selectedModel).ifBlank { "Seleccionar modelo" }
+
+    Box(modifier = modifier) {
+        Surface(
+            color = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            shape = RoundedCornerShape(22.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp)
+                .cortexGlass(
+                    shape = RoundedCornerShape(22.dp),
+                    tint = CortexTheme.colors.glassStrong
+                )
+                .clickable { expanded = true }
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CortexBubbleMark(modifier = Modifier.size(24.dp))
+                Text(
+                    text = "$title · $modelName",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    Icons.Default.KeyboardArrowDown,
+                    contentDescription = "Seleccionar modelo",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.widthIn(min = 260.dp, max = 340.dp)
+        ) {
+            if (allModels.isEmpty()) {
+                DropdownMenuItem(
+                    text = { Text("Configura un proveedor primero") },
+                    enabled = false,
+                    onClick = {}
+                )
+            } else {
+                allModels.forEach { modelInfo ->
+                    val selected = modelInfo.fullKey == selectedModel
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(
+                                    modelInfo.displayModelName(),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    modelInfo.displayProviderName(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        },
+                        leadingIcon = {
+                            Icon(
+                                if (selected) Icons.Default.CheckCircle else Icons.Default.Memory,
+                                contentDescription = null,
+                                tint = if (selected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        onClick = {
+                            onModelSelected(modelInfo.fullKey)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text("Más ajustes del chat") },
+                leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
+                onClick = {
+                    expanded = false
+                    onOpenConversationSettings()
+                }
+            )
+        }
     }
 }
 
@@ -1862,15 +2005,15 @@ fun ChatInput(
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(4.dp)
+            modifier = Modifier.padding(6.dp)
         ) {
-            if (supportsFiles) {
-                IconButton(
-                    onClick = onAttachFiles,
-                    enabled = !isLoading
-                ) {
-                    Icon(Icons.Default.AttachFile, contentDescription = "Adjuntar archivos")
-                }
+            FilledTonalIconButton(
+                onClick = onAttachFiles,
+                enabled = supportsFiles && !isLoading,
+                shape = CircleShape,
+                modifier = Modifier.size(48.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Agregar archivos")
             }
             TextField(
                 value = inputText,
@@ -1878,7 +2021,7 @@ fun ChatInput(
                 placeholder = {
                     Text(
                         if (isLoading) "Agrega contexto al agente..."
-                        else "Escribe un mensaje..."
+                        else "Pregunta lo que quieras..."
                     )
                 },
                 modifier = Modifier.weight(1f),
@@ -1890,29 +2033,12 @@ fun ChatInput(
                 ),
                 maxLines = 5
             )
-            // Voice input button (between TextField and Send)
-            if (isSTTEnabled) {
-                if (isSTTProcessing) {
-                    CircularProgressIndicator(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .padding(4.dp),
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    VoiceInputButton(
-                        isListening = isListening,
-                        onStartListening = onStartListening,
-                        onStopListening = onStopListening,
-                        enabled = !isLoading
-                    )
-                }
-            }
-            // Stop button — visible only while agent is working
+            // While the agent works, stopping remains available without moving the composer.
             if (isLoading) {
                 FilledIconButton(
                     onClick = onStop,
                     shape = CircleShape,
+                    modifier = Modifier.size(48.dp),
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.error
                     )
@@ -1924,13 +2050,46 @@ fun ChatInput(
                     )
                 }
             }
-            // Send button — always available when there's text
-            FilledIconButton(
-                onClick = onSend,
-                enabled = inputText.isNotBlank(),
-                shape = CircleShape
-            ) {
-                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Enviar")
+
+            when {
+                inputText.isNotBlank() -> {
+                    FilledIconButton(
+                        onClick = onSend,
+                        shape = CircleShape,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Enviar")
+                    }
+                }
+                isSTTProcessing -> {
+                    Box(
+                        modifier = Modifier.size(48.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp
+                        )
+                    }
+                }
+                isSTTEnabled -> {
+                    VoiceInputButton(
+                        isListening = isListening,
+                        onStartListening = onStartListening,
+                        onStopListening = onStopListening,
+                        enabled = !isLoading
+                    )
+                }
+                else -> {
+                    FilledTonalIconButton(
+                        onClick = {},
+                        enabled = false,
+                        shape = CircleShape,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(Icons.Default.MicOff, contentDescription = "Entrada de voz desactivada")
+                    }
+                }
             }
         }
     }

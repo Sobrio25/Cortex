@@ -27,7 +27,7 @@ import javax.inject.Inject
 class STTViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val sttManager: STTManager,
-    voicePreferences: VoicePreferences,
+    private val voicePreferences: VoicePreferences,
     private val errorReporter: AppErrorReporter
 ) : ViewModel() {
     private val _transcription = MutableStateFlow("")
@@ -154,6 +154,10 @@ class STTViewModel @Inject constructor(
 
     fun dismissError() {
         _error.value = null
+    }
+
+    fun toggleTts() {
+        voicePreferences.toggleTts()
     }
 
     private fun voiceError(error: Throwable, operation: String): String =

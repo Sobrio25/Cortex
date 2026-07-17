@@ -171,7 +171,7 @@
     <string name="assistant_role_active">%1$s es el asistente predeterminado</string>
     <string name="assistant_role_inactive">%1$s aún no es el asistente predeterminado</string>
     <string name="assistant_role_active_detail">Usa el gesto de asistente de tu dispositivo para abrirlo.</string>
-    <string name="assistant_role_inactive_detail">Elige %1$s una vez en el diálogo del sistema Android.</string>
+    <string name="assistant_role_inactive_detail">Elige %1$s como app de asistente digital en los ajustes de Android.</string>
     <string name="assistant_enable_role">Usar %1$s</string>
     <string name="assistant_change_role">Revisar</string>
     <string name="assistant_try_now">Probar</string>
