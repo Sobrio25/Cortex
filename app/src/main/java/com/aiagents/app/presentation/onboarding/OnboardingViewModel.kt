@@ -1,8 +1,6 @@
 package com.aiagents.app.presentation.onboarding
 
 import android.app.Activity
-import androidx.appcompat.app.AppCompatDelegate
-import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -18,7 +16,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import java.util.Locale
 import javax.inject.Inject
 
 const val TOTAL_ONBOARDING_STEPS = 6
@@ -39,9 +36,6 @@ class OnboardingViewModel @Inject constructor(
     val userName = savedStateHandle.getStateFlow("userName", "")
 
     val userNickname = savedStateHandle.getStateFlow("userNickname", "")
-
-    private val deviceLanguage = if (Locale.getDefault().language == "es") "es" else "en"
-    val selectedLanguage = savedStateHandle.getStateFlow("selectedLanguage", deviceLanguage)
 
     // Assistant identity and personality configured explicitly by the user.
     val assistantName = savedStateHandle.getStateFlow("assistantName", "")
@@ -80,11 +74,6 @@ class OnboardingViewModel @Inject constructor(
                     .onFailure { _googleSignInError.value = onboardingError(it, "consent_sync") }
             }
         }
-    }
-
-    fun setLanguage(language: String) {
-        savedStateHandle["selectedLanguage"] = language
-        securePreferences.setAppLanguage(language)
     }
 
     fun setUserName(name: String) {
@@ -224,11 +213,6 @@ class OnboardingViewModel @Inject constructor(
                     )
                 )
             }
-
-            // Apply locale globally now that onboarding is done
-            val language = selectedLanguage.value
-            securePreferences.setAppLanguage(language)
-            AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(language))
 
             securePreferences.setOnboardingCompleted(true)
             _onboardingCompleted.value = true

@@ -20,6 +20,8 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.aiagents.app.R
 import com.aiagents.app.domain.model.Conversation
 import com.aiagents.app.domain.model.Workspace
 import com.aiagents.app.ui.theme.CortexMark
@@ -192,7 +194,7 @@ fun AppDrawerContent(
         )
         NavigationDrawerItem(
             icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-            label = { Text("Configuracion") },
+            label = { Text(stringResource(R.string.settings_title_short)) },
             selected = false,
             onClick = onSettingsClick,
             modifier = Modifier.padding(horizontal = 8.dp)

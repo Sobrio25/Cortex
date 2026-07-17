@@ -106,7 +106,9 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aiagents.app.data.repository.ContextCompactionPolicy
 import com.aiagents.app.data.local.AssistantPreferences
+import com.aiagents.app.data.local.VoicePreferences
 import com.aiagents.app.data.speech.AndroidTextToSpeechManager
+import com.aiagents.app.data.speech.AssistantTtsMode
 import com.aiagents.app.data.terminal.AssistantActionCoordinator
 import com.aiagents.app.domain.model.AssistantActionStatus
 import com.aiagents.app.domain.model.ContactActionPurpose
@@ -146,6 +148,7 @@ fun CortexAssistantScreen(
     assistantLanguageTag: String,
     textToSpeech: AndroidTextToSpeechManager,
     preferences: AssistantPreferences,
+    voicePreferences: VoicePreferences,
     assistantActionCoordinator: AssistantActionCoordinator,
     onDismiss: () -> Unit,
     cortexViewModel: WorkspaceDetailViewModel = hiltViewModel(),
@@ -162,7 +165,7 @@ fun CortexAssistantScreen(
     val invocationStartedAt = remember { System.currentTimeMillis() }
     val uiState by cortexViewModel.uiState.collectAsState()
     val messages by cortexViewModel.messages.collectAsState()
-    val sttSettings by sttViewModel.currentSettings.collectAsState()
+    val sttConfig by sttViewModel.currentConfig.collectAsState()
     val isListening by sttViewModel.isListening.collectAsState()
     val transcription by sttViewModel.transcription.collectAsState()
     val pendingTranscription by sttViewModel.pendingTranscription.collectAsState()
@@ -170,8 +173,8 @@ fun CortexAssistantScreen(
     val sttError by sttViewModel.error.collectAsState()
     val isSpeaking by textToSpeech.isSpeaking.collectAsState()
     val ttsError by textToSpeech.error.collectAsState()
-    val autoListen by preferences.autoListen.collectAsState()
     val speakResponses by preferences.speakResponses.collectAsState()
+    val ttsMode by voicePreferences.ttsMode.collectAsState()
     val assistantModel by preferences.modelKey.collectAsState()
     val pendingAssistantAction by assistantActionCoordinator.pendingAction.collectAsState()
 
@@ -181,6 +184,7 @@ fun CortexAssistantScreen(
     var initialListeningRequested by remember { mutableStateOf(false) }
     var voiceLoopActive by remember { mutableStateOf(false) }
     var voiceReplyExpected by remember { mutableStateOf(false) }
+    var microphonePermissionDenied by remember { mutableStateOf(false) }
     var activityResumed by remember(lifecycleOwner) {
         mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
     }
@@ -242,6 +246,11 @@ fun CortexAssistantScreen(
         ?.takeIf { it.isNotBlank() }
         ?: settledResponse
     val error = uiState.error ?: sttError?.takeIf { displayResponse.isBlank() }
+        ?: if (microphonePermissionDenied && displayResponse.isBlank()) {
+            "Activa el permiso de microfono para hablar con Cortex. Tambien puedes escribir."
+        } else {
+            null
+        }
     val stage = when {
         error != null -> AssistantStage.ERROR
         isListening -> AssistantStage.LISTENING
@@ -256,6 +265,7 @@ fun CortexAssistantScreen(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasRecordPermission = granted
+        microphonePermissionDenied = !granted
         if (granted) sttViewModel.startListening()
     }
     val locationPermission = rememberLauncherForActivityResult(
@@ -287,6 +297,7 @@ fun CortexAssistantScreen(
         textToSpeech.stop()
         sttViewModel.dismissError()
         if (hasRecordPermission) {
+            microphonePermissionDenied = false
             sttViewModel.startListening()
         } else {
             microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
@@ -333,27 +344,15 @@ fun CortexAssistantScreen(
         }
     }
 
-    LaunchedEffect(workspaceId, normalizedLanguageTag) {
-        sttViewModel.prepareAssistantVoice(
-            workspaceId = workspaceId,
-            language = normalizedLanguageTag
-        )
-    }
-
-    DisposableEffect(sttViewModel) {
-        onDispose { sttViewModel.endAssistantVoiceSession() }
-    }
-
     LaunchedEffect(
-        sttSettings?.updatedAt,
-        autoListen,
+        sttConfig,
         initialListeningRequested,
         activityResumed,
         uiState.isLoading,
         isTranscribing,
         isSpeaking
     ) {
-        if (sttSettings == null || !autoListen || initialListeningRequested ||
+        if (sttConfig == null || initialListeningRequested ||
             !activityResumed || uiState.isLoading || isTranscribing || isSpeaking
         ) return@LaunchedEffect
 
@@ -451,7 +450,7 @@ fun CortexAssistantScreen(
 
         // A voice-initiated turn should answer by voice. The preference still controls automatic
         // reading for typed turns, while voiceLoopActive captures the assistant interaction model.
-        if (speakResponses || voiceReplyExpected) {
+        if (ttsMode != AssistantTtsMode.NONE && (speakResponses || voiceReplyExpected)) {
             textToSpeech.speak(response, assistantLocale)
             val playbackStarted = withTimeoutOrNull(2_500) {
                 textToSpeech.isSpeaking.first { it }

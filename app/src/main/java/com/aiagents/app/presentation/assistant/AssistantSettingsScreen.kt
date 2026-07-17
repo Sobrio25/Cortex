@@ -80,6 +80,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aiagents.app.R
+import com.aiagents.app.presentation.voice.VoiceAssetUiState
 import com.aiagents.app.data.speech.AssistantSttMode
 import com.aiagents.app.data.speech.AssistantTtsMode
 import com.aiagents.app.data.speech.GoogleTtsVoice
@@ -105,44 +106,19 @@ fun AssistantSettingsScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val autoListen by viewModel.autoListen.collectAsState()
     val speakResponses by viewModel.speakResponses.collectAsState()
     val assistantModel by viewModel.assistantModel.collectAsState()
     val availableModels by viewModel.availableModels.collectAsState()
-    val sttMode by viewModel.sttMode.collectAsState()
     val ttsMode by viewModel.ttsMode.collectAsState()
-    val selectedGoogleVoiceId by viewModel.selectedGoogleVoiceId.collectAsState()
-    val remoteSttConfig by viewModel.remoteSttConfig.collectAsState()
-    val remoteTtsConfig by viewModel.remoteTtsConfig.collectAsState()
-    val googleVoices by viewModel.googleVoices.collectAsState()
-    val voiceAssets by viewModel.voiceAssets.collectAsState()
-    val voiceFeatureState by viewModel.voiceFeatureState.collectAsState()
     val error by viewModel.error.collectAsState()
     val assistantName by viewModel.assistantName.collectAsState()
     val assistantSoul by viewModel.assistantSoul.collectAsState()
     val isSavingName by viewModel.isSavingName.collectAsState()
-    val onDeviceRecognition = viewModel.onDeviceRecognitionAvailable
-    val systemRecognition = viewModel.systemRecognitionAvailable
 
     var roleHeld by remember { mutableStateOf(context.isAssistantRoleHeld()) }
     var assistantNameDraft by remember(assistantName) { mutableStateOf(assistantName) }
     var assistantSoulDraft by remember(assistantSoul.revision) {
         mutableStateOf(assistantSoul.content)
-    }
-    val installVoiceLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        viewModel.refreshGoogleVoices()
-    }
-    val voiceConfirmationLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartIntentSenderForResult()
-    ) {
-        viewModel.refreshGoogleVoices()
-    }
-    val voicePackPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        viewModel.resumeVoicePackInstall()
     }
     val assistantRoleLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -154,7 +130,6 @@ fun AssistantSettingsScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 roleHeld = context.isAssistantRoleHeld()
-                viewModel.refreshGoogleVoices()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -327,156 +302,11 @@ fun AssistantSettingsScreen(
 
             item {
                 SettingsCard(
-                    title = "Voz y audio",
-                    subtitle = "Nada se descarga ni se activa hasta que tu lo elijas"
-                ) {
-                    VoiceSectionHeader(
-                        icon = Icons.Default.Mic,
-                        title = "Entrada de voz (STT)",
-                        subtitle = "Elige como quieres que Cortex te escuche"
-                    )
-                    VoiceChoiceCard(
-                        title = "Sin reconocimiento de voz",
-                        description = "Puedes seguir escribiendo normalmente",
-                        badge = "0 MB",
-                        selected = sttMode == AssistantSttMode.NONE,
-                        available = true,
-                        onSelect = { viewModel.selectSttMode(AssistantSttMode.NONE) }
-                    )
-                    VoiceChoiceCard(
-                        title = "Reconocimiento de Android",
-                        description = when {
-                            onDeviceRecognition -> "Disponible en el dispositivo; Android administra sus datos"
-                            systemRecognition -> "Disponible mediante el servicio de reconocimiento del sistema"
-                            else -> "No disponible en este dispositivo"
-                        },
-                        badge = "Sistema",
-                        selected = sttMode == AssistantSttMode.ANDROID,
-                        available = onDeviceRecognition || systemRecognition,
-                        onSelect = { viewModel.selectSttMode(AssistantSttMode.ANDROID) }
-                    )
-                    DownloadableVoiceCard(
-                        title = "Whisper Tiny",
-                        description = "Privado, multilingue y completamente offline",
-                        badge = "111 MB",
-                        selected = sttMode == AssistantSttMode.WHISPER_TINY,
-                        state = voiceAssets[VoiceCatalog.WHISPER_TINY_ID] ?: VoiceAssetUiState(),
-                        moduleState = voiceFeatureState,
-                        onSelect = { viewModel.selectSttMode(AssistantSttMode.WHISPER_TINY) },
-                        onDownload = { viewModel.downloadAsset(VoiceCatalog.WHISPER_TINY_ID) },
-                        onDelete = { viewModel.deleteAsset(VoiceCatalog.WHISPER_TINY_ID) }
-                    )
-                    RemoteSttServerCard(
-                        selected = sttMode == AssistantSttMode.REMOTE_SERVER,
-                        config = remoteSttConfig,
-                        onSelect = { viewModel.selectSttMode(AssistantSttMode.REMOTE_SERVER) },
-                        onSave = viewModel::saveRemoteSttConfig
-                    )
-
-                    Spacer(Modifier.height(12.dp))
-                    HorizontalDivider()
-                    Spacer(Modifier.height(12.dp))
-
-                    VoiceSectionHeader(
-                        icon = Icons.Default.GraphicEq,
-                        title = "Salida de voz (TTS)",
-                        subtitle = "Elige la voz con la que responde Cortex"
-                    )
-                    VoiceChoiceCard(
-                        title = "Sin voz",
-                        description = "Las respuestas solo apareceran en pantalla",
-                        badge = "0 MB",
-                        selected = ttsMode == AssistantTtsMode.NONE,
-                        available = true,
-                        onSelect = { viewModel.selectTtsMode(AssistantTtsMode.NONE) }
-                    )
-                    GoogleTtsCard(
-                        selected = ttsMode == AssistantTtsMode.GOOGLE,
-                        voices = googleVoices,
-                        selectedVoiceId = selectedGoogleVoiceId,
-                        onSelect = { viewModel.selectTtsMode(AssistantTtsMode.GOOGLE) },
-                        onVoiceSelected = viewModel::selectGoogleVoice,
-                        onPreview = viewModel::previewGoogleVoice,
-                        onManageVoices = {
-                            installVoiceLauncher.launch(viewModel.createInstallVoiceIntent())
-                        }
-                    )
-                    RemoteTtsServerCard(
-                        selected = ttsMode == AssistantTtsMode.REMOTE_SERVER,
-                        config = remoteTtsConfig,
-                        onSelect = { viewModel.selectTtsMode(AssistantTtsMode.REMOTE_SERVER) },
-                        onSave = { viewModel.saveRemoteTtsConfig(it) },
-                        onPreview = { viewModel.saveRemoteTtsConfig(it, preview = true) }
-                    )
-                    DownloadableVoiceCard(
-                        title = "Piper · Ald",
-                        description = "Espanol de Mexico, voz offline de calidad media",
-                        badge = "20 MB",
-                        selected = ttsMode == AssistantTtsMode.PIPER_ALD,
-                        state = voiceAssets[VoiceCatalog.PIPER_ALD_ID] ?: VoiceAssetUiState(),
-                        moduleState = voiceFeatureState,
-                        onSelect = { viewModel.selectTtsMode(AssistantTtsMode.PIPER_ALD) },
-                        onDownload = { viewModel.downloadAsset(VoiceCatalog.PIPER_ALD_ID) },
-                        onPreview = { viewModel.previewPiperVoice(AssistantTtsMode.PIPER_ALD) },
-                        onDelete = { viewModel.deleteAsset(VoiceCatalog.PIPER_ALD_ID) }
-                    )
-                    DownloadableVoiceCard(
-                        title = "Piper · Claude",
-                        description = "Espanol de Mexico, voz offline de calidad alta",
-                        badge = "20 MB",
-                        selected = ttsMode == AssistantTtsMode.PIPER_CLAUDE,
-                        state = voiceAssets[VoiceCatalog.PIPER_CLAUDE_ID] ?: VoiceAssetUiState(),
-                        moduleState = voiceFeatureState,
-                        onSelect = { viewModel.selectTtsMode(AssistantTtsMode.PIPER_CLAUDE) },
-                        onDownload = { viewModel.downloadAsset(VoiceCatalog.PIPER_CLAUDE_ID) },
-                        onPreview = { viewModel.previewPiperVoice(AssistantTtsMode.PIPER_CLAUDE) },
-                        onDelete = { viewModel.deleteAsset(VoiceCatalog.PIPER_CLAUDE_ID) }
-                    )
-
-                    if (voiceFeatureState.requiresConfirmation) {
-                        Button(
-                            onClick = {
-                                viewModel.confirmVoiceFeatureInstall(voiceConfirmationLauncher)
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Confirmar instalacion de Cortex Voice Pack")
-                        }
-                    }
-                    if (voiceFeatureState.requiresInstallPermission) {
-                        Button(
-                            onClick = {
-                                viewModel.createVoicePackInstallPermissionIntent()?.let(
-                                    voicePackPermissionLauncher::launch
-                                )
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Permitir instalacion de Cortex Voice Pack")
-                        }
-                    }
-                }
-            }
-
-            item {
-                SettingsCard(
                     title = stringResource(R.string.assistant_behavior_title),
                     subtitle = stringResource(R.string.assistant_behavior_subtitle)
                 ) {
                     PreferenceSwitch(
-                        title = stringResource(R.string.assistant_auto_listen_title),
-                        subtitle = if (sttMode == AssistantSttMode.NONE) {
-                            "Elige primero una opcion de entrada de voz"
-                        } else {
-                            stringResource(R.string.assistant_auto_listen_subtitle)
-                        },
-                        checked = autoListen,
-                        onCheckedChange = viewModel::setAutoListen,
-                        enabled = sttMode != AssistantSttMode.NONE
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    PreferenceSwitch(
-                        title = stringResource(R.string.assistant_speak_title),
+                        title = "Leer respuestas iniciadas por texto",
                         subtitle = if (ttsMode == AssistantTtsMode.NONE) {
                             "Elige primero una opcion de salida de voz"
                         } else {
@@ -537,7 +367,7 @@ fun AssistantSettingsScreen(
 }
 
 @Composable
-private fun VoiceSectionHeader(
+internal fun VoiceSectionHeader(
     icon: ImageVector,
     title: String,
     subtitle: String
@@ -568,7 +398,7 @@ private fun VoiceSectionHeader(
 }
 
 @Composable
-private fun VoiceChoiceCard(
+internal fun VoiceChoiceCard(
     title: String,
     description: String,
     badge: String,
@@ -612,7 +442,7 @@ private fun VoiceChoiceCard(
 }
 
 @Composable
-private fun DownloadableVoiceCard(
+internal fun DownloadableVoiceCard(
     title: String,
     description: String,
     badge: String,
@@ -709,7 +539,7 @@ private fun DownloadableVoiceCard(
 }
 
 @Composable
-private fun RemoteSttServerCard(
+internal fun RemoteSttServerCard(
     selected: Boolean,
     config: RemoteSttConfig,
     onSelect: () -> Unit,
@@ -757,7 +587,7 @@ private fun RemoteSttServerCard(
 }
 
 @Composable
-private fun RemoteTtsServerCard(
+internal fun RemoteTtsServerCard(
     selected: Boolean,
     config: RemoteTtsConfig,
     onSelect: () -> Unit,
@@ -1079,7 +909,7 @@ private fun HttpEndpointNotice(endpointUrl: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GoogleTtsCard(
+internal fun GoogleTtsCard(
     selected: Boolean,
     voices: List<GoogleTtsVoice>,
     selectedVoiceId: String,
@@ -1308,7 +1138,7 @@ private fun AssistantHero(roleHeld: Boolean, assistantName: String) {
 }
 
 @Composable
-private fun SettingsCard(
+internal fun SettingsCard(
     title: String,
     subtitle: String,
     content: @Composable ColumnScope.() -> Unit

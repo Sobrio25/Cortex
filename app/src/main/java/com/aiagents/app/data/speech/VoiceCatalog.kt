@@ -57,13 +57,17 @@ object VoiceCatalog {
 }
 
 enum class AssistantSttMode(val id: String) {
-    NONE("none"),
     ANDROID("android"),
     WHISPER_TINY(VoiceCatalog.WHISPER_TINY_ID),
-    REMOTE_SERVER("remote_whisper");
+    REMOTE_SERVER("remote_whisper"),
+    OPENAI_WHISPER("openai_whisper"),
+    ASSEMBLY_AI("assembly_ai"),
+    DEEPGRAM("deepgram"),
+    GOOGLE_CLOUD("google_cloud");
 
     companion object {
-        fun fromId(id: String?): AssistantSttMode = entries.firstOrNull { it.id == id } ?: NONE
+        fun fromId(id: String?): AssistantSttMode =
+            entries.firstOrNull { it.id == id } ?: ANDROID
     }
 }
 

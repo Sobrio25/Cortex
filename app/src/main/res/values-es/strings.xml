@@ -37,7 +37,6 @@
     <!-- Onboarding -->
     <string name="onboarding_welcome_title">Bienvenido</string>
     <string name="onboarding_cortex_intro">Configuremos tu asistente personal de IA.</string>
-    <string name="onboarding_select_language">Selecciona tu idioma</string>
     <string name="onboarding_your_name">¿Cómo te llamas?</string>
     <string name="onboarding_your_nickname">¿Cómo te gusta que te digan?</string>
     <string name="onboarding_name_hint">Tu nombre completo</string>
@@ -109,9 +108,14 @@
     <string name="onboarding_ready_desc">Siempre puedes configurar estos ajustes después desde el menú de configuración. ¡Disfruta!</string>
 
     <!-- Settings -->
-    <string name="settings_title">Ajustes</string>
+    <string name="settings_title">Ajustes de Cortex</string>
+    <string name="settings_title_short">Ajustes</string>
     <string name="settings_back">Volver</string>
     <string name="settings_section_ai">Modelos e IA</string>
+    <string name="settings_section_cortex">Cortex</string>
+    <string name="settings_section_models_plan">Modelos y plan</string>
+    <string name="settings_section_capabilities">Capacidades y automatización</string>
+    <string name="settings_section_privacy_support">Privacidad y soporte</string>
     <string name="settings_section_personalization">Personalización</string>
     <string name="settings_section_integrations">Herramientas e integraciones</string>
     <string name="settings_agents_title">Agentes y orquestación</string>
@@ -148,7 +152,9 @@
     <string name="settings_scheduled_tasks_title">Tareas programadas</string>
     <string name="settings_scheduled_tasks_subtitle">Crear y administrar trabajos recurrentes del agente</string>
     <string name="settings_assistant_title">Asistente del sistema</string>
-    <string name="settings_assistant_subtitle">Invocación del sistema y voz sin API keys</string>
+    <string name="settings_assistant_subtitle">Invocación del sistema y comportamiento de conversación</string>
+    <string name="settings_voice_title">Voz</string>
+    <string name="settings_voice_subtitle">STT y TTS globales para chats y asistente</string>
 
     <!-- Asistente del sistema configurable -->
     <string name="assistant_settings_title">Asistente del sistema</string>

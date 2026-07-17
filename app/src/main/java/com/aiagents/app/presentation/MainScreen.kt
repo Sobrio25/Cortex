@@ -8,8 +8,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.Color
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -37,6 +35,7 @@ import com.aiagents.app.presentation.subscription.SubscriptionScreen
 import com.aiagents.app.presentation.skills.SkillsScreen
 import com.aiagents.app.presentation.workspaces.WorkspacesScreen
 import com.aiagents.app.presentation.workspace_detail.WorkspaceDetailScreen
+import com.aiagents.app.presentation.voice.VoiceSettingsScreen
 import kotlinx.coroutines.launch
 
 sealed class Screen(val route: String) {
@@ -56,6 +55,7 @@ sealed class Screen(val route: String) {
     data object Skills : Screen("settings/skills")
     data object ScheduledTasks : Screen("settings/scheduled_tasks")
     data object Assistant : Screen("settings/assistant")
+    data object Voice : Screen("settings/voice")
     data object GoogleWorkspace : Screen("settings/google_workspace")
     data object Diagnostics : Screen("settings/diagnostics")
     data object WorkspaceDetail : Screen("workspace/{workspaceId}") {
@@ -74,36 +74,13 @@ fun MainScreen(
     val onboardingCompleted by onboardingViewModel.onboardingCompleted.collectAsState()
 
     if (!onboardingCompleted) {
-        OnboardingFlow(onboardingViewModel)
+        OnboardingFlowContent(onboardingViewModel)
     } else {
         MainAppContent(
             scheduledTaskWorkspaceId = scheduledTaskWorkspaceId,
             scheduledTaskConversationId = scheduledTaskConversationId,
             onScheduledTaskDestinationHandled = onScheduledTaskDestinationHandled
         )
-    }
-}
-
-@Composable
-private fun OnboardingFlow(onboardingViewModel: OnboardingViewModel) {
-    val selectedLanguage by onboardingViewModel.selectedLanguage.collectAsState()
-    val context = LocalContext.current
-    val currentConfiguration = LocalConfiguration.current
-
-    val localizedContext = remember(selectedLanguage, context, currentConfiguration) {
-        val locale = java.util.Locale(selectedLanguage)
-        val config = android.content.res.Configuration(currentConfiguration).apply {
-            setLocale(locale)
-        }
-        val configResources = context.createConfigurationContext(config).resources
-        // Wrap the Activity context so Hilt can still find it via ContextWrapper chain
-        object : android.content.ContextWrapper(context) {
-            override fun getResources() = configResources
-        }
-    }
-
-    CompositionLocalProvider(LocalContext provides localizedContext) {
-        OnboardingFlowContent(onboardingViewModel)
     }
 }
 
@@ -323,6 +300,7 @@ private fun MainAppContent(
                     onNavigateToProviders = { navController.navigate(Screen.Providers.route) },
                     onNavigateToLocalModels = { navController.navigate(Screen.LocalModels.route) },
                     onNavigateToMemory = { navController.navigate(Screen.Memory.route) },
+                    onNavigateToVoice = { navController.navigate(Screen.Voice.route) },
                     onNavigateToSkills = { navController.navigate(Screen.Skills.route) },
                     onNavigateToScheduledTasks = {
                         navController.navigate(Screen.ScheduledTasks.route)
@@ -390,6 +368,11 @@ private fun MainAppContent(
             }
             composable(Screen.Assistant.route) {
                 AssistantSettingsScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.Voice.route) {
+                VoiceSettingsScreen(
                     onBack = { navController.popBackStack() }
                 )
             }

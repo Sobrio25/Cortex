@@ -22,6 +22,7 @@ class ScreenRouteTest {
             Screen.Skills.route,
             Screen.ScheduledTasks.route,
             Screen.Assistant.route,
+            Screen.Voice.route,
             Screen.GoogleWorkspace.route
         )
 

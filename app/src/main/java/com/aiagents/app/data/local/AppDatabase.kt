@@ -20,7 +20,6 @@ import com.aiagents.app.data.model.SkillReviewEntity
 import com.aiagents.app.data.model.SubagentExecutionEntity
 import com.aiagents.app.data.model.TodoEntity
 import com.aiagents.app.data.model.MCPServerEntity
-import com.aiagents.app.data.model.STTSettingsEntity
 import com.aiagents.app.data.model.WorkspaceEntity
 import com.aiagents.app.data.orchestration.AgentOrchestrator
 import com.aiagents.app.domain.model.SkillCreatorBuiltin
@@ -34,7 +33,6 @@ import com.aiagents.app.domain.model.WeatherWidgetsBuiltin
         FileEntity::class,
         WorkspaceEntity::class,
         CommandPermissionEntity::class,
-        STTSettingsEntity::class,
         MCPServerEntity::class,
         ConversationEntity::class,
         MemoryEntity::class,
@@ -48,7 +46,7 @@ import com.aiagents.app.domain.model.WeatherWidgetsBuiltin
         SkillReviewEntity::class,
         SubagentExecutionEntity::class
     ],
-    version = 47,
+    version = 48,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -57,7 +55,6 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun fileDao(): FileDao
     abstract fun workspaceDao(): WorkspaceDao
     abstract fun commandPermissionDao(): CommandPermissionDao
-    abstract fun sttSettingsDao(): STTSettingsDao
     abstract fun mcpDao(): MCPDao
     abstract fun conversationDao(): ConversationDao
     abstract fun memoryDao(): MemoryDao
@@ -1155,6 +1152,39 @@ SIEMPRE usa la herramienta pubmed_search para buscar estudios científicos relev
                 )
             }
         }
+
+        /** Replaces per-workspace voice settings with the global voice preference. */
+        fun migration47To48(importer: LegacyVoiceSettingsImporter) =
+            object : Migration(47, 48) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    val legacy = db.query(
+                        """
+                        SELECT enabled, mode, localEngine, cloudProvider, apiKey, language
+                        FROM stt_settings
+                        WHERE enabled = 1
+                        ORDER BY updatedAt DESC, id DESC
+                        LIMIT 1
+                        """.trimIndent()
+                    ).use { cursor ->
+                        if (!cursor.moveToFirst()) {
+                            null
+                        } else {
+                            LegacyWorkspaceVoiceSettings(
+                                enabled = cursor.getInt(0) != 0,
+                                mode = cursor.getString(1),
+                                localEngine = cursor.getString(2),
+                                cloudProvider = cursor.getString(3),
+                                apiKey = cursor.getString(4),
+                                language = cursor.getString(5)
+                            )
+                        }
+                    }
+                    check(importer.import(legacy)) {
+                        "Global voice settings could not be persisted"
+                    }
+                    db.execSQL("DROP TABLE stt_settings")
+                }
+            }
 
         fun repairMemoryFtsTriggers(db: SupportSQLiteDatabase) {
             db.execSQL("DROP TRIGGER IF EXISTS cortex_memories_ai")

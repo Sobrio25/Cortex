@@ -120,15 +120,9 @@ import com.aiagents.app.ui.components.SegmentType
 import com.aiagents.app.ui.components.WebPreviewDialog
 import com.aiagents.app.ui.components.parseMessageWithCodeBlocks
 import com.aiagents.app.presentation.stt.STTViewModel
-import com.aiagents.app.presentation.stt.STTSettingsDialog
-import com.aiagents.app.presentation.stt.STTSettingsUiState
 import com.aiagents.app.presentation.stt.VoiceInputButton
 import com.aiagents.app.presentation.stt.VoiceInputOverlay
 // TranscriptionPreview removed — transcription is now auto-sent
-import com.aiagents.app.data.model.STTMode
-import com.aiagents.app.data.model.CloudSTTProvider
-import com.aiagents.app.data.model.LocalModelType
-import com.aiagents.app.data.model.LocalSTTEngine
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.ui.layout.ContentScale

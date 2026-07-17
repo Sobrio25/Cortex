@@ -18,9 +18,9 @@ class VoiceCatalogTest {
     }
 
     @Test
-    fun `voice selections default to none for missing or stale values`() {
-        assertEquals(AssistantSttMode.NONE, AssistantSttMode.fromId(null))
-        assertEquals(AssistantSttMode.NONE, AssistantSttMode.fromId("vosk"))
+    fun `voice selections use mandatory Android STT for missing or stale values`() {
+        assertEquals(AssistantSttMode.ANDROID, AssistantSttMode.fromId(null))
+        assertEquals(AssistantSttMode.ANDROID, AssistantSttMode.fromId("vosk"))
         assertEquals(AssistantTtsMode.NONE, AssistantTtsMode.fromId(null))
         assertEquals(AssistantTtsMode.NONE, AssistantTtsMode.fromId("legacy_tts"))
         assertEquals(AssistantSttMode.REMOTE_SERVER, AssistantSttMode.fromId("remote_whisper"))

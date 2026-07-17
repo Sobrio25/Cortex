@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.aiagents.app.data.orchestration.AgentOrchestrator
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -187,10 +188,52 @@ class AppDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun migrates47To48ImportingLatestEnabledVoiceSettingsBeforeDroppingTable() {
+        helper.createDatabase(VOICE_DATABASE_NAME, 47).apply {
+            execSQL(
+                """
+                INSERT INTO stt_settings (
+                    id, workspaceId, enabled, mode, localModelType, localEngine,
+                    cloudProvider, apiKey, language, createdAt, updatedAt
+                ) VALUES
+                    (1, 10, 1, 'LOCAL', 'AUTO', 'AUTO',
+                        'ANDROID_SPEECH_RECOGNIZER', '', 'es', 1, 10),
+                    (2, 20, 1, 'CLOUD', 'AUTO', 'AUTO',
+                        'DEEPGRAM', 'secret', 'en', 1, 20)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        var imported: LegacyWorkspaceVoiceSettings? = null
+        val migration = AppDatabase.migration47To48 { settings ->
+            imported = settings
+            true
+        }
+        helper.runMigrationsAndValidate(
+            VOICE_DATABASE_NAME,
+            48,
+            true,
+            migration
+        ).use { database ->
+            assertEquals("DEEPGRAM", imported?.cloudProvider)
+            assertEquals("secret", imported?.apiKey)
+            assertEquals("en", imported?.language)
+            database.query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'stt_settings'"
+            ).use { cursor ->
+                assertEquals(true, cursor.moveToFirst())
+                assertFalse(cursor.getInt(0) != 0)
+            }
+        }
+    }
+
     private companion object {
         const val DATABASE_NAME = "migration-38-41"
         const val SCHEDULED_TASK_DATABASE_NAME = "migration-43-44"
         const val LATEST_CHAIN_DATABASE_NAME = "migration-44-47"
         const val ASSISTANT_CONTEXT_DATABASE_NAME = "migration-46-47-assistant-context"
+        const val VOICE_DATABASE_NAME = "migration-47-48-global-voice"
     }
 }

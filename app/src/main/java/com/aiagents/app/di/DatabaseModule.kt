@@ -17,13 +17,13 @@ import com.aiagents.app.data.local.FinanceDatabase
 import com.aiagents.app.data.local.MCPDao
 import com.aiagents.app.data.local.MemoryDao
 import com.aiagents.app.data.local.MessageDao
-import com.aiagents.app.data.local.STTSettingsDao
 import com.aiagents.app.data.local.ScheduledTaskDao
 import com.aiagents.app.data.local.SkillDao
 import com.aiagents.app.data.local.SkillReviewDao
 import com.aiagents.app.data.local.SubagentExecutionDao
 import com.aiagents.app.data.local.TodoDao
 import com.aiagents.app.data.local.WorkspaceDao
+import com.aiagents.app.data.local.VoicePreferences
 import com.aiagents.app.data.orchestration.AgentOrchestrator
 import dagger.Module
 import dagger.Provides
@@ -50,7 +50,8 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(
         @ApplicationContext context: Context,
-        financeDatabase: FinanceDatabase
+        financeDatabase: FinanceDatabase,
+        voicePreferences: VoicePreferences
     ): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, "ai_agents_db")
             .addMigrations(
@@ -99,7 +100,8 @@ object DatabaseModule {
                 AppDatabase.MIGRATION_43_44,
                 AppDatabase.MIGRATION_44_45,
                 AppDatabase.MIGRATION_45_46,
-                AppDatabase.MIGRATION_46_47
+                AppDatabase.MIGRATION_46_47,
+                AppDatabase.migration47To48(voicePreferences)
             )
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onCreate(db: SupportSQLiteDatabase) {
@@ -235,9 +237,6 @@ object DatabaseModule {
     @Provides
     fun provideCommandPermissionDao(database: AppDatabase): CommandPermissionDao =
         database.commandPermissionDao()
-
-    @Provides
-    fun provideSTTSettingsDao(database: AppDatabase): STTSettingsDao = database.sttSettingsDao()
 
     @Provides
     fun provideMCPDao(database: AppDatabase): MCPDao = database.mcpDao()

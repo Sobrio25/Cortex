@@ -125,15 +125,9 @@ import com.aiagents.app.ui.components.SegmentType
 import com.aiagents.app.ui.components.WebPreviewDialog
 import com.aiagents.app.ui.components.parseMessageWithCodeBlocks
 import com.aiagents.app.presentation.stt.STTViewModel
-import com.aiagents.app.presentation.stt.STTSettingsDialog
-import com.aiagents.app.presentation.stt.STTSettingsUiState
 import com.aiagents.app.presentation.stt.VoiceInputButton
 import com.aiagents.app.presentation.stt.VoiceInputOverlay
 // TranscriptionPreview removed — transcription is now auto-sent
-import com.aiagents.app.data.model.STTMode
-import com.aiagents.app.data.model.CloudSTTProvider
-import com.aiagents.app.data.model.LocalModelType
-import com.aiagents.app.data.model.LocalSTTEngine
 import com.aiagents.app.data.speech.AssistantTtsMode
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -191,29 +185,16 @@ fun WorkspaceDetailScreen(
     val sttTranscription by sttViewModel.transcription.collectAsState()
     val pendingTranscription by sttViewModel.pendingTranscription.collectAsState()
     val isSTTProcessing by sttViewModel.isProcessing.collectAsState()
-    val sttSettings by sttViewModel.currentSettings.collectAsState()
     val sttError by sttViewModel.error.collectAsState()
-    val isSTTDownloading by sttViewModel.isDownloading.collectAsState()
-    val sttDownloadProgress by sttViewModel.downloadProgress.collectAsState()
-    val voiceFeatureState by sttViewModel.voiceFeatureState.collectAsState()
-    val isOfflineSttModelReady by sttViewModel.isOfflineModelReady.collectAsState()
-    val remoteSttConfig by sttViewModel.remoteSttConfig.collectAsState()
-    val remoteTtsConfig by sttViewModel.remoteTtsConfig.collectAsState()
     val ttsMode by sttViewModel.ttsMode.collectAsState()
     val isSpeaking by viewModel.isSpeaking.collectAsState()
     val ttsError by viewModel.ttsError.collectAsState()
 
     var showSettingsDialog by remember { mutableStateOf(false) }
-    var showSTTSettingsDialog by remember { mutableStateOf(false) }
     var visibleAgentChange by remember { mutableStateOf<AgentChangeEvent?>(null) }
     var speakingMessageId by remember { mutableStateOf<Long?>(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
-    val voicePackPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        sttViewModel.resumeVoicePackInstall()
-    }
 
     LaunchedEffect(viewModel) {
         viewModel.agentChangeEvents.collect { event ->
@@ -292,13 +273,6 @@ fun WorkspaceDetailScreen(
     ) { granted ->
         if (granted) {
             sttViewModel.startListening()
-        }
-    }
-
-    // Inicializar STT al cargar workspace
-    LaunchedEffect(workspace?.id) {
-        workspace?.id?.let { id ->
-            sttViewModel.loadSettingsForWorkspace(id)
         }
     }
 
@@ -487,24 +461,6 @@ fun WorkspaceDetailScreen(
                             Icon(Icons.Default.EditNote, contentDescription = "Nuevo chat")
                         }
                     }
-                    // Mic toggle / STT settings
-                    IconButton(
-                        onClick = {
-                            if (isSTTEnabled) {
-                                showSTTSettingsDialog = true
-                            } else {
-                                workspace?.id?.let { id ->
-                                    sttViewModel.toggleSTTEnabled(id, true)
-                                }
-                            }
-                        }
-                    ) {
-                        Icon(
-                            imageVector = if (isSTTEnabled) Icons.Default.Mic else Icons.Default.MicOff,
-                            contentDescription = if (isSTTEnabled) "Configurar STT" else "Activar STT",
-                            tint = if (isSTTEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                     IconButton(onClick = { showSettingsDialog = true }) {
                         Icon(Icons.Default.Settings, contentDescription = "Configuracion")
                     }
@@ -659,7 +615,7 @@ fun WorkspaceDetailScreen(
     }
 
     if (showSettingsDialog) {
-        SettingsDialog(
+        ConversationSettingsDialog(
             agents = agents,
             activeAgent = activeAgent,
             selectedModel = selectedModel,
@@ -779,79 +735,6 @@ fun WorkspaceDetailScreen(
             contextInfo = contextInfo,
             onAccept = { viewModel.acceptContextCompaction() },
             onDismiss = { viewModel.dismissContextCompaction() }
-        )
-    }
-
-    // STT Settings dialog
-    if (showSTTSettingsDialog) {
-        STTSettingsDialog(
-            currentSettings = sttSettings?.let { s ->
-                STTSettingsUiState(
-                    mode = try { STTMode.valueOf(s.mode) } catch (e: Exception) { STTMode.LOCAL },
-                    cloudProvider = try {
-                        CloudSTTProvider.valueOf(s.cloudProvider).let { provider ->
-                            if (provider == CloudSTTProvider.FASTER_WHISPER) {
-                                CloudSTTProvider.SELF_HOSTED
-                            } else {
-                                provider
-                            }
-                        }
-                    } catch (e: Exception) { CloudSTTProvider.ANDROID_SPEECH_RECOGNIZER },
-                    apiKey = s.apiKey,
-                    localModelType = try { LocalModelType.valueOf(s.localModelType) } catch (e: Exception) { LocalModelType.AUTO },
-                    localEngine = try { LocalSTTEngine.valueOf(s.localEngine) } catch (e: Exception) { LocalSTTEngine.AUTO },
-                    language = s.language,
-                    remoteSttEndpoint = remoteSttConfig.endpointUrl,
-                    remoteSttModel = remoteSttConfig.model,
-                    remoteSttApiKey = remoteSttConfig.apiKey,
-                    useRemoteTts = ttsMode == AssistantTtsMode.REMOTE_SERVER,
-                    remoteTtsEndpoint = remoteTtsConfig.endpointUrl,
-                    remoteTtsModel = remoteTtsConfig.model,
-                    remoteTtsVoice = remoteTtsConfig.voice,
-                    remoteTtsApiKey = remoteTtsConfig.apiKey,
-                    remoteTtsApiFlavor = remoteTtsConfig.apiFlavor,
-                    remoteTtsLanguage = remoteTtsConfig.language,
-                    remoteTtsVoiceDescription = remoteTtsConfig.voiceDescription,
-                    remoteTtsAdaptiveStyle = remoteTtsConfig.adaptiveStyle,
-                    remoteTtsAudioMode = remoteTtsConfig.audioMode,
-                    remoteTtsPcmSampleRate = remoteTtsConfig.pcmSampleRate
-                )
-            } ?: STTSettingsUiState(
-                remoteSttEndpoint = remoteSttConfig.endpointUrl,
-                remoteSttModel = remoteSttConfig.model,
-                remoteSttApiKey = remoteSttConfig.apiKey,
-                useRemoteTts = ttsMode == AssistantTtsMode.REMOTE_SERVER,
-                remoteTtsEndpoint = remoteTtsConfig.endpointUrl,
-                remoteTtsModel = remoteTtsConfig.model,
-                remoteTtsVoice = remoteTtsConfig.voice,
-                remoteTtsApiKey = remoteTtsConfig.apiKey,
-                remoteTtsApiFlavor = remoteTtsConfig.apiFlavor,
-                remoteTtsLanguage = remoteTtsConfig.language,
-                remoteTtsVoiceDescription = remoteTtsConfig.voiceDescription,
-                remoteTtsAdaptiveStyle = remoteTtsConfig.adaptiveStyle,
-                remoteTtsAudioMode = remoteTtsConfig.audioMode,
-                remoteTtsPcmSampleRate = remoteTtsConfig.pcmSampleRate
-            ),
-            onSave = { uiState ->
-                val accepted = workspace?.id?.let { id ->
-                    sttViewModel.saveSettings(id, uiState)
-                } == true
-                if (accepted) {
-                    showSTTSettingsDialog = false
-                }
-            },
-            onDismiss = { showSTTSettingsDialog = false },
-            onInstallOfflineEngine = sttViewModel::installOfflineEngine,
-            onRequestVoicePackInstallPermission = {
-                sttViewModel.createVoicePackInstallPermissionIntent()?.let(
-                    voicePackPermissionLauncher::launch
-                )
-            },
-            onDownloadModel = { sttViewModel.downloadModel() },
-            voiceFeatureState = voiceFeatureState,
-            isOfflineModelReady = isOfflineSttModelReady,
-            isDownloading = isSTTDownloading,
-            downloadProgress = sttDownloadProgress
         )
     }
 
@@ -2239,7 +2122,7 @@ fun FileItem(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsDialog(
+fun ConversationSettingsDialog(
     agents: List<Agent>,
     activeAgent: Agent?,
     selectedModel: String,
@@ -2256,7 +2139,7 @@ fun SettingsDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-        title = { Text("Configuración") },
+        title = { Text("Ajustes de este chat") },
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(16.dp),

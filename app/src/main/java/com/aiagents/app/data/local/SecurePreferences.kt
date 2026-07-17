@@ -267,6 +267,23 @@ class SecurePreferences @Inject constructor(
     fun getAssistantRemoteSttApiKey(): String =
         encryptedPrefs.getString("ASSISTANT_REMOTE_STT_API_KEY", null).orEmpty()
 
+    fun saveVoiceSttApiKey(providerId: String, apiKey: String) {
+        encryptedPrefs.edit().also { editor ->
+            val key = "VOICE_STT_${providerId.uppercase()}_API_KEY"
+            if (apiKey.isBlank()) editor.remove(key) else editor.putString(key, apiKey.trim())
+        }.apply()
+    }
+
+    fun saveVoiceSttApiKeySync(providerId: String, apiKey: String): Boolean {
+        val key = "VOICE_STT_${providerId.uppercase()}_API_KEY"
+        return encryptedPrefs.edit().also { editor ->
+            if (apiKey.isBlank()) editor.remove(key) else editor.putString(key, apiKey.trim())
+        }.commit()
+    }
+
+    fun getVoiceSttApiKey(providerId: String): String =
+        encryptedPrefs.getString("VOICE_STT_${providerId.uppercase()}_API_KEY", null).orEmpty()
+
     fun saveAssistantRemoteTtsApiKey(apiKey: String) {
         encryptedPrefs.edit().also { editor ->
             if (apiKey.isBlank()) editor.remove("ASSISTANT_REMOTE_TTS_API_KEY")
@@ -648,10 +665,16 @@ class SecurePreferences @Inject constructor(
 
     fun getOnboardingMode(): String? = encryptedPrefs.getString("ONBOARDING_MODE", null)
 
-    fun getAppLanguage(): String = encryptedPrefs.getString("APP_LANGUAGE", "") ?: ""
+    /** UI and assistant language always follow the device language. */
+    fun getAppLanguage(): String =
+        if (android.content.res.Resources.getSystem().configuration.locales[0].language == "es") {
+            "es"
+        } else {
+            "en"
+        }
 
-    fun setAppLanguage(language: String) {
-        encryptedPrefs.edit().putString("APP_LANGUAGE", language).apply()
+    fun clearStoredAppLanguage() {
+        encryptedPrefs.edit().remove("APP_LANGUAGE").apply()
     }
 
     // OpenAI API (para DALL-E)

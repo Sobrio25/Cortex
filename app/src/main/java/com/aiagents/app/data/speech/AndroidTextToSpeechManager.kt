@@ -14,7 +14,7 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import android.util.Log
-import com.aiagents.app.data.local.AssistantPreferences
+import com.aiagents.app.data.local.VoicePreferences
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -39,7 +39,7 @@ import javax.inject.Singleton
 @Singleton
 class AndroidTextToSpeechManager @Inject constructor(
     @param:ApplicationContext private val context: Context,
-    private val preferences: AssistantPreferences,
+    private val preferences: VoicePreferences,
     private val selfHostedVoiceApi: SelfHostedVoiceApi
 ) {
     private val _isReady = MutableStateFlow(false)
@@ -89,7 +89,7 @@ class AndroidTextToSpeechManager @Inject constructor(
         if (text.isBlank()) return
         when (val mode = preferences.ttsMode.value) {
             AssistantTtsMode.NONE -> {
-                _error.value = "Elige una voz en Ajustes > Asistente > Voz"
+                _error.value = "Elige una voz en Ajustes > Voz"
                 _isSpeaking.value = false
             }
             AssistantTtsMode.GOOGLE -> speakWithGoogle(text, locale)

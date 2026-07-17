@@ -2,11 +2,17 @@ package com.aiagents.app
 
 import android.app.Application
 import android.app.ActivityManager
+import android.app.LocaleManager
 import android.content.Context
+import android.content.res.Configuration as AndroidConfiguration
+import android.content.res.Resources
 import android.os.Build
+import android.os.LocaleList
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
+import androidx.appcompat.app.AppCompatDelegate
+import androidx.core.os.LocaleListCompat
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -65,7 +71,18 @@ class AIAgentsApp : Application(), Configuration.Provider {
             .build()
 
     override fun attachBaseContext(base: Context) {
-        super.attachBaseContext(base)
+        // Always follow the device language and clear overrides created by older versions.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            base.getSystemService(LocaleManager::class.java)
+                .applicationLocales = LocaleList.getEmptyLocaleList()
+        } else {
+            AppCompatDelegate.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
+        }
+
+        val deviceConfiguration = AndroidConfiguration(base.resources.configuration).apply {
+            setLocales(Resources.getSystem().configuration.locales)
+        }
+        super.attachBaseContext(base.createConfigurationContext(deviceConfiguration))
         SplitCompat.install(this)
     }
 
@@ -75,6 +92,7 @@ class AIAgentsApp : Application(), Configuration.Provider {
         // safely in the main process and in the dedicated assistant voice process.
         FirebaseBootstrap.ensureInitialized(this)
         super.onCreate()
+        securePreferences.clearStoredAppLanguage()
         errorReporter.configureCollection()
         appHealthMonitor.installCrashHandler(this)
         if (!isMainProcess()) {

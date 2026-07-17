@@ -33,7 +33,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.aiagents.app.R
 import com.aiagents.app.presentation.agents.PersonalitySlider
 import com.aiagents.app.ui.theme.CortexMark
@@ -51,7 +50,6 @@ fun OnboardingScreen(
     val currentStep by viewModel.currentStep.collectAsState()
     val userName by viewModel.userName.collectAsState()
     val userNickname by viewModel.userNickname.collectAsState()
-    val selectedLanguage by viewModel.selectedLanguage.collectAsState()
     val assistantName by viewModel.assistantName.collectAsState()
     val sarcasm by viewModel.sarcasmLevel.collectAsState()
     val creativity by viewModel.creativityLevel.collectAsState()
@@ -115,8 +113,6 @@ fun OnboardingScreen(
                     0 -> WelcomeStep(
                         userName = userName,
                         userNickname = userNickname,
-                        selectedLanguage = selectedLanguage,
-                        onLanguageSelected = { viewModel.setLanguage(it) },
                         onNameChanged = { viewModel.setUserName(it) },
                         onNicknameChanged = { viewModel.setUserNickname(it) }
                     )
@@ -495,8 +491,6 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 private fun WelcomeStep(
     userName: String,
     userNickname: String,
-    selectedLanguage: String,
-    onLanguageSelected: (String) -> Unit,
     onNameChanged: (String) -> Unit,
     onNicknameChanged: (String) -> Unit
 ) {
@@ -535,37 +529,6 @@ private fun WelcomeStep(
                 modifier = Modifier.padding(16.dp),
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSecondaryContainer
-            )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Language selection
-        Text(
-            text = stringResource(R.string.onboarding_select_language),
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            LanguageCard(
-                label = "English",
-                flag = "\uD83C\uDDFA\uD83C\uDDF8",
-                isSelected = selectedLanguage == "en",
-                onClick = { onLanguageSelected("en") },
-                modifier = Modifier.weight(1f)
-            )
-            LanguageCard(
-                label = "Español",
-                flag = "\uD83C\uDDEA\uD83C\uDDF8",
-                isSelected = selectedLanguage == "es",
-                onClick = { onLanguageSelected("es") },
-                modifier = Modifier.weight(1f)
             )
         }
 
@@ -624,47 +587,6 @@ private fun WelcomeStep(
         }
 
         Spacer(modifier = Modifier.height(24.dp))
-    }
-}
-
-@Composable
-private fun LanguageCard(
-    label: String,
-    flag: String,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val borderColor = if (isSelected) MaterialTheme.colorScheme.primary
-    else MaterialTheme.colorScheme.outlineVariant
-    val containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer
-    else MaterialTheme.colorScheme.surface
-
-    Card(
-        modifier = modifier
-            .border(
-                width = if (isSelected) 2.dp else 1.dp,
-                color = borderColor,
-                shape = RoundedCornerShape(12.dp)
-            )
-            .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = containerColor),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(text = flag, fontSize = 28.sp)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = label,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-            )
-        }
     }
 }
 
