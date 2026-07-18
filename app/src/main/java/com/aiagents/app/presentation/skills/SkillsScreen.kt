@@ -79,7 +79,9 @@ import com.aiagents.app.domain.model.SkillStatus
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SkillsScreen(
-    onBack: () -> Unit,
+    onBack: (() -> Unit)? = null,
+    showTopBar: Boolean = true,
+    modifier: Modifier = Modifier,
     viewModel: SkillsViewModel = hiltViewModel()
 ) {
     val skills by viewModel.skills.collectAsStateWithLifecycle()
@@ -97,18 +99,23 @@ fun SkillsScreen(
     }
 
     Scaffold(
+        modifier = modifier,
         topBar = {
-            TopAppBar(
-                title = { Text("Skills") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+            if (showTopBar) {
+                TopAppBar(
+                    title = { Text("Skills") },
+                    navigationIcon = {
+                        if (onBack != null) {
+                            IconButton(onClick = onBack) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    )
                 )
-            )
+            }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
@@ -160,6 +167,7 @@ fun SkillsScreen(
                     SkillFilterChip("Todas", filter == null) { filter = null }
                     SkillFilterChip("Borradores", filter == SkillStatus.DRAFT) { filter = SkillStatus.DRAFT }
                     SkillFilterChip("Activas", filter == SkillStatus.ACTIVE) { filter = SkillStatus.ACTIVE }
+                    SkillFilterChip("Inactivas", filter == SkillStatus.INACTIVE) { filter = SkillStatus.INACTIVE }
                     SkillFilterChip("Archivadas", filter == SkillStatus.ARCHIVED) { filter = SkillStatus.ARCHIVED }
                 }
             }
@@ -182,7 +190,11 @@ fun SkillsScreen(
                 }
             } else {
                 items(filteredSkills, key = { it.id }) { skill ->
-                    SkillListCard(skill = skill, onClick = { viewModel.selectSkill(skill.id) })
+                    SkillListCard(
+                        skill = skill,
+                        onClick = { viewModel.selectSkill(skill.id) },
+                        onEnabledChange = { viewModel.setEnabled(skill.id, it) }
+                    )
                 }
             }
         }
@@ -196,7 +208,7 @@ fun SkillsScreen(
                 editingSkill = selectedSkill
                 showEditor = true
             },
-            onActivate = { viewModel.activate(selectedSkill.id) },
+            onEnabledChange = { viewModel.setEnabled(selectedSkill.id, it) },
             onArchive = { viewModel.archive(selectedSkill.id) }
         )
     }
@@ -303,7 +315,11 @@ private fun SkillFilterChip(label: String, selected: Boolean, onClick: () -> Uni
 }
 
 @Composable
-private fun SkillListCard(skill: Skill, onClick: () -> Unit) {
+private fun SkillListCard(
+    skill: Skill,
+    onClick: () -> Unit,
+    onEnabledChange: (Boolean) -> Unit
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -328,6 +344,10 @@ private fun SkillListCard(skill: Skill, onClick: () -> Unit) {
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
+                    Switch(
+                        checked = skill.status == SkillStatus.ACTIVE,
+                        onCheckedChange = onEnabledChange
+                    )
                 }
             },
             supportingContent = {
@@ -337,7 +357,7 @@ private fun SkillListCard(skill: Skill, onClick: () -> Unit) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         SkillStatusBadge(skill.status)
                         Text(
-                            originLabel(skill.origin),
+                            "${categoryLabel(skill.category)} · ${originLabel(skill.origin)}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -353,6 +373,7 @@ private fun SkillStatusBadge(status: SkillStatus) {
     val (label, color) = when (status) {
         SkillStatus.DRAFT -> "Borrador" to MaterialTheme.colorScheme.tertiary
         SkillStatus.ACTIVE -> "Activa" to Color(0xFF2E7D32)
+        SkillStatus.INACTIVE -> "Inactiva" to MaterialTheme.colorScheme.error
         SkillStatus.ARCHIVED -> "Archivada" to MaterialTheme.colorScheme.outline
     }
     Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(99.dp)) {
@@ -370,7 +391,7 @@ private fun SkillDetailDialog(
     skill: Skill,
     onDismiss: () -> Unit,
     onEdit: () -> Unit,
-    onActivate: () -> Unit,
+    onEnabledChange: (Boolean) -> Unit,
     onArchive: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -406,14 +427,28 @@ private fun SkillDetailDialog(
                 ) {
                     DetailSection("Descripción", skill.description)
                     DetailSection("Cuándo usar", skill.whenToUse)
+                    DetailSection("Categoría", categoryLabel(skill.category))
+                    DetailSection(
+                        "Tools",
+                        skill.requiredTools.sorted().joinToString("\n").ifBlank { "No usa tools" },
+                        monospace = true
+                    )
                     DetailSection("Instrucciones", skill.instructions, monospace = true)
                 }
                 HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Activada", modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                    Switch(
+                        checked = skill.status == SkillStatus.ACTIVE,
+                        onCheckedChange = onEnabledChange
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
                 if (skill.isImmutable) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Skill integrada e inmutable", style = MaterialTheme.typography.bodySmall)
+                        Text("Contenido integrado; puedes desactivarla", style = MaterialTheme.typography.bodySmall)
                         Spacer(Modifier.weight(1f))
                         TextButton(onClick = onDismiss) { Text("Cerrar") }
                     }
@@ -428,13 +463,6 @@ private fun SkillDetailDialog(
                             Icon(Icons.Default.Edit, contentDescription = null)
                             Spacer(Modifier.width(6.dp))
                             Text("Editar")
-                        }
-                        if (skill.status != SkillStatus.ACTIVE) {
-                            Button(onClick = onActivate) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = null)
-                                Spacer(Modifier.width(6.dp))
-                                Text("Activar")
-                            }
                         }
                         if (skill.status != SkillStatus.ARCHIVED) {
                             TextButton(onClick = onArchive) {
@@ -572,3 +600,14 @@ private fun originLabel(origin: SkillOrigin): String = when (origin) {
     SkillOrigin.IMPORTED -> "Importada"
     SkillOrigin.BUILTIN -> "Integrada"
 }
+
+private fun categoryLabel(category: com.aiagents.app.domain.model.CapabilityCategory): String =
+    when (category) {
+        com.aiagents.app.domain.model.CapabilityCategory.CORE -> "Núcleo"
+        com.aiagents.app.domain.model.CapabilityCategory.PRODUCTIVITY -> "Productividad"
+        com.aiagents.app.domain.model.CapabilityCategory.KNOWLEDGE -> "Conocimiento"
+        com.aiagents.app.domain.model.CapabilityCategory.CREATION -> "Creación"
+        com.aiagents.app.domain.model.CapabilityCategory.DEVICE -> "Dispositivo"
+        com.aiagents.app.domain.model.CapabilityCategory.INTEGRATIONS -> "Integraciones"
+        com.aiagents.app.domain.model.CapabilityCategory.CUSTOM -> "Personalizada"
+    }

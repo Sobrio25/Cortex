@@ -526,7 +526,9 @@ internal fun DownloadableVoiceCard(
 @Composable
 internal fun RemoteSttServerCard(
     selected: Boolean,
+    expanded: Boolean,
     config: RemoteSttConfig,
+    onExpand: () -> Unit,
     onSelect: () -> Unit,
     onSave: (RemoteSttConfig) -> Unit
 ) {
@@ -538,9 +540,14 @@ internal fun RemoteSttServerCard(
     VoiceServerCard(
         title = "Whisper en servidor propio",
         description = "Compatible con POST multipart de OpenAI para audio/transcriptions",
-        selected = selected,
+        selected = selected || expanded,
         configured = configured,
-        onSelect = onSelect
+        onSelect = {
+            onExpand()
+            if (configured) onSelect()
+        },
+        selectionEnabled = true,
+        contentVisible = expanded
     ) {
         OutlinedTextField(
             value = endpointUrl,
@@ -821,6 +828,8 @@ private fun VoiceServerCard(
     selected: Boolean,
     configured: Boolean,
     onSelect: () -> Unit,
+    selectionEnabled: Boolean = configured,
+    contentVisible: Boolean = true,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Card(
@@ -844,7 +853,7 @@ private fun VoiceServerCard(
                 RadioButton(
                     selected = selected,
                     onClick = onSelect,
-                    enabled = configured
+                    enabled = selectionEnabled
                 )
                 Column(Modifier.weight(1f)) {
                     Text(title, fontWeight = FontWeight.Medium)
@@ -855,12 +864,16 @@ private fun VoiceServerCard(
                     )
                 }
                 Text(
-                    if (configured) "Configurado" else "Servidor",
+                    when {
+                        configured -> "Configurado"
+                        contentVisible -> "Servidor"
+                        else -> "Configurar"
+                    },
                     style = MaterialTheme.typography.labelMedium,
                     color = if (configured) AssistantMint else AssistantCyan
                 )
             }
-            content()
+            if (contentVisible) content()
         }
     }
 }

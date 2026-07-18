@@ -3,7 +3,18 @@ package com.aiagents.app.domain.model
 enum class SkillStatus {
     DRAFT,
     ACTIVE,
+    INACTIVE,
     ARCHIVED
+}
+
+enum class CapabilityCategory {
+    CORE,
+    PRODUCTIVITY,
+    KNOWLEDGE,
+    CREATION,
+    DEVICE,
+    INTEGRATIONS,
+    CUSTOM
 }
 
 enum class SkillOrigin {
@@ -28,6 +39,8 @@ data class Skill(
     val description: String,
     val whenToUse: String,
     val instructions: String,
+    val category: CapabilityCategory = CapabilityCategory.CUSTOM,
+    val requiredTools: Set<String> = emptySet(),
     val status: SkillStatus,
     val origin: SkillOrigin,
     val isImmutable: Boolean,
@@ -42,7 +55,9 @@ data class SkillDraftInput(
     val name: String,
     val description: String,
     val whenToUse: String,
-    val instructions: String
+    val instructions: String,
+    val category: CapabilityCategory = CapabilityCategory.CUSTOM,
+    val requiredTools: Set<String> = emptySet()
 )
 
 data class SkillReview(

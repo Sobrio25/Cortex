@@ -1,6 +1,5 @@
 package com.aiagents.app.presentation.workspace_detail
 
-import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -16,6 +15,7 @@ import com.aiagents.app.data.diagnostics.ErrorReportContext
 import com.aiagents.app.data.events.AgentChangeNotifier
 import com.aiagents.app.data.local.LocalLLMClient
 import com.aiagents.app.data.local.LocalModelRepository
+import com.aiagents.app.data.local.ChatPreferences
 import com.aiagents.app.data.model.PermissionLevel
 import com.aiagents.app.data.orchestration.AgentOrchestrator
 import com.aiagents.app.data.orchestration.DelegationResult
@@ -214,6 +214,7 @@ class WorkspaceDetailViewModel @Inject constructor(
     private val agentOrchestrator: AgentOrchestrator,
     private val localModelRepository: LocalModelRepository,
     private val securePreferences: SecurePreferences,
+    private val chatPreferences: ChatPreferences,
     private val errorReporter: AppErrorReporter,
     private val memoryExtractor: MemoryExtractor,
     private val agentChangeNotifier: AgentChangeNotifier,
@@ -257,6 +258,8 @@ class WorkspaceDetailViewModel @Inject constructor(
 
     private val _selectedModel = MutableStateFlow<String>("")
     val selectedModel: StateFlow<String> = _selectedModel.asStateFlow()
+    private var conversationModelOverride: String = ""
+    private var pendingNewConversationModelOverride: String = ""
     private val _contextWindowOverride = MutableStateFlow<Int?>(null)
     private var contextWindowRefreshModel: String? = null
 
@@ -451,6 +454,7 @@ class WorkspaceDetailViewModel @Inject constructor(
         loadAvailableModels()
         observeSelectedModelsChanges()
         observeManagedModels()
+        observeDefaultChatModel()
         startFileScanning()
         loadShowReasoningPreference()
         loadShowCommandsPreference()
@@ -641,16 +645,7 @@ class WorkspaceDetailViewModel @Inject constructor(
                 }
             }
 
-            if (!ws?.selectedModel.isNullOrEmpty()) {
-                _selectedModel.value = ws?.selectedModel ?: ""
-                refreshContextWindowForSelectedModel(_selectedModel.value)
-            } else {
-                // Auto-select first available model if none is set
-                val available = buildAvailableModelsList()
-                if (available.isNotEmpty()) {
-                    setSelectedModel(available.first())
-                }
-            }
+            loadModelForConversation(_conversationId.value, ws?.selectedModel.orEmpty())
         }
     }
 
@@ -665,9 +660,8 @@ class WorkspaceDetailViewModel @Inject constructor(
             repository.selectedModelsFlow.collect {
                 val available = buildAvailableModelsList()
                 _uiState.value = _uiState.value.copy(availableModels = available)
-                // Auto-select first model if none is currently selected
-                if (_selectedModel.value.isEmpty() && available.isNotEmpty()) {
-                    setSelectedModel(available.first())
+                if (chatPreferences.defaultModel.value.isBlank() && available.isNotEmpty()) {
+                    chatPreferences.setDefaultModel(available.first())
                 }
             }
         }
@@ -682,10 +676,44 @@ class WorkspaceDetailViewModel @Inject constructor(
                 if (_selectedModel.value.startsWith("${ProviderType.MANAGED.name}|") &&
                     _selectedModel.value !in available
                 ) {
-                    setSelectedModel("${ProviderType.MANAGED.name}|auto")
+                    selectModelLocally("${ProviderType.MANAGED.name}|auto")
                 }
             }
         }
+    }
+
+    private fun observeDefaultChatModel() {
+        viewModelScope.launch {
+            chatPreferences.defaultModel.collect { defaultModel ->
+                if (
+                    !assistantModeEnabled &&
+                    defaultModel.isNotBlank() &&
+                    conversationModelOverride.isBlank() &&
+                    pendingNewConversationModelOverride.isBlank()
+                ) {
+                    selectModelLocally(defaultModel)
+                }
+            }
+        }
+    }
+
+    private suspend fun loadModelForConversation(conversationId: Long?, legacyWorkspaceModel: String = "") {
+        val conversation = conversationId
+            ?.takeIf { it > 0 }
+            ?.let { repository.getConversationById(it) }
+        if (conversationId != null && conversationId > 0 && conversation == null) return
+
+        conversationModelOverride = conversation?.selectedModelOverride.orEmpty()
+        pendingNewConversationModelOverride = ""
+        val available = buildAvailableModelsList()
+        var defaultModel = chatPreferences.defaultModel.value
+        if (defaultModel.isBlank()) {
+            defaultModel = legacyWorkspaceModel.takeIf(String::isNotBlank)
+                ?: available.firstOrNull().orEmpty()
+            if (defaultModel.isNotBlank()) chatPreferences.setDefaultModel(defaultModel)
+        }
+        val model = conversationModelOverride.ifBlank { defaultModel }
+        if (model.isNotBlank()) selectModelLocally(model)
     }
 
     private suspend fun buildAvailableModelsList(): List<String> {
@@ -701,6 +729,9 @@ class WorkspaceDetailViewModel @Inject constructor(
         downloadedLocalModels.forEach { model ->
             selected.add("${ProviderType.LOCAL.name}|${model.id}")
         }
+        chatPreferences.defaultModel.value.takeIf(String::isNotBlank)?.let(selected::add)
+        conversationModelOverride.takeIf(String::isNotBlank)?.let(selected::add)
+        pendingNewConversationModelOverride.takeIf(String::isNotBlank)?.let(selected::add)
         return selected.toList().sorted()
     }
 
@@ -712,12 +743,26 @@ class WorkspaceDetailViewModel @Inject constructor(
     }
 
     fun setSelectedModel(model: String) {
+        selectModelLocally(model)
+        if (assistantModeEnabled) return
+
+        val override = model.takeUnless { it == chatPreferences.defaultModel.value }.orEmpty()
+        conversationModelOverride = override
+        val activeConversationId = _conversationId.value
+        if (activeConversationId == null || activeConversationId <= 0) {
+            pendingNewConversationModelOverride = override
+            return
+        }
+        viewModelScope.launch {
+            repository.setConversationModelOverride(activeConversationId, override)
+        }
+    }
+
+    private fun selectModelLocally(model: String) {
+        if (model.isBlank()) return
         _selectedModel.value = model
         _contextWindowOverride.value = repository.getContextWindowForModel(model)
         refreshContextWindowForSelectedModel(model)
-        viewModelScope.launch {
-            repository.setSelectedModel(workspaceId, model)
-        }
     }
 
 
@@ -3003,17 +3048,43 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         // Obtener el directorio del workspace como directorio de trabajo por defecto
         val workspaceDir = fileRepository.getWorkspaceFolderPath(workspaceId)
 
+        val enabledToolCalls = toolCalls.filter { toolCall ->
+            repository.isToolEnabledByCapabilities(toolCall.function.name)
+        }
+        toolCalls.filterNot(enabledToolCalls::contains).forEach { toolCall ->
+            val content =
+                "La tool '${toolCall.function.name}' está desactivada. Activa una skill que la use en Ajustes > Capabilities."
+            repository.addMessage(
+                workspaceId,
+                _conversationId.value,
+                Message(
+                    role = MessageRole.TOOL,
+                    content = content,
+                    toolResults = listOf(
+                        ToolResult(toolCall.id, toolCall.function.name, content)
+                    )
+                ),
+                agent.id
+            )
+        }
+        if (enabledToolCalls.isEmpty()) {
+            continueConversationAfterTools(agent, depth)
+            return
+        }
+
         // ── spawn_subagents: structured, bounded delegation ──
         // Multiple calls in a single response → true parallel execution via IsolatedAgentExecutor.
-        val delegationCalls = toolCalls.filter { it.function.name in DelegationToolHandler.ALL_TOOL_NAMES }
+        val delegationCalls = enabledToolCalls.filter {
+            it.function.name in DelegationToolHandler.ALL_TOOL_NAMES
+        }
         if (!assistantModeEnabled && delegationCalls.isNotEmpty() && agent.isOrchestrator) {
-            handleDelegationToolCalls(agent, delegationCalls, toolCalls, depth)
+            handleDelegationToolCalls(agent, delegationCalls, enabledToolCalls, depth)
             return
         }
 
         try {
-            for ((index, toolCall) in toolCalls.withIndex()) {
-                Log.d("WorkspaceDetailVM", "Processing tool call ${index + 1}/${toolCalls.size}: ${toolCall.function.name}")
+            for ((index, toolCall) in enabledToolCalls.withIndex()) {
+                Log.d("WorkspaceDetailVM", "Processing tool call ${index + 1}/${enabledToolCalls.size}: ${toolCall.function.name}")
 
                 if (assistantModeEnabled && toolCall.function.name !in CortexAssistantPrompt.ALLOWED_TOOL_NAMES) {
                     val content = "Error: '${toolCall.function.name}' no está disponible en el modo asistente aislado."
@@ -3332,7 +3403,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
 
             // Post tool usage to board for parallel agents
             if (_workingAgents.value.size > 1) {
-                val toolSummary = toolCalls.joinToString(", ") { it.function.name }
+                val toolSummary = enabledToolCalls.joinToString(", ") { it.function.name }
                 postToBoard(agent.name, "Usó: $toolSummary")
             }
 
@@ -4055,9 +4126,12 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                     ConversationContextKind.VOICE_ASSISTANT
                 } else {
                     ConversationContextKind.CHAT
-                }
+                },
+                selectedModelOverride = pendingNewConversationModelOverride
             )
         )
+        conversationModelOverride = pendingNewConversationModelOverride
+        pendingNewConversationModelOverride = ""
         updateConversationId(id)
         return id
     }
@@ -4067,6 +4141,9 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         persistCurrentDraftBeforeSwitch()
         updateConversationId(id)
         restoreDraftForCurrentConversation()
+        viewModelScope.launch {
+            loadModelForConversation(id, _workspace.value?.selectedModel.orEmpty())
+        }
     }
 
     private fun updateConversationId(id: Long?) {
@@ -4274,22 +4351,10 @@ Directorio de trabajo: $workspacePath""".trimIndent())
     }
 
     private fun requiredAssistantActionPermissions(toolCall: ToolCall): List<String> {
-        if (toolCall.function.name != SystemAppToolHandler.TOOL_NAME) return emptyList()
-        val args = runCatching {
-            gson.fromJson(toolCall.function.arguments, JsonObject::class.java)
-        }.getOrNull() ?: return emptyList()
-        val action = args.get("action")?.asString ?: return emptyList()
-        val params = args.getAsJsonObject("params")
-        return when (action) {
-            "call_phone" -> buildList {
-                add(Manifest.permission.CALL_PHONE)
-                if (params?.get("phone_number")?.asString.isNullOrBlank()) {
-                    add(Manifest.permission.READ_CONTACTS)
-                }
-            }
-            "prepare_whatsapp_message" -> listOf(Manifest.permission.READ_CONTACTS)
-            else -> emptyList()
-        }
+        return AssistantActionPermissionPolicy.requiredPermissions(
+            toolName = toolCall.function.name,
+            arguments = toolCall.function.arguments
+        )
     }
 
     fun onAssistantActionPermissionsGranted() {

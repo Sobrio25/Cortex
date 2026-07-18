@@ -11,7 +11,9 @@ data class Conversation(
     val delegationTask: String? = null,
     val status: String = "active",
     val lastMemoryExtraction: Long? = null,
-    val contextKind: ConversationContextKind = ConversationContextKind.CHAT
+    val contextKind: ConversationContextKind = ConversationContextKind.CHAT,
+    /** Empty means this conversation follows the global default chat model. */
+    val selectedModelOverride: String = ""
 )
 
 enum class ConversationContextKind {

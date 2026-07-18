@@ -18,6 +18,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.aiagents.app.presentation.agents.AgentsScreen
 import com.aiagents.app.presentation.assistant.AssistantSettingsScreen
+import com.aiagents.app.presentation.capabilities.CapabilitiesScreen
 import com.aiagents.app.presentation.chat.ChatScreen
 import com.aiagents.app.presentation.drawer.AppDrawerContent
 import com.aiagents.app.presentation.drawer.DrawerViewModel
@@ -30,6 +31,7 @@ import com.aiagents.app.presentation.providers.ProvidersScreen
 import com.aiagents.app.presentation.scheduled_tasks.ScheduledTasksScreen
 import com.aiagents.app.presentation.settings.GoogleWorkspaceSettingsScreen
 import com.aiagents.app.presentation.settings.DiagnosticsScreen
+import com.aiagents.app.presentation.settings.DefaultChatModelScreen
 import com.aiagents.app.presentation.settings.SettingsScreen
 import com.aiagents.app.presentation.subscription.SubscriptionScreen
 import com.aiagents.app.presentation.skills.SkillsScreen
@@ -49,6 +51,7 @@ sealed class Screen(val route: String) {
     data object Subscription : Screen("settings/subscription")
     data object Agents : Screen("settings/agents")
     data object Providers : Screen("settings/providers")
+    data object DefaultChatModel : Screen("settings/default_chat_model")
     data object LocalModels : Screen("settings/local_models")
     data object MCP : Screen("settings/mcp")
     data object Memory : Screen("settings/memory")
@@ -56,6 +59,7 @@ sealed class Screen(val route: String) {
     data object ScheduledTasks : Screen("settings/scheduled_tasks")
     data object Assistant : Screen("settings/assistant")
     data object Voice : Screen("settings/voice")
+    data object Capabilities : Screen("settings/capabilities")
     data object GoogleWorkspace : Screen("settings/google_workspace")
     data object Diagnostics : Screen("settings/diagnostics")
     data object WorkspaceDetail : Screen("workspace/{workspaceId}") {
@@ -298,17 +302,21 @@ private fun MainAppContent(
                     onNavigateToSubscription = { navController.navigate(Screen.Subscription.route) },
                     onNavigateToAgents = { navController.navigate(Screen.Agents.route) },
                     onNavigateToProviders = { navController.navigate(Screen.Providers.route) },
+                    onNavigateToDefaultChatModel = {
+                        navController.navigate(Screen.DefaultChatModel.route)
+                    },
                     onNavigateToLocalModels = { navController.navigate(Screen.LocalModels.route) },
                     onNavigateToMemory = { navController.navigate(Screen.Memory.route) },
                     onNavigateToVoice = { navController.navigate(Screen.Voice.route) },
-                    onNavigateToSkills = { navController.navigate(Screen.Skills.route) },
+                    onNavigateToCapabilities = {
+                        navController.navigate(Screen.Capabilities.route)
+                    },
                     onNavigateToScheduledTasks = {
                         navController.navigate(Screen.ScheduledTasks.route)
                     },
                     onNavigateToAssistant = {
                         navController.navigate(Screen.Assistant.route)
                     },
-                    onNavigateToMCP = { navController.navigate(Screen.MCP.route) },
                     onNavigateToGoogleWorkspace = {
                         navController.navigate(Screen.GoogleWorkspace.route)
                     },
@@ -330,6 +338,9 @@ private fun MainAppContent(
                     onNavigateToLocalModels = { navController.navigate(Screen.LocalModels.route) },
                     onBack = { navController.popBackStack() }
                 )
+            }
+            composable(Screen.DefaultChatModel.route) {
+                DefaultChatModelScreen(onBack = { navController.popBackStack() })
             }
             composable(Screen.LocalModels.route) {
                 LocalModelsScreen(
@@ -374,6 +385,12 @@ private fun MainAppContent(
             composable(Screen.Voice.route) {
                 VoiceSettingsScreen(
                     onBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.Capabilities.route) {
+                CapabilitiesScreen(
+                    onBack = { navController.popBackStack() },
+                    onConfigureMcp = { navController.navigate(Screen.MCP.route) }
                 )
             }
             composable(Screen.GoogleWorkspace.route) {

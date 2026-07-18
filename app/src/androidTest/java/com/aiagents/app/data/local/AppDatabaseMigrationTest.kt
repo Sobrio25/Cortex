@@ -5,6 +5,7 @@ import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.aiagents.app.data.orchestration.AgentOrchestrator
+import com.aiagents.app.data.capabilities.CapabilityCatalog
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Rule
@@ -229,11 +230,99 @@ class AppDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun migrates48To49BackfillingCapabilityOwnershipAndPreservingDisabledBuiltins() {
+        helper.createDatabase(CAPABILITIES_DATABASE_NAME, 48).apply {
+            execSQL(
+                """
+                INSERT INTO skills (
+                    id, slug, name, description, whenToUse, instructions, status, origin,
+                    isImmutable, version, createdAt, updatedAt, activatedAt, archivedAt
+                ) VALUES
+                    (1, 'skill-creator', 'Skill Creator',
+                        'Diseña skills reutilizables y seguras.', 'crear una skill nueva',
+                        'Usa skill_create para guardar un borrador que el usuario pueda revisar.',
+                        'INACTIVE', 'BUILTIN', 1, 2, 1, 1, 1, NULL),
+                    (2, 'custom-weather', 'Clima breve',
+                        'Consulta el clima actual de una ciudad.', 'preguntas sobre temperatura',
+                        'Usa weather_current y devuelve el resultado sin inventar datos.',
+                        'ACTIVE', 'USER', 0, 1, 1, 1, 1, NULL)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        helper.runMigrationsAndValidate(
+            CAPABILITIES_DATABASE_NAME,
+            49,
+            true,
+            AppDatabase.MIGRATION_48_49
+        ).use { database ->
+            database.query(
+                "SELECT status, category, requiredTools FROM skills WHERE slug = 'skill-creator'"
+            ).use { cursor ->
+                assertEquals(true, cursor.moveToFirst())
+                assertEquals("INACTIVE", cursor.getString(0))
+                assertEquals("CORE", cursor.getString(1))
+                assertEquals(true, cursor.getString(2).contains("skill_create"))
+            }
+            database.query(
+                "SELECT category, requiredTools FROM skills WHERE slug = 'custom-weather'"
+            ).use { cursor ->
+                assertEquals(true, cursor.moveToFirst())
+                assertEquals("KNOWLEDGE", cursor.getString(0))
+                assertEquals("weather_current", cursor.getString(1))
+            }
+            database.query("SELECT COUNT(*) FROM skills WHERE origin = 'BUILTIN'").use { cursor ->
+                assertEquals(true, cursor.moveToFirst())
+                assertEquals(CapabilityCatalog.builtInSkills.size, cursor.getInt(0))
+            }
+            database.query("SELECT COUNT(*) FROM mcp_servers").use { cursor ->
+                assertEquals(true, cursor.moveToFirst())
+                assertEquals(CapabilityCatalog.mcpCapabilities.size, cursor.getInt(0))
+            }
+        }
+    }
+
+    @Test
+    fun migrates49To50AddingPerConversationModelOverride() {
+        helper.createDatabase(CHAT_MODEL_DATABASE_NAME, 49).apply {
+            execSQL(
+                "INSERT INTO workspaces (id, name, description, activeAgentId, selectedModel, " +
+                    "systemPrompt, externalStorageUri, createdAt, updatedAt) " +
+                    "VALUES (101, 'Proyecto', '', NULL, 'OPENAI|gpt-4o', '', NULL, 1, 1)"
+            )
+            execSQL(
+                "INSERT INTO conversations (id, workspaceId, title, createdAt, updatedAt, " +
+                    "parentConversationId, delegationAgentName, delegationTask, status, " +
+                    "lastMemoryExtraction, contextKind) VALUES " +
+                    "(102, 101, 'Chat existente', 1, 1, NULL, NULL, NULL, 'active', NULL, 'CHAT')"
+            )
+            close()
+        }
+
+        helper.runMigrationsAndValidate(
+            CHAT_MODEL_DATABASE_NAME,
+            50,
+            true,
+            AppDatabase.MIGRATION_49_50
+        ).use { database ->
+            database.query(
+                "SELECT selectedModelOverride FROM conversations WHERE id = 102"
+            ).use { cursor ->
+                assertEquals(true, cursor.moveToFirst())
+                assertEquals("", cursor.getString(0))
+            }
+        }
+    }
+
     private companion object {
         const val DATABASE_NAME = "migration-38-41"
         const val SCHEDULED_TASK_DATABASE_NAME = "migration-43-44"
         const val LATEST_CHAIN_DATABASE_NAME = "migration-44-47"
         const val ASSISTANT_CONTEXT_DATABASE_NAME = "migration-46-47-assistant-context"
         const val VOICE_DATABASE_NAME = "migration-47-48-global-voice"
+        const val CAPABILITIES_DATABASE_NAME = "migration-48-49-capabilities"
+        const val CHAT_MODEL_DATABASE_NAME = "migration-49-50-chat-model"
     }
 }

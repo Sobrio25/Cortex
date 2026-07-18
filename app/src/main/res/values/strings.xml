@@ -122,8 +122,14 @@
     <string name="settings_agents_subtitle">Personality, roles, and delegation</string>
     <string name="settings_providers_title">AI providers</string>
     <string name="settings_providers_subtitle">Accounts, API keys, and cloud models</string>
-    <string name="settings_subscription_title">Plan and usage</string>
-    <string name="settings_subscription_subtitle">Subscription, models, and monthly usage</string>
+    <string name="settings_default_chat_model_title">Default chat model</string>
+    <string name="settings_default_chat_model_subtitle">Used by every chat unless you override it</string>
+    <string name="default_chat_model_title">Default chat model</string>
+    <string name="default_chat_model_heading">Choose the model chats start with</string>
+    <string name="default_chat_model_description">This setting applies to all chats that do not have their own model selection. It is independent from the assistant model.</string>
+    <string name="default_chat_model_empty">Select a cloud model in Providers or download a local model first.</string>
+    <string name="settings_subscription_title">Cortex Gateway and plan</string>
+    <string name="settings_subscription_subtitle">Google sign-in, subscription, models, and usage</string>
     <string name="subscription_title">Plan and usage</string>
     <string name="subscription_free_usage">Usage: %1$d%% this week</string>
     <string name="subscription_budget_remaining">%1$d%% of this period’s inference budget remains</string>
@@ -134,6 +140,10 @@
     <string name="subscription_current_plan">Current plan</string>
     <string name="subscription_choose_plan">Choose plan</string>
     <string name="subscription_store_pending">Pending in Google Play</string>
+    <string name="gateway_account_title">Cortex Gateway</string>
+    <string name="gateway_sign_in_description">Sign in with Google to activate Cortex Gateway and keep your plan and usage linked to your account.</string>
+    <string name="gateway_activate_button">Activate Free plan</string>
+    <string name="gateway_connected_description">Connected and ready. Cortex Gateway models are available in chats and model settings.</string>
     <string name="plan_free_feature">500,000 input and output tokens every week with automatic model selection</string>
     <string name="plan_fallback_feature">Automatic continuity with free models when the budget is exhausted</string>
     <string name="plan_auto_manual_feature">Auto mode and manual model selection</string>
@@ -146,6 +156,8 @@
     <string name="settings_memory_subtitle">SOUL.md, USER.md, MEMORY.md, and historical archive</string>
     <string name="settings_skills_title">Skills</string>
     <string name="settings_skills_subtitle">Library, creation, and automatic learning</string>
+    <string name="settings_capabilities_title">Capabilities</string>
+    <string name="settings_capabilities_subtitle">Skills, derived tools, and MCP integrations</string>
     <string name="settings_google_workspace_title">Google Workspace</string>
     <string name="settings_google_workspace_subtitle">Drive, Docs, Gmail, and Calendar with user permission</string>
     <string name="settings_section_automation">Automation</string>

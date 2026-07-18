@@ -2,10 +2,12 @@ package com.aiagents.app.data.repository
 
 import com.aiagents.app.data.local.SkillDao
 import com.aiagents.app.data.local.SkillReviewDao
+import com.aiagents.app.data.capabilities.CapabilityCatalog
 import com.aiagents.app.data.memory.CortexMemoryPolicy
 import com.aiagents.app.data.model.SkillEntity
 import com.aiagents.app.data.model.SkillReviewEntity
 import com.aiagents.app.domain.model.Skill
+import com.aiagents.app.domain.model.CapabilityCategory
 import com.aiagents.app.domain.model.SkillDraftInput
 import com.aiagents.app.domain.model.SkillOrigin
 import com.aiagents.app.domain.model.SkillReview
@@ -55,6 +57,8 @@ class SkillRepository @Inject constructor(
                     description = normalized.description,
                     whenToUse = normalized.whenToUse,
                     instructions = normalized.instructions,
+                    category = normalized.category.name,
+                    requiredTools = normalized.requiredTools.sorted().joinToString(","),
                     status = SkillStatus.DRAFT.name,
                     origin = SkillOrigin.USER.name,
                     createdAt = now,
@@ -71,6 +75,8 @@ class SkillRepository @Inject constructor(
                     description = normalized.description,
                     whenToUse = normalized.whenToUse,
                     instructions = normalized.instructions,
+                    category = normalized.category.name,
+                    requiredTools = normalized.requiredTools.sorted().joinToString(","),
                     updatedAt = now
                 ) == 1
             ) { "No se pudo actualizar la skill" }
@@ -94,6 +100,8 @@ class SkillRepository @Inject constructor(
                 description = normalized.description,
                 whenToUse = normalized.whenToUse,
                 instructions = normalized.instructions,
+                category = normalized.category.name,
+                requiredTools = normalized.requiredTools.sorted().joinToString(","),
                 status = SkillStatus.DRAFT.name,
                 origin = SkillOrigin.AUTO.name,
                 createdAt = now,
@@ -122,6 +130,8 @@ class SkillRepository @Inject constructor(
                     description = normalized.description,
                     whenToUse = normalized.whenToUse,
                     instructions = normalized.instructions,
+                    category = normalized.category.name,
+                    requiredTools = normalized.requiredTools.sorted().joinToString(","),
                     updatedAt = now
                 ) == 1
             ) { "No se pudo activar la skill automática" }
@@ -136,6 +146,8 @@ class SkillRepository @Inject constructor(
                 description = normalized.description,
                 whenToUse = normalized.whenToUse,
                 instructions = normalized.instructions,
+                category = normalized.category.name,
+                requiredTools = normalized.requiredTools.sorted().joinToString(","),
                 status = SkillStatus.ACTIVE.name,
                 origin = SkillOrigin.AUTO.name,
                 createdAt = now,
@@ -162,6 +174,8 @@ class SkillRepository @Inject constructor(
                 description = normalized.description,
                 whenToUse = normalized.whenToUse,
                 instructions = normalized.instructions,
+                category = normalized.category.name,
+                requiredTools = normalized.requiredTools.sorted().joinToString(","),
                 updatedAt = System.currentTimeMillis()
             ) == 1
         ) { "No se pudo actualizar la skill automática" }
@@ -170,11 +184,18 @@ class SkillRepository @Inject constructor(
 
     suspend fun activate(id: Long): Result<Unit> = updateStatus(id, SkillStatus.ACTIVE)
 
+    suspend fun deactivate(id: Long): Result<Unit> = updateStatus(id, SkillStatus.INACTIVE)
+
+    suspend fun setEnabled(id: Long, enabled: Boolean): Result<Unit> =
+        updateStatus(id, if (enabled) SkillStatus.ACTIVE else SkillStatus.INACTIVE)
+
     suspend fun archive(id: Long): Result<Unit> = updateStatus(id, SkillStatus.ARCHIVED)
 
     private suspend fun updateStatus(id: Long, status: SkillStatus): Result<Unit> = runCatching {
         val existing = skillDao.getById(id) ?: error("La skill ya no existe")
-        check(!existing.isImmutable) { "Las skills integradas no se pueden cambiar de estado" }
+        if (status == SkillStatus.ARCHIVED) {
+            check(!existing.isImmutable) { "Las skills integradas se desactivan, no se archivan" }
+        }
         val now = System.currentTimeMillis()
         val activatedAt = when (status) {
             SkillStatus.ACTIVE -> now
@@ -185,7 +206,7 @@ class SkillRepository @Inject constructor(
             else -> null
         }
         check(
-            skillDao.updateMutableStatus(
+            skillDao.updateStatus(
                 id = id,
                 status = status.name,
                 updatedAt = now,
@@ -212,7 +233,9 @@ class SkillRepository @Inject constructor(
                 name = input.name.trim(),
                 description = input.description.trim(),
                 whenToUse = input.whenToUse.trim(),
-                instructions = input.instructions.trim()
+                instructions = input.instructions.trim(),
+                category = input.category,
+                requiredTools = input.requiredTools
             )
             require(normalized.name.length in 3..80) {
                 "El nombre debe tener entre 3 y 80 caracteres"
@@ -226,7 +249,15 @@ class SkillRepository @Inject constructor(
             require(normalized.instructions.length in 30..20_000) {
                 "Las instrucciones deben tener entre 30 y 20,000 caracteres"
             }
-            return normalized
+            val detectedTools = CapabilityCatalog.detectRequiredTools(
+                listOf(normalized.description, normalized.whenToUse, normalized.instructions)
+                    .joinToString("\n")
+            )
+            val requiredTools = (normalized.requiredTools + detectedTools)
+                .filterTo(linkedSetOf()) { it in CapabilityCatalog.knownToolNames }
+            val category = normalized.category.takeUnless { it == CapabilityCategory.CUSTOM }
+                ?: CapabilityCatalog.inferCategory(requiredTools)
+            return normalized.copy(category = category, requiredTools = requiredTools)
         }
 
         fun validateAutomatic(input: SkillDraftInput): SkillDraftInput {
@@ -263,6 +294,8 @@ private fun SkillEntity.toDomain(): Skill = Skill(
     description = description,
     whenToUse = whenToUse,
     instructions = instructions,
+    category = enumValueOrDefault(category, CapabilityCategory.CUSTOM),
+    requiredTools = requiredTools.split(',').map(String::trim).filter(String::isNotBlank).toSet(),
     status = enumValueOrDefault(status, SkillStatus.DRAFT),
     origin = enumValueOrDefault(origin, SkillOrigin.IMPORTED),
     isImmutable = isImmutable,

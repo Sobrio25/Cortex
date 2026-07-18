@@ -36,10 +36,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,6 +76,13 @@ fun VoiceSettingsScreen(
     val voiceAssets by viewModel.voiceAssets.collectAsState()
     val voiceFeatureState by viewModel.voiceFeatureState.collectAsState()
     val error by viewModel.error.collectAsState()
+    var remoteSttExpanded by rememberSaveable {
+        mutableStateOf(sttMode == AssistantSttMode.REMOTE_SERVER)
+    }
+
+    LaunchedEffect(sttMode) {
+        remoteSttExpanded = sttMode == AssistantSttMode.REMOTE_SERVER
+    }
 
     val installVoiceLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -128,7 +137,10 @@ fun VoiceSettingsScreen(
                         selected = sttMode == AssistantSttMode.ANDROID,
                         available = viewModel.onDeviceRecognitionAvailable ||
                             viewModel.systemRecognitionAvailable,
-                        onSelect = { viewModel.selectSttMode(AssistantSttMode.ANDROID) }
+                        onSelect = {
+                            remoteSttExpanded = false
+                            viewModel.selectSttMode(AssistantSttMode.ANDROID)
+                        }
                     )
                     DownloadableVoiceCard(
                         title = "Whisper Tiny",
@@ -137,13 +149,18 @@ fun VoiceSettingsScreen(
                         selected = sttMode == AssistantSttMode.WHISPER_TINY,
                         state = voiceAssets[VoiceCatalog.WHISPER_TINY_ID] ?: VoiceAssetUiState(),
                         moduleState = voiceFeatureState,
-                        onSelect = { viewModel.selectSttMode(AssistantSttMode.WHISPER_TINY) },
+                        onSelect = {
+                            remoteSttExpanded = false
+                            viewModel.selectSttMode(AssistantSttMode.WHISPER_TINY)
+                        },
                         onDownload = { viewModel.downloadAsset(VoiceCatalog.WHISPER_TINY_ID) },
                         onDelete = { viewModel.deleteAsset(VoiceCatalog.WHISPER_TINY_ID) }
                     )
                     RemoteSttServerCard(
                         selected = sttMode == AssistantSttMode.REMOTE_SERVER,
+                        expanded = remoteSttExpanded,
                         config = remoteSttConfig,
+                        onExpand = { remoteSttExpanded = true },
                         onSelect = { viewModel.selectSttMode(AssistantSttMode.REMOTE_SERVER) },
                         onSave = viewModel::saveRemoteSttConfig
                     )

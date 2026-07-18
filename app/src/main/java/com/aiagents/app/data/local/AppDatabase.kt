@@ -22,6 +22,7 @@ import com.aiagents.app.data.model.TodoEntity
 import com.aiagents.app.data.model.MCPServerEntity
 import com.aiagents.app.data.model.WorkspaceEntity
 import com.aiagents.app.data.orchestration.AgentOrchestrator
+import com.aiagents.app.data.capabilities.CapabilityCatalog
 import com.aiagents.app.domain.model.SkillCreatorBuiltin
 import com.aiagents.app.domain.model.AndroidAppControlBuiltin
 import com.aiagents.app.domain.model.WeatherWidgetsBuiltin
@@ -46,7 +47,7 @@ import com.aiagents.app.domain.model.WeatherWidgetsBuiltin
         SkillReviewEntity::class,
         SubagentExecutionEntity::class
     ],
-    version = 48,
+    version = 50,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -956,7 +957,7 @@ SIEMPRE usa la herramienta pubmed_search para buscar estudios científicos relev
                     "CREATE UNIQUE INDEX IF NOT EXISTS index_skill_reviews_transcriptFingerprint " +
                         "ON skill_reviews(transcriptFingerprint)"
                 )
-                ensureBuiltInSkills(db)
+                ensureLegacyBuiltInSkills(db)
             }
         }
 
@@ -1222,7 +1223,7 @@ SIEMPRE usa la herramienta pubmed_search para buscar estudios científicos relev
             db.execSQL("INSERT INTO cortex_memory_fts(cortex_memory_fts) VALUES('rebuild')")
         }
 
-        fun ensureBuiltInSkills(db: SupportSQLiteDatabase) {
+        private fun ensureLegacyBuiltInSkills(db: SupportSQLiteDatabase) {
             val now = System.currentTimeMillis()
             db.compileStatement(
                 """
@@ -1351,6 +1352,130 @@ SIEMPRE usa la herramienta pubmed_search para buscar estudios científicos relev
                 bindLong(9, SkillCreatorBuiltin.VERSION.toLong())
                 executeUpdateDelete()
                 close()
+            }
+        }
+
+        val MIGRATION_48_49 = object : Migration(48, 49) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE skills ADD COLUMN category TEXT NOT NULL DEFAULT 'CUSTOM'")
+                db.execSQL("ALTER TABLE skills ADD COLUMN requiredTools TEXT NOT NULL DEFAULT ''")
+                ensureBuiltInSkills(db)
+                ensureDefaultMcpServers(db)
+            }
+        }
+
+        val MIGRATION_49_50 = object : Migration(49, 50) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE conversations ADD COLUMN selectedModelOverride " +
+                        "TEXT NOT NULL DEFAULT ''"
+                )
+            }
+        }
+
+        fun ensureBuiltInSkills(db: SupportSQLiteDatabase) {
+            val now = System.currentTimeMillis()
+            CapabilityCatalog.builtInSkills.forEach { skill ->
+                val tools = skill.requiredTools.sorted().joinToString(",")
+                db.compileStatement(
+                    """
+                    INSERT OR IGNORE INTO skills (
+                        slug, name, description, whenToUse, instructions, category, requiredTools,
+                        status, origin, isImmutable, version, createdAt, updatedAt, activatedAt, archivedAt
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', 'BUILTIN', 1, ?, ?, ?, ?, NULL)
+                    """.trimIndent()
+                ).apply {
+                    bindString(1, skill.slug)
+                    bindString(2, skill.name)
+                    bindString(3, skill.description)
+                    bindString(4, skill.whenToUse)
+                    bindString(5, skill.instructions)
+                    bindString(6, skill.category.name)
+                    bindString(7, tools)
+                    bindLong(8, skill.version.toLong())
+                    bindLong(9, now)
+                    bindLong(10, now)
+                    bindLong(11, now)
+                    executeInsert()
+                    close()
+                }
+
+                db.compileStatement(
+                    """
+                    UPDATE skills SET
+                        name = ?, description = ?, whenToUse = ?, instructions = ?,
+                        category = ?, requiredTools = ?, origin = 'BUILTIN', isImmutable = 1,
+                        version = ?, updatedAt = ?
+                    WHERE slug = ? AND (
+                        version != ? OR origin != 'BUILTIN' OR isImmutable = 0 OR
+                        category != ? OR requiredTools != ?
+                    )
+                    """.trimIndent()
+                ).apply {
+                    bindString(1, skill.name)
+                    bindString(2, skill.description)
+                    bindString(3, skill.whenToUse)
+                    bindString(4, skill.instructions)
+                    bindString(5, skill.category.name)
+                    bindString(6, tools)
+                    bindLong(7, skill.version.toLong())
+                    bindLong(8, now)
+                    bindString(9, skill.slug)
+                    bindLong(10, skill.version.toLong())
+                    bindString(11, skill.category.name)
+                    bindString(12, tools)
+                    executeUpdateDelete()
+                    close()
+                }
+            }
+
+            db.query(
+                "SELECT id, description, whenToUse, instructions FROM skills " +
+                    "WHERE origin != 'BUILTIN' AND requiredTools = ''"
+            ).use { cursor ->
+                val idIndex = cursor.getColumnIndexOrThrow("id")
+                val descriptionIndex = cursor.getColumnIndexOrThrow("description")
+                val whenIndex = cursor.getColumnIndexOrThrow("whenToUse")
+                val instructionsIndex = cursor.getColumnIndexOrThrow("instructions")
+                while (cursor.moveToNext()) {
+                    val text = listOf(
+                        cursor.getString(descriptionIndex),
+                        cursor.getString(whenIndex),
+                        cursor.getString(instructionsIndex)
+                    ).joinToString("\n")
+                    val tools = CapabilityCatalog.detectRequiredTools(text)
+                    if (tools.isEmpty()) continue
+                    db.compileStatement(
+                        "UPDATE skills SET category = ?, requiredTools = ? WHERE id = ?"
+                    ).apply {
+                        bindString(1, CapabilityCatalog.inferCategory(tools).name)
+                        bindString(2, tools.sorted().joinToString(","))
+                        bindLong(3, cursor.getLong(idIndex))
+                        executeUpdateDelete()
+                        close()
+                    }
+                }
+            }
+        }
+
+        fun ensureDefaultMcpServers(db: SupportSQLiteDatabase) {
+            val now = System.currentTimeMillis()
+            CapabilityCatalog.mcpCapabilities.forEach { capability ->
+                db.compileStatement(
+                    """
+                    INSERT OR IGNORE INTO mcp_servers (
+                        id, name, description, isEnabled, configJson, createdAt, updatedAt
+                    ) VALUES (?, ?, ?, 0, '{}', ?, ?)
+                    """.trimIndent()
+                ).apply {
+                    bindString(1, capability.id)
+                    bindString(2, capability.name)
+                    bindString(3, capability.description)
+                    bindLong(4, now)
+                    bindLong(5, now)
+                    executeInsert()
+                    close()
+                }
             }
         }
 

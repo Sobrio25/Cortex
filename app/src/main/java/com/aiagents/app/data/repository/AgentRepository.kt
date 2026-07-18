@@ -6,7 +6,9 @@ import com.aiagents.app.data.auth.ProviderCredentialResolver
 import com.aiagents.app.data.diagnostics.DiagnosticTraceStore
 import com.aiagents.app.data.diagnostics.TurnCorrelationId
 import com.aiagents.app.data.local.AgentDao
+import com.aiagents.app.data.capabilities.CapabilityCatalog
 import com.aiagents.app.data.local.CommandPermissionDao
+import com.aiagents.app.data.local.ChatPreferences
 import com.aiagents.app.data.local.ConversationDao
 import com.aiagents.app.data.local.FileDao
 import com.aiagents.app.data.local.MessageDao
@@ -30,6 +32,7 @@ import com.aiagents.app.data.remote.isHttp400
 import com.aiagents.app.data.runtime.RuntimeContextProvider
 import com.aiagents.app.data.runtime.RuntimeContextProfile
 import com.aiagents.app.data.skills.SkillReviewScheduler
+import com.aiagents.app.data.skills.SkillRuntimeProvider
 import com.aiagents.app.data.terminal.AgentCreatorToolHandler
 import com.aiagents.app.data.terminal.AgentSelectionToolHandler
 import com.aiagents.app.data.terminal.BraveSearchToolHandler
@@ -103,6 +106,7 @@ class AgentRepository @Inject constructor(
     private val conversationDao: ConversationDao,
     private val commandPermissionDao: CommandPermissionDao,
     private val securePreferences: SecurePreferences,
+    private val chatPreferences: ChatPreferences,
     private val providerModelCatalogCache: ProviderModelCatalogCache,
     private val providerCredentialResolver: ProviderCredentialResolver,
     private val aiClientFactory: AIClientFactory,
@@ -143,6 +147,7 @@ class AgentRepository @Inject constructor(
     private val todoToolHandler: TodoToolHandler,
     private val scheduledTaskToolHandler: ScheduledTaskToolHandler,
     private val runtimeContextProvider: RuntimeContextProvider,
+    private val skillRuntimeProvider: SkillRuntimeProvider,
     private val skillReviewScheduler: SkillReviewScheduler,
     private val diagnosticTraceStore: DiagnosticTraceStore,
     private val localModelRepository: com.aiagents.app.data.local.LocalModelRepository? = null
@@ -260,10 +265,15 @@ class AgentRepository @Inject constructor(
             } else {
                 messageDao.getRecentConversationMessagesForWorkspace(workspaceId, 80)
             }.asReversed().map { it.toDomain() }
+            val conversationModel = conversationId
+                ?.let { conversationDao.getConversationById(it)?.selectedModelOverride }
+                .orEmpty()
             skillReviewScheduler.recordCompletedTurn(
                 scopeId = workspaceId,
                 recentTranscript = recent,
-                modelKey = workspace.selectedModel
+                modelKey = conversationModel
+                    .ifBlank { chatPreferences.defaultModel.value }
+                    .ifBlank { workspace.selectedModel }
             )
         }.onFailure {
             Log.w("AgentRepository", "Could not schedule background self-improvement", it)
@@ -287,6 +297,10 @@ class AgentRepository @Inject constructor(
 
     suspend fun createConversation(conversation: Conversation): Long {
         return conversationDao.insertConversation(ConversationEntity.fromDomain(conversation))
+    }
+
+    suspend fun setConversationModelOverride(conversationId: Long, model: String) {
+        conversationDao.setSelectedModelOverride(conversationId, model)
     }
 
     suspend fun deleteConversation(id: Long) {
@@ -1101,6 +1115,22 @@ class AgentRepository @Inject constructor(
     fun getTodoToolHandler(): TodoToolHandler = todoToolHandler
     fun getScheduledTaskToolHandler(): ScheduledTaskToolHandler = scheduledTaskToolHandler
 
+    fun isToolEnabledByCapabilities(toolName: String): Boolean {
+        if (toolName == ToolSearchHandler.TOOL_NAME) return true
+        if (!skillRuntimeProvider.isToolEnabled(toolName)) return false
+        CapabilityCatalog.mcpIdForTool(toolName)?.let { mcpId ->
+            if (!skillRuntimeProvider.isMcpEnabled(mcpId)) return false
+        }
+        if (toolName == UnifiedWebToolHandler.TOOL_SEARCH) {
+            return when (unifiedWebToolHandler.selectedProvider()) {
+                WebSearchProvider.NATIVE -> true
+                WebSearchProvider.BRAVE -> skillRuntimeProvider.isMcpEnabled("brave_search")
+                WebSearchProvider.SERPAPI -> skillRuntimeProvider.isMcpEnabled("serpapi")
+            }
+        }
+        return true
+    }
+
     /**
      * Builds the full tool definition list for a given agent, respecting enabledTools filter.
      * Supports deferred mode: when there are many tools (> threshold), only sends core tools
@@ -1332,9 +1362,9 @@ class AgentRepository @Inject constructor(
             "|${securePreferences.hasCanvaAccessToken()}|${securePreferences.isPubMedEnabled()}" +
             "|${securePreferences.hasGitHubToken()}|${securePreferences.hasNotionToken()}|${securePreferences.hasSlackToken()}" +
             "|${securePreferences.hasGoogleWorkspaceConfig()}" +
-            "|${securePreferences.isFinanceEnabled()}|${securePreferences.isWeatherEnabled()}" +
-            "|${securePreferences.isImageGenerationEnabled()}" +
-            "|web=${webSearchProvider.name}:${unifiedWebToolHandler.isSearchConfigured()}"
+            "|${securePreferences.isFinanceEnabled()}" +
+            "|web=${webSearchProvider.name}:${unifiedWebToolHandler.isSearchConfigured()}" +
+            "|capabilities=${skillRuntimeProvider.revision()}"
 
         cachedAllTools?.let { if (cachedAllToolsKey == cacheKey) return it }
 
@@ -1350,63 +1380,89 @@ class AgentRepository @Inject constructor(
                 val name = extractToolNames(listOf(definition)).firstOrNull() ?: return@forEach
                 val allowed = enabledSet == null || "web" in enabledSet || name in enabledSet ||
                     (name == UnifiedWebToolHandler.TOOL_SEARCH && "serpapi" in enabledSet)
+                val selectedProviderEnabled = when (webSearchProvider) {
+                    WebSearchProvider.NATIVE -> true
+                    WebSearchProvider.BRAVE -> skillRuntimeProvider.isMcpEnabled("brave_search")
+                    WebSearchProvider.SERPAPI -> skillRuntimeProvider.isMcpEnabled("serpapi")
+                }
                 val configured = name != UnifiedWebToolHandler.TOOL_SEARCH ||
-                    unifiedWebToolHandler.isSearchConfigured()
+                    (unifiedWebToolHandler.isSearchConfigured() && selectedProviderEnabled)
                 if (allowed && configured) add(definition)
             }
         }
 
         val mcpTools = buildList {
             if (webSearchProvider == WebSearchProvider.BRAVE &&
+                skillRuntimeProvider.isMcpEnabled("brave_search") &&
                 (enabledSet == null || "web" in enabledSet || "brave_search" in enabledSet)
             ) {
                 if (securePreferences.hasBraveApiKey()) addAll(BraveSearchToolHandler.getToolDefinitionsJson())
             }
-            if (enabledSet == null || "google_maps" in enabledSet) {
+            if (skillRuntimeProvider.isMcpEnabled("google_maps") &&
+                (enabledSet == null || "google_maps" in enabledSet)
+            ) {
                 if (securePreferences.hasGoogleMapsApiKey()) addAll(GoogleMapsToolHandler.getToolDefinitionsJson())
             }
             if (webSearchProvider == WebSearchProvider.SERPAPI &&
+                skillRuntimeProvider.isMcpEnabled("serpapi") &&
                 (enabledSet == null || "web" in enabledSet || "serpapi" in enabledSet)
             ) {
                 if (securePreferences.hasSerpApiKey()) addAll(SerpAPIToolHandler.getToolDefinitionsJson())
             }
-            if (enabledSet == null || "canva" in enabledSet) {
+            if (skillRuntimeProvider.isMcpEnabled("canva") &&
+                (enabledSet == null || "canva" in enabledSet)
+            ) {
                 if (securePreferences.hasCanvaAccessToken()) addAll(CanvaToolHandler.getToolDefinitionsJson())
             }
-            val isHealthAgent = agent.name.equals("Health Advisor", ignoreCase = true)
-            if (isHealthAgent || enabledSet == null || "pubmed" in enabledSet) {
-                if (isHealthAgent || securePreferences.isPubMedEnabled()) addAll(PubMedToolHandler.getToolDefinitionsJson())
+            if (skillRuntimeProvider.isMcpEnabled("pubmed") &&
+                (enabledSet == null || "pubmed" in enabledSet)
+            ) {
+                if (securePreferences.isPubMedEnabled()) addAll(PubMedToolHandler.getToolDefinitionsJson())
             }
-            if (enabledSet == null || "obsidian" in enabledSet) {
+            if (skillRuntimeProvider.isMcpEnabled("obsidian") &&
+                (enabledSet == null || "obsidian" in enabledSet)
+            ) {
                 if (securePreferences.hasObsidianVaultPath()) addAll(ObsidianToolHandler.getToolDefinitionsJson())
             }
-            if (enabledSet == null || "github" in enabledSet) {
+            if (skillRuntimeProvider.isMcpEnabled("github") &&
+                (enabledSet == null || "github" in enabledSet)
+            ) {
                 if (securePreferences.hasGitHubToken()) addAll(GitHubToolHandler.getToolDefinitionsJson())
             }
-            if (enabledSet == null || "notion" in enabledSet) {
+            if (skillRuntimeProvider.isMcpEnabled("notion") &&
+                (enabledSet == null || "notion" in enabledSet)
+            ) {
                 if (securePreferences.hasNotionToken()) addAll(NotionToolHandler.getToolDefinitionsJson())
             }
-            if (enabledSet == null || "slack" in enabledSet) {
+            if (skillRuntimeProvider.isMcpEnabled("slack") &&
+                (enabledSet == null || "slack" in enabledSet)
+            ) {
                 if (securePreferences.hasSlackToken()) addAll(SlackToolHandler.getToolDefinitionsJson())
             }
-            if (enabledSet == null || "gdrive" in enabledSet) {
+            if (skillRuntimeProvider.isMcpEnabled("google_drive") &&
+                (enabledSet == null || "gdrive" in enabledSet)
+            ) {
                 if (securePreferences.hasGoogleWorkspaceConfig()) addAll(GoogleDriveToolHandler.getToolDefinitionsJson())
             }
             // Google Workspace tools always available when authenticated
-            if (securePreferences.hasGoogleWorkspaceConfig()) {
+            if (skillRuntimeProvider.isMcpEnabled("google_drive") &&
+                securePreferences.hasGoogleWorkspaceConfig()
+            ) {
                 addAll(GoogleWorkspaceToolHandler.getToolDefinitionsJson())
             }
             // Finance (local, toggle-gated)
-            if (enabledSet == null || "finance" in enabledSet) {
+            if (skillRuntimeProvider.isMcpEnabled("finance") &&
+                (enabledSet == null || "finance" in enabledSet)
+            ) {
                 if (securePreferences.isFinanceEnabled()) addAll(FinanceToolHandler.getToolDefinitionsJson())
             }
             if (enabledSet == null || "academic" in enabledSet) {
                 addAll(AcademicSearchToolHandler.getToolDefinitionsJson())
             }
-            if ((enabledSet == null || "weather" in enabledSet) && securePreferences.isWeatherEnabled()) {
+            if (enabledSet == null || "weather" in enabledSet) {
                 addAll(WeatherToolHandler.getToolDefinitionsJson())
             }
-            if ((enabledSet == null || "image_generation" in enabledSet) && securePreferences.isImageGenerationEnabled()) {
+            if (enabledSet == null || "image_generation" in enabledSet) {
                 addAll(ImageGenerationToolHandler.getToolDefinitionsJson())
             }
             // Always available tools (no config needed)
@@ -1434,7 +1490,10 @@ class AgentRepository @Inject constructor(
             }
         }
 
-        val tools = baseTools + mcpTools
+        val enabledCapabilityTools = skillRuntimeProvider.enabledToolNames()
+        val tools = (baseTools + mcpTools).filter { definition ->
+            extractToolNames(listOf(definition)).firstOrNull() in enabledCapabilityTools
+        }
         cachedAllTools = tools
         cachedAllToolsKey = cacheKey
         Log.d("AgentRepository", "Built ${tools.size} total tools for agent '${agent.name}'")
@@ -1692,7 +1751,9 @@ class AgentRepository @Inject constructor(
             return Result.failure(Exception("No hay ningún modelo seleccionado. Configura un proveedor y selecciona un modelo primero."))
         }
 
-        val modelKey = selectedModels.first() // format: "PROVIDER|modelId"
+        val modelKey = chatPreferences.defaultModel.value
+            .takeIf { it.isNotBlank() }
+            ?: selectedModels.sorted().first() // format: "PROVIDER|modelId"
         val parts = modelKey.split("|", limit = 2)
         if (parts.size != 2) {
             return Result.failure(Exception("Formato de modelo inválido"))

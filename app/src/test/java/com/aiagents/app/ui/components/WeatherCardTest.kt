@@ -63,6 +63,42 @@ class WeatherCardTest {
     }
 
     @Test
+    fun `single day forecast always uses the centered featured layout`() {
+        assertEquals(
+            ForecastLayoutMode.FEATURED,
+            resolveForecastLayoutMode(dayCount = 1, availableWidthDp = 240f)
+        )
+        assertEquals(
+            ForecastLayoutMode.FEATURED,
+            resolveForecastLayoutMode(dayCount = 1, availableWidthDp = 800f)
+        )
+    }
+
+    @Test
+    fun `multiple forecast days distribute when they fit and scroll when they do not`() {
+        assertEquals(
+            ForecastLayoutMode.DISTRIBUTED,
+            resolveForecastLayoutMode(dayCount = 2, availableWidthDp = 320f)
+        )
+        assertEquals(
+            ForecastLayoutMode.SCROLLING,
+            resolveForecastLayoutMode(dayCount = 3, availableWidthDp = 320f)
+        )
+        assertEquals(
+            ForecastLayoutMode.DISTRIBUTED,
+            resolveForecastLayoutMode(dayCount = 3, availableWidthDp = 500f)
+        )
+    }
+
+    @Test
+    fun `empty forecast has a balanced placeholder layout`() {
+        assertEquals(
+            ForecastLayoutMode.EMPTY,
+            resolveForecastLayoutMode(dayCount = 0, availableWidthDp = 320f)
+        )
+    }
+
+    @Test
     fun `Open Meteo WMO codes preserve the native widget condition families`() {
         assertEquals(800, WeatherToolHandler.mapWmoToConditionId(0))
         assertEquals(741, WeatherToolHandler.mapWmoToConditionId(45))

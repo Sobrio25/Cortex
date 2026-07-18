@@ -21,6 +21,8 @@ data class SkillEntity(
     val description: String,
     val whenToUse: String,
     val instructions: String,
+    val category: String = "CUSTOM",
+    val requiredTools: String = "",
     val status: String,
     val origin: String,
     val isImmutable: Boolean = false,

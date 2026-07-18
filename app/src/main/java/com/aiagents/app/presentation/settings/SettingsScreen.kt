@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.DeveloperBoard
 import androidx.compose.material.icons.filled.Extension
@@ -56,13 +57,13 @@ fun SettingsScreen(
     onNavigateToSubscription: () -> Unit,
     onNavigateToAgents: () -> Unit,
     onNavigateToProviders: () -> Unit,
+    onNavigateToDefaultChatModel: () -> Unit,
     onNavigateToLocalModels: () -> Unit,
     onNavigateToMemory: () -> Unit,
     onNavigateToVoice: () -> Unit,
-    onNavigateToSkills: () -> Unit,
+    onNavigateToCapabilities: () -> Unit,
     onNavigateToScheduledTasks: () -> Unit,
     onNavigateToAssistant: () -> Unit,
-    onNavigateToMCP: () -> Unit,
     onNavigateToGoogleWorkspace: () -> Unit,
     onNavigateToDiagnostics: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
@@ -130,10 +131,10 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_section_models_plan),
                     entries = listOf(
                         SettingsEntry.Navigation(
-                            Icons.Default.CreditCard,
-                            stringResource(R.string.settings_subscription_title),
-                            stringResource(R.string.settings_subscription_subtitle),
-                            onNavigateToSubscription
+                            Icons.AutoMirrored.Filled.Chat,
+                            stringResource(R.string.settings_default_chat_model_title),
+                            stringResource(R.string.settings_default_chat_model_subtitle),
+                            onNavigateToDefaultChatModel
                         ),
                         SettingsEntry.Navigation(
                             Icons.Default.Cloud,
@@ -146,6 +147,12 @@ fun SettingsScreen(
                             stringResource(R.string.settings_local_models_title),
                             stringResource(R.string.settings_local_models_subtitle),
                             onNavigateToLocalModels
+                        ),
+                        SettingsEntry.Navigation(
+                            Icons.Default.CreditCard,
+                            stringResource(R.string.settings_subscription_title),
+                            stringResource(R.string.settings_subscription_subtitle),
+                            onNavigateToSubscription
                         )
                     )
                 )
@@ -157,9 +164,9 @@ fun SettingsScreen(
                     entries = listOf(
                         SettingsEntry.Navigation(
                             Icons.Default.AutoAwesome,
-                            stringResource(R.string.settings_skills_title),
-                            stringResource(R.string.settings_skills_subtitle),
-                            onNavigateToSkills
+                            stringResource(R.string.settings_capabilities_title),
+                            stringResource(R.string.settings_capabilities_subtitle),
+                            onNavigateToCapabilities
                         ),
                         SettingsEntry.Navigation(
                             Icons.Default.Alarm,
@@ -175,12 +182,6 @@ fun SettingsScreen(
                 SettingsSection(
                     title = stringResource(R.string.settings_section_integrations),
                     entries = listOf(
-                        SettingsEntry.Navigation(
-                            Icons.Default.Extension,
-                            stringResource(R.string.settings_mcp_title),
-                            stringResource(R.string.settings_mcp_subtitle),
-                            onNavigateToMCP
-                        ),
                         SettingsEntry.Navigation(
                             Icons.Default.CloudSync,
                             stringResource(R.string.settings_google_workspace_title),

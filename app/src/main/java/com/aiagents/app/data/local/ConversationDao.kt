@@ -36,6 +36,13 @@ interface ConversationDao {
     @Query("UPDATE conversations SET status = :status, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateConversationStatus(id: Long, status: String, updatedAt: Long = System.currentTimeMillis())
 
+    @Query("UPDATE conversations SET selectedModelOverride = :model, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun setSelectedModelOverride(
+        id: Long,
+        model: String,
+        updatedAt: Long = System.currentTimeMillis()
+    )
+
     // Memory extraction related queries
     
     /**

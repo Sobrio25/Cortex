@@ -14,7 +14,7 @@ interface SkillDao {
         """
         SELECT * FROM skills
         ORDER BY
-            CASE status WHEN 'ACTIVE' THEN 0 WHEN 'DRAFT' THEN 1 ELSE 2 END,
+            CASE status WHEN 'ACTIVE' THEN 0 WHEN 'INACTIVE' THEN 1 WHEN 'DRAFT' THEN 2 ELSE 3 END,
             isImmutable DESC,
             name COLLATE NOCASE ASC
         """
@@ -49,6 +49,8 @@ interface SkillDao {
             description = :description,
             whenToUse = :whenToUse,
             instructions = :instructions,
+            category = :category,
+            requiredTools = :requiredTools,
             version = version + 1,
             updatedAt = :updatedAt
         WHERE id = :id AND isImmutable = 0
@@ -60,6 +62,8 @@ interface SkillDao {
         description: String,
         whenToUse: String,
         instructions: String,
+        category: String,
+        requiredTools: String,
         updatedAt: Long
     ): Int
 
@@ -70,6 +74,8 @@ interface SkillDao {
             description = :description,
             whenToUse = :whenToUse,
             instructions = :instructions,
+            category = :category,
+            requiredTools = :requiredTools,
             status = 'ACTIVE',
             version = version + 1,
             updatedAt = :updatedAt,
@@ -87,6 +93,8 @@ interface SkillDao {
         description: String,
         whenToUse: String,
         instructions: String,
+        category: String,
+        requiredTools: String,
         updatedAt: Long
     ): Int
 
@@ -97,10 +105,10 @@ interface SkillDao {
             updatedAt = :updatedAt,
             activatedAt = :activatedAt,
             archivedAt = :archivedAt
-        WHERE id = :id AND isImmutable = 0
+        WHERE id = :id
         """
     )
-    suspend fun updateMutableStatus(
+    suspend fun updateStatus(
         id: Long,
         status: String,
         updatedAt: Long,

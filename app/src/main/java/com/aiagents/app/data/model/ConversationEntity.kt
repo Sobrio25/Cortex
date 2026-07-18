@@ -31,7 +31,8 @@ data class ConversationEntity(
     val delegationTask: String? = null,
     val status: String = "active",
     val lastMemoryExtraction: Long? = null,  // Timestamp of last successful memory extraction
-    val contextKind: String = ConversationContextKind.CHAT.name
+    val contextKind: String = ConversationContextKind.CHAT.name,
+    val selectedModelOverride: String = ""
 ) {
     fun toDomain(): Conversation = Conversation(
         id = id,
@@ -45,7 +46,8 @@ data class ConversationEntity(
         status = status,
         lastMemoryExtraction = lastMemoryExtraction,
         contextKind = runCatching { ConversationContextKind.valueOf(contextKind) }
-            .getOrDefault(ConversationContextKind.CHAT)
+            .getOrDefault(ConversationContextKind.CHAT),
+        selectedModelOverride = selectedModelOverride
     )
 
     /**
@@ -67,7 +69,8 @@ data class ConversationEntity(
             delegationTask = conversation.delegationTask,
             status = conversation.status,
             lastMemoryExtraction = conversation.lastMemoryExtraction,
-            contextKind = conversation.contextKind.name
+            contextKind = conversation.contextKind.name,
+            selectedModelOverride = conversation.selectedModelOverride
         )
     }
 }

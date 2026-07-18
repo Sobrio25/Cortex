@@ -101,7 +101,9 @@ object DatabaseModule {
                 AppDatabase.MIGRATION_44_45,
                 AppDatabase.MIGRATION_45_46,
                 AppDatabase.MIGRATION_46_47,
-                AppDatabase.migration47To48(voicePreferences)
+                AppDatabase.migration47To48(voicePreferences),
+                AppDatabase.MIGRATION_48_49,
+                AppDatabase.MIGRATION_49_50
             )
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onCreate(db: SupportSQLiteDatabase) {
@@ -123,6 +125,7 @@ object DatabaseModule {
                     }
                     AppDatabase.repairMemoryFtsTriggers(db)
                     AppDatabase.ensureBuiltInSkills(db)
+                    AppDatabase.ensureDefaultMcpServers(db)
                 }
             })
             .build()

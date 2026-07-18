@@ -12,16 +12,20 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -62,6 +66,7 @@ fun SubscriptionScreen(
     val products by viewModel.products.collectAsState()
     val privacyAccepted by viewModel.privacyAccepted.collectAsState()
     val googleSignedIn by viewModel.googleSignedIn.collectAsState()
+    val privacyAcknowledged by viewModel.privacyAcknowledged.collectAsState()
     val activity = LocalContext.current.findActivity()
     val managedReady = privacyAccepted && googleSignedIn
 
@@ -82,6 +87,19 @@ fun SubscriptionScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            item {
+                GatewayAccountCard(
+                    googleSignedIn = googleSignedIn,
+                    privacyAccepted = privacyAccepted,
+                    privacyAcknowledged = privacyAcknowledged,
+                    loading = uiState.loading,
+                    activityAvailable = activity != null,
+                    onSignIn = { activity?.let(viewModel::signInWithGoogle) },
+                    onPrivacyAcknowledgedChange = viewModel::setPrivacyAcknowledged,
+                    onActivateFreePlan = viewModel::activateFreePlan
+                )
+            }
+
             item {
                 UsageCard(
                     planName = usage.plan.displayName,
@@ -161,6 +179,125 @@ fun SubscriptionScreen(
                     ) {
                         Text(message, Modifier.padding(14.dp))
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GatewayAccountCard(
+    googleSignedIn: Boolean,
+    privacyAccepted: Boolean,
+    privacyAcknowledged: Boolean,
+    loading: Boolean,
+    activityAvailable: Boolean,
+    onSignIn: () -> Unit,
+    onPrivacyAcknowledgedChange: (Boolean) -> Unit,
+    onActivateFreePlan: () -> Unit
+) {
+    val ready = googleSignedIn && privacyAccepted
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (ready) {
+                MaterialTheme.colorScheme.tertiaryContainer
+            } else {
+                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f)
+            }
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (ready) Icons.Default.CheckCircle else Icons.Default.AccountCircle,
+                    contentDescription = null
+                )
+                Text(
+                    stringResource(R.string.gateway_account_title),
+                    modifier = Modifier.padding(start = 10.dp),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            when {
+                !googleSignedIn -> {
+                    Text(
+                        stringResource(R.string.gateway_sign_in_description),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Button(
+                        onClick = onSignIn,
+                        enabled = activityAvailable && !loading,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (loading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        } else {
+                            Icon(Icons.Default.AccountCircle, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(stringResource(R.string.google_sign_in_button))
+                    }
+                }
+
+                !privacyAccepted -> {
+                    Text(
+                        stringResource(R.string.google_sign_in_complete),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        stringResource(R.string.managed_privacy_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        stringResource(R.string.managed_privacy_notice),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Row(verticalAlignment = Alignment.Top) {
+                        Checkbox(
+                            checked = privacyAcknowledged,
+                            onCheckedChange = onPrivacyAcknowledgedChange,
+                            enabled = !loading
+                        )
+                        Text(
+                            stringResource(R.string.managed_privacy_acknowledgement),
+                            modifier = Modifier.padding(start = 8.dp, top = 12.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Button(
+                        onClick = onActivateFreePlan,
+                        enabled = privacyAcknowledged && !loading,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (loading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(stringResource(R.string.gateway_activate_button))
+                    }
+                }
+
+                else -> {
+                    Text(
+                        stringResource(R.string.gateway_connected_description),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
         }

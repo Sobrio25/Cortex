@@ -14,6 +14,7 @@ import com.aiagents.app.MainActivity
 import com.aiagents.app.R
 import com.aiagents.app.data.local.ScheduledTaskDao
 import com.aiagents.app.data.local.SecurePreferences
+import com.aiagents.app.data.local.ChatPreferences
 import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.data.repository.FileRepository
 import com.aiagents.app.domain.model.Message
@@ -40,6 +41,7 @@ class ScheduledTaskWorker @AssistedInject constructor(
     private val repository: AgentRepository,
     private val fileRepository: FileRepository,
     private val securePreferences: SecurePreferences,
+    private val chatPreferences: ChatPreferences,
     private val taskSchedulerManager: TaskSchedulerManager
 ) : CoroutineWorker(appContext, workerParams) {
 
@@ -71,7 +73,12 @@ class ScheduledTaskWorker @AssistedInject constructor(
 
         return try {
             val conversationId = ensureConversation(task)
-            val execution = executeAgentTask(task.agentName, task.prompt, task.workspaceId)
+            val execution = executeAgentTask(
+                task.agentName,
+                task.prompt,
+                task.workspaceId,
+                conversationId
+            )
             val resultText = execution.content
             persistExecution(task, conversationId, execution)
             val summary = resultText.take(500)
@@ -113,7 +120,8 @@ class ScheduledTaskWorker @AssistedInject constructor(
     private suspend fun executeAgentTask(
         agentName: String?,
         prompt: String,
-        workspaceId: Long
+        workspaceId: Long,
+        conversationId: Long
     ): AgentExecutionResult {
         val agent = if (agentName != null) {
             repository.getAgentByName(agentName) ?: repository.getOrchestratorAgent()
@@ -124,7 +132,12 @@ class ScheduledTaskWorker @AssistedInject constructor(
         val messages = mutableListOf(Message(role = MessageRole.USER, content = prompt))
         var finalContent = ""
         val workspace = repository.getWorkspaceById(workspaceId)
-        val selectedModelKey = workspace?.selectedModel?.takeIf { it.contains('|') }
+        val conversationModel = repository.getConversationById(conversationId)
+            ?.selectedModelOverride
+            .orEmpty()
+        val selectedModelKey = conversationModel.takeIf { it.contains('|') }
+            ?: chatPreferences.defaultModel.value.takeIf { it.contains('|') }
+            ?: workspace?.selectedModel?.takeIf { it.contains('|') }
             ?: securePreferences.getSelectedModels().firstOrNull()
             ?: throw IllegalStateException("La tarea no tiene un modelo configurado")
         val provider = runCatching {

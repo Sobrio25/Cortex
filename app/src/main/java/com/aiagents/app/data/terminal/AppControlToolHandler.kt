@@ -2,6 +2,7 @@ package com.aiagents.app.data.terminal
 
 import android.util.Log
 import com.aiagents.app.data.local.AgentDao
+import com.aiagents.app.data.local.ChatPreferences
 import com.aiagents.app.data.local.MCPDao
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.local.WorkspaceDao
@@ -26,6 +27,7 @@ data class AppControlResult(
 @Singleton
 class AppControlToolHandler @Inject constructor(
     private val securePreferences: SecurePreferences,
+    private val chatPreferences: ChatPreferences,
     private val workspaceDao: WorkspaceDao,
     private val agentDao: AgentDao,
     private val mcpDao: MCPDao
@@ -46,12 +48,12 @@ class AppControlToolHandler @Inject constructor(
 MODEL:
 - "get_status": Current model, provider, workspace info, and configured services
 - "list_models": List all available models (selected by user)
-- "set_model": Change active model. Params: model (format "PROVIDER|modelId", e.g. "OPENROUTER|google/gemini-2.5-flash"), workspace_id (optional, defaults to current)
+- "set_model": Change the global default chat model. Params: model (format "PROVIDER|modelId", e.g. "OPENROUTER|google/gemini-2.5-flash")
 - "list_providers": List all providers and their configuration status
 
 SERVICES:
 - "list_services": List all MCP services and their enabled/configured status
-- "toggle_service": Enable/disable a service. Params: service (brave_search|google_maps|serpapi|pubmed|finance|weather|image_generation), enabled (true/false)
+- "toggle_service": Enable/disable an MCP service. Params: service (brave_search|google_maps|serpapi|canva|pubmed|obsidian|github|notion|slack|google_drive|finance), enabled (true/false)
 
 AGENTS:
 - "list_agents": List all agents with their config summary
@@ -95,7 +97,7 @@ DISPLAY:
             when (action) {
                 "get_status" -> getStatus(toolCallId, currentWorkspaceId)
                 "list_models" -> listModels(toolCallId)
-                "set_model" -> setModel(toolCallId, params, currentWorkspaceId)
+                "set_model" -> setModel(toolCallId, params)
                 "list_providers" -> listProviders(toolCallId)
                 "list_services" -> listServices(toolCallId)
                 "toggle_service" -> toggleService(toolCallId, params)
@@ -137,7 +139,7 @@ DISPLAY:
 
         val info = buildString {
             appendLine("Workspace: ${workspace?.name ?: "Unknown"} (id: $workspaceId)")
-            appendLine("Model: ${workspace?.selectedModel ?: "none"}")
+            appendLine("Default chat model: ${chatPreferences.defaultModel.value.ifBlank { "none" }}")
             appendLine("Provider: ${activeProvider?.name ?: "auto"}")
             appendLine("Display: reasoning=${showReasoning}, commands=${showCommands}")
             if (services.isNotEmpty()) {
@@ -173,7 +175,7 @@ DISPLAY:
 
     // ── set_model ────────────────────────────────────────────────────────────
 
-    private suspend fun setModel(toolCallId: String, params: JsonObject, defaultWorkspaceId: Long): AppControlResult {
+    private fun setModel(toolCallId: String, params: JsonObject): AppControlResult {
         val model = params.get("model")?.asString
             ?: return AppControlResult(toolCallId, success = false, content = "Missing 'model' param. Use format 'PROVIDER|modelId'.")
 
@@ -189,14 +191,12 @@ DISPLAY:
                 return AppControlResult(toolCallId, success = false, content = "Model '$model' is not in the selected models list. Available: ${selectedModels.sorted().joinToString(", ")}")
             }
             // Use the correctly-cased version
-            val wsId = params.get("workspace_id")?.asLong ?: defaultWorkspaceId
-            workspaceDao.setSelectedModel(wsId, match)
-            return AppControlResult(toolCallId, success = true, content = "Model changed to: $match")
+            chatPreferences.setDefaultModel(match)
+            return AppControlResult(toolCallId, success = true, content = "Default chat model changed to: $match")
         }
 
-        val wsId = params.get("workspace_id")?.asLong ?: defaultWorkspaceId
-        workspaceDao.setSelectedModel(wsId, model)
-        return AppControlResult(toolCallId, success = true, content = "Model changed to: $model")
+        chatPreferences.setDefaultModel(model)
+        return AppControlResult(toolCallId, success = true, content = "Default chat model changed to: $model")
     }
 
     // ── list_providers ───────────────────────────────────────────────────────
@@ -235,42 +235,40 @@ DISPLAY:
             appendLine("  obsidian: ${if (securePreferences.hasObsidianVaultPath()) "configured" else "no vault path"}")
             appendLine("  canva: ${if (securePreferences.hasCanvaAccessToken()) "configured" else "no token"}")
             appendLine()
-            appendLine("Toggleable features:")
-            appendLine("  finance: ${if (securePreferences.isFinanceEnabled()) "ON" else "OFF"}")
-            appendLine("  pubmed: ${if (securePreferences.isPubMedEnabled()) "ON" else "OFF"}")
-            appendLine("  weather: ${if (securePreferences.isWeatherEnabled()) "ON" else "OFF"}")
-            appendLine("  image_generation: ${if (securePreferences.isImageGenerationEnabled()) "ON" else "OFF"}")
+            appendLine("Activation is controlled in Settings > Capabilities.")
         }
         return AppControlResult(toolCallId, success = true, content = info.trim())
     }
 
     // ── toggle_service ───────────────────────────────────────────────────────
 
-    private fun toggleService(toolCallId: String, params: JsonObject): AppControlResult {
+    private suspend fun toggleService(toolCallId: String, params: JsonObject): AppControlResult {
         val service = params.get("service")?.asString
             ?: return AppControlResult(toolCallId, success = false, content = "Missing 'service' param.")
         val enabled = params.get("enabled")?.asBoolean
             ?: return AppControlResult(toolCallId, success = false, content = "Missing 'enabled' param (true/false).")
 
-        return when (service) {
-            "finance" -> {
-                securePreferences.setFinanceEnabled(enabled)
-                AppControlResult(toolCallId, success = true, content = "Finance ${if (enabled) "enabled" else "disabled"}.")
-            }
-            "pubmed" -> {
-                securePreferences.setPubMedEnabled(enabled)
-                AppControlResult(toolCallId, success = true, content = "PubMed ${if (enabled) "enabled" else "disabled"}.")
-            }
-            "weather" -> {
-                securePreferences.setWeatherEnabled(enabled)
-                AppControlResult(toolCallId, success = true, content = "Weather ${if (enabled) "enabled" else "disabled"}.")
-            }
-            "image_generation" -> {
-                securePreferences.setImageGenerationEnabled(enabled)
-                AppControlResult(toolCallId, success = true, content = "Image generation ${if (enabled) "enabled" else "disabled"}.")
-            }
-            else -> AppControlResult(toolCallId, success = false, content = "Service '$service' is not toggleable. Only finance, pubmed, weather, image_generation can be toggled. Services like brave_search, github, etc. require API keys configured in Settings.")
+        val mcpId = when (service) {
+            "google_workspace" -> "google_drive"
+            "brave_search", "google_maps", "serpapi", "canva", "pubmed", "obsidian",
+            "github", "notion", "slack", "google_drive", "finance" -> service
+            else -> null
+        } ?: return AppControlResult(
+            toolCallId,
+            success = false,
+            content = "Unknown MCP service '$service'. Skills such as weather and image generation are controlled in Settings > Capabilities."
+        )
+
+        mcpDao.setServerEnabled(mcpId, enabled)
+        when (mcpId) {
+            "finance" -> securePreferences.setFinanceEnabled(enabled)
+            "pubmed" -> securePreferences.setPubMedEnabled(enabled)
         }
+        return AppControlResult(
+            toolCallId,
+            success = true,
+            content = "$mcpId ${if (enabled) "enabled" else "disabled"}."
+        )
     }
 
     // ── list_agents ──────────────────────────────────────────────────────────

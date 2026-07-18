@@ -16,6 +16,7 @@ class ScreenRouteTest {
             Screen.Subscription.route,
             Screen.Agents.route,
             Screen.Providers.route,
+            Screen.DefaultChatModel.route,
             Screen.LocalModels.route,
             Screen.MCP.route,
             Screen.Memory.route,
@@ -23,6 +24,7 @@ class ScreenRouteTest {
             Screen.ScheduledTasks.route,
             Screen.Assistant.route,
             Screen.Voice.route,
+            Screen.Capabilities.route,
             Screen.GoogleWorkspace.route
         )
 

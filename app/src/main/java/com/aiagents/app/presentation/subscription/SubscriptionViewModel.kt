@@ -46,6 +46,8 @@ class SubscriptionViewModel @Inject constructor(
     val privacyAccepted = _privacyAccepted.asStateFlow()
     private val _googleSignedIn = MutableStateFlow(firebaseAuthManager.isGoogleSignedIn)
     val googleSignedIn = _googleSignedIn.asStateFlow()
+    private val _privacyAcknowledged = MutableStateFlow(false)
+    val privacyAcknowledged = _privacyAcknowledged.asStateFlow()
 
     init {
         billing.connect()
@@ -78,6 +80,61 @@ class SubscriptionViewModel @Inject constructor(
     fun restore() {
         _uiState.value = _uiState.value.copy(message = null)
         billing.restorePurchases()
+    }
+
+    fun signInWithGoogle(activity: Activity) {
+        if (_uiState.value.loading) return
+        viewModelScope.launch {
+            _uiState.value = SubscriptionUiState(loading = true)
+            runCatching {
+                firebaseAuthManager.signInWithGoogle(activity)
+                check(firebaseAuthManager.isGoogleSignedIn) {
+                    "No se pudo vincular la cuenta de Google"
+                }
+                _googleSignedIn.value = true
+                repository.refresh().getOrThrow()
+                applyAccountConsent()
+            }.onSuccess {
+                _uiState.value = SubscriptionUiState(loading = false)
+            }.onFailure {
+                _googleSignedIn.value = firebaseAuthManager.isGoogleSignedIn
+                _uiState.value = SubscriptionUiState(
+                    loading = false,
+                    message = purchaseError(it, "google_sign_in")
+                )
+            }
+        }
+    }
+
+    fun setPrivacyAcknowledged(acknowledged: Boolean) {
+        _privacyAcknowledged.value = acknowledged
+    }
+
+    fun activateFreePlan() {
+        if (
+            _uiState.value.loading ||
+            !_googleSignedIn.value ||
+            !_privacyAcknowledged.value
+        ) return
+
+        viewModelScope.launch {
+            _uiState.value = SubscriptionUiState(loading = true)
+            repository.acceptFreeDataConsent()
+                .onSuccess {
+                    securePreferences.enableManagedFreePlan()
+                    _privacyAccepted.value = true
+                    _privacyAcknowledged.value = false
+                    _uiState.value = SubscriptionUiState(
+                        loading = false
+                    )
+                }
+                .onFailure {
+                    _uiState.value = SubscriptionUiState(
+                        loading = false,
+                        message = purchaseError(it, "consent_acceptance")
+                    )
+                }
+        }
     }
 
     private fun applyAccountConsent() {

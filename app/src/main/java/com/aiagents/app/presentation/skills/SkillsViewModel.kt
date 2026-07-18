@@ -70,6 +70,14 @@ class SkillsViewModel @Inject constructor(
         }
     }
 
+    fun setEnabled(id: Long, enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setEnabled(id, enabled)
+                .onSuccess { _events.emit(if (enabled) "Skill activada" else "Skill desactivada") }
+                .onFailure { _events.emit(skillError(it, "skill_toggle")) }
+        }
+    }
+
     fun archive(id: Long) {
         viewModelScope.launch {
             repository.archive(id)

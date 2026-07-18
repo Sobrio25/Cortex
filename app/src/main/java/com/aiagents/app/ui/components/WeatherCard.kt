@@ -1,6 +1,7 @@
 package com.aiagents.app.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -133,6 +135,29 @@ sealed interface WeatherCardState {
 enum class WeatherCondition {
     CLEAR_DAY, CLEAR_NIGHT, PARTLY_CLOUDY, CLOUDY, OVERCAST,
     RAIN, DRIZZLE, THUNDERSTORM, SNOW, MIST_FOG
+}
+
+internal enum class ForecastLayoutMode {
+    EMPTY,
+    FEATURED,
+    DISTRIBUTED,
+    SCROLLING
+}
+
+internal fun resolveForecastLayoutMode(
+    dayCount: Int,
+    availableWidthDp: Float
+): ForecastLayoutMode {
+    if (dayCount <= 0) return ForecastLayoutMode.EMPTY
+    if (dayCount == 1) return ForecastLayoutMode.FEATURED
+
+    val gapWidth = 10f * (dayCount - 1)
+    val availablePerDay = (availableWidthDp.coerceAtLeast(0f) - gapWidth) / dayCount
+    return if (availablePerDay >= 118f) {
+        ForecastLayoutMode.DISTRIBUTED
+    } else {
+        ForecastLayoutMode.SCROLLING
+    }
 }
 
 fun mapCondition(conditionId: Int, icon: String): WeatherCondition {
@@ -357,15 +382,18 @@ fun CurrentWeatherCard(
         append("Fuente ${data.source}.")
     }
 
+    val shape = RoundedCornerShape(24.dp)
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
+            .clip(shape)
             .background(getWeatherGradient(condition))
+            .border(1.dp, Color.White.copy(alpha = 0.18f), shape)
             .semantics(mergeDescendants = true) { contentDescription = accessibilityText }
             .padding(18.dp)
     ) {
-        val compact = maxWidth < 340.dp
+        val compact = maxWidth < 310.dp
+        val statsColumns = if (maxWidth < 360.dp) 2 else 3
         Column(modifier = Modifier.fillMaxWidth()) {
             WeatherHeader(
                 title = location,
@@ -378,43 +406,13 @@ fun CurrentWeatherCard(
                 StatusPill("Datos guardados; la fuente no respondió", textColor)
             }
             Spacer(Modifier.height(14.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = if (compact) Arrangement.Center else Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = getConditionEmoji(condition),
-                    fontSize = if (compact) 46.sp else 54.sp,
-                    modifier = Modifier.clearAndSetSemantics { }
-                )
-                Spacer(Modifier.width(14.dp))
-                Column(
-                    modifier = Modifier.weight(1f),
-                    horizontalAlignment = if (compact) Alignment.CenterHorizontally else Alignment.End
-                ) {
-                    Text(
-                        text = "${formatTemperatureValue(data.temp)}${data.unitSymbol}",
-                        style = MaterialTheme.typography.displaySmall,
-                        fontWeight = FontWeight.Bold,
-                        color = textColor,
-                        maxLines = 1
-                    )
-                    Text(
-                        text = data.description,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = secondaryColor,
-                        textAlign = if (compact) TextAlign.Center else TextAlign.End,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = "↓ ${formatTemperatureValue(data.minTemp)}${data.unitSymbol}  ↑ ${formatTemperatureValue(data.maxTemp)}${data.unitSymbol}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = textColor
-                    )
-                }
-            }
+            CurrentWeatherHero(
+                data = data,
+                condition = condition,
+                textColor = textColor,
+                secondaryColor = secondaryColor,
+                compact = compact
+            )
             Spacer(Modifier.height(16.dp))
             AdaptiveWeatherStats(
                 stats = buildList {
@@ -425,7 +423,7 @@ fun CurrentWeatherCard(
                     if (data.visibility > 0) add(WeatherStatData("Visibilidad", "${data.visibility.rounded()} ${data.visibilityUnit}"))
                     data.aqi?.let { add(WeatherStatData("AQI", "$it/5 · ${data.aqiLabel.orEmpty()}")) }
                 },
-                columns = if (compact) 2 else 3,
+                columns = statsColumns,
                 textColor = textColor,
                 secondaryColor = secondaryColor
             )
@@ -452,16 +450,19 @@ fun ForecastWeatherCard(
     val secondaryColor = textColor.copy(alpha = 0.84f)
     val location = displayLocation(data.city, data.country)
 
-    Box(
+    val shape = RoundedCornerShape(24.dp)
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
+            .clip(shape)
             .background(getWeatherGradient(condition))
+            .border(1.dp, Color.White.copy(alpha = 0.18f), shape)
             .semantics {
                 contentDescription = "Pronóstico para $location, ${data.days.size} días. Fuente ${data.source}."
             }
             .padding(18.dp)
     ) {
+        val layoutMode = resolveForecastLayoutMode(data.days.size, maxWidth.value)
         Column(Modifier.fillMaxWidth()) {
             WeatherHeader(
                 title = "Pronóstico · $location",
@@ -478,19 +479,25 @@ fun ForecastWeatherCard(
                 StatusPill("AQI $it/5 · ${data.aqiLabel.orEmpty()}", textColor)
             }
             Spacer(Modifier.height(14.dp))
-            if (data.days.isEmpty()) {
-                Text("No hay días disponibles", color = secondaryColor)
-            } else {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(data.days) { day ->
-                        ForecastDayMiniCard(
-                            day = day,
-                            unitSymbol = data.unitSymbol,
-                            textColor = textColor,
-                            secondaryColor = secondaryColor
-                        )
-                    }
-                }
+            when (layoutMode) {
+                ForecastLayoutMode.EMPTY -> EmptyForecast(
+                    textColor = textColor,
+                    secondaryColor = secondaryColor
+                )
+                ForecastLayoutMode.FEATURED -> FeaturedForecastDay(
+                    day = data.days.first(),
+                    unitSymbol = data.unitSymbol,
+                    textColor = textColor,
+                    secondaryColor = secondaryColor
+                )
+                ForecastLayoutMode.DISTRIBUTED,
+                ForecastLayoutMode.SCROLLING -> AdaptiveForecastDays(
+                    days = data.days,
+                    unitSymbol = data.unitSymbol,
+                    textColor = textColor,
+                    secondaryColor = secondaryColor,
+                    scrolling = layoutMode == ForecastLayoutMode.SCROLLING
+                )
             }
             WeatherFooter(data.updatedAt, data.timezone, data.source, data.isCached, textColor)
         }
@@ -503,61 +510,397 @@ fun AirQualityWeatherCard(
     modifier: Modifier = Modifier
 ) {
     val accent = aqiColor(data.aqi)
+    val shape = RoundedCornerShape(24.dp)
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .semantics(mergeDescendants = true) {
                 contentDescription = "Calidad del aire en ${displayLocation(data.city, data.country)}: ${data.aqi} de 5, ${data.aqiLabel}. ${data.recommendation}. Fuente ${data.source}."
             },
-        shape = RoundedCornerShape(22.dp),
+        shape = shape,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         tonalElevation = 3.dp
     ) {
-        Column(Modifier.padding(18.dp)) {
+        BoxWithConstraints(
+            Modifier
+                .fillMaxWidth()
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f), shape)
+                .padding(18.dp)
+        ) {
+            val compact = maxWidth < 310.dp
+            Column(Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Calidad del aire · ${displayLocation(data.city, data.country)}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.semantics { heading() }
+                )
+                Spacer(Modifier.height(14.dp))
+                if (compact) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        AirQualityIndexBadge(data.aqi, accent)
+                        Spacer(Modifier.height(10.dp))
+                        AirQualitySummary(
+                            data = data,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        )
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        AirQualityIndexBadge(data.aqi, accent)
+                        Spacer(Modifier.width(14.dp))
+                        AirQualitySummary(data = data, modifier = Modifier.weight(1f))
+                    }
+                }
+                val pollutants = buildList {
+                    data.pm2_5?.let { add(WeatherStatData("PM2.5", "${it.rounded()} μg/m³")) }
+                    data.pm10?.let { add(WeatherStatData("PM10", "${it.rounded()} μg/m³")) }
+                    data.o3?.let { add(WeatherStatData("Ozono", "${it.rounded()} μg/m³")) }
+                    data.no2?.let { add(WeatherStatData("NO₂", "${it.rounded()} μg/m³")) }
+                }
+                if (pollutants.isNotEmpty()) {
+                    Spacer(Modifier.height(14.dp))
+                    AdaptiveWeatherStats(
+                        stats = pollutants,
+                        columns = if (compact) 1 else 2,
+                        textColor = MaterialTheme.colorScheme.onSurface,
+                        secondaryColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        darkTile = false
+                    )
+                }
+                WeatherFooter(
+                    data.updatedAt,
+                    data.timezone,
+                    data.source,
+                    data.isCached,
+                    MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AirQualityIndexBadge(aqi: Int, accent: Color) {
+    Box(
+        modifier = Modifier
+            .size(68.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(accent.copy(alpha = 0.16f))
+            .border(1.dp, accent.copy(alpha = 0.24f), RoundedCornerShape(20.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                text = "Calidad del aire · ${displayLocation(data.city, data.country)}",
+                text = "$aqi/5",
+                style = MaterialTheme.typography.titleMedium,
+                color = accent,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "AQI",
+                style = MaterialTheme.typography.labelSmall,
+                color = accent.copy(alpha = 0.82f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AirQualitySummary(
+    data: AirQualityWeatherData,
+    modifier: Modifier = Modifier,
+    textAlign: TextAlign = TextAlign.Start,
+    horizontalAlignment: Alignment.Horizontal = Alignment.Start
+) {
+    Column(modifier = modifier, horizontalAlignment = horizontalAlignment) {
+        Text(
+            text = data.aqiLabel,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            textAlign = textAlign
+        )
+        if (data.recommendation.isNotBlank()) {
+            Text(
+                text = data.recommendation,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = textAlign
+            )
+        }
+    }
+}
+
+@Composable
+private fun CurrentWeatherHero(
+    data: CurrentWeatherData,
+    condition: WeatherCondition,
+    textColor: Color,
+    secondaryColor: Color,
+    compact: Boolean
+) {
+    if (compact) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            WeatherConditionBadge(condition, compact = true)
+            Spacer(Modifier.height(9.dp))
+            CurrentTemperatureSummary(
+                data = data,
+                textColor = textColor,
+                secondaryColor = secondaryColor,
+                horizontalAlignment = Alignment.CenterHorizontally,
+                textAlign = TextAlign.Center
+            )
+        }
+    } else {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            WeatherConditionBadge(condition, compact = false)
+            Spacer(Modifier.width(16.dp))
+            CurrentTemperatureSummary(
+                data = data,
+                textColor = textColor,
+                secondaryColor = secondaryColor,
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = Alignment.End,
+                textAlign = TextAlign.End
+            )
+        }
+    }
+}
+
+@Composable
+private fun WeatherConditionBadge(condition: WeatherCondition, compact: Boolean) {
+    Box(
+        modifier = Modifier
+            .size(if (compact) 68.dp else 76.dp)
+            .clip(RoundedCornerShape(if (compact) 20.dp else 23.dp))
+            .background(Color.White.copy(alpha = 0.14f))
+            .border(
+                1.dp,
+                Color.White.copy(alpha = 0.16f),
+                RoundedCornerShape(if (compact) 20.dp else 23.dp)
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = getConditionEmoji(condition),
+            fontSize = if (compact) 38.sp else 44.sp,
+            modifier = Modifier.clearAndSetSemantics { }
+        )
+    }
+}
+
+@Composable
+private fun CurrentTemperatureSummary(
+    data: CurrentWeatherData,
+    textColor: Color,
+    secondaryColor: Color,
+    modifier: Modifier = Modifier,
+    horizontalAlignment: Alignment.Horizontal,
+    textAlign: TextAlign
+) {
+    Column(modifier = modifier, horizontalAlignment = horizontalAlignment) {
+        Text(
+            text = "${formatTemperatureValue(data.temp)}${data.unitSymbol}",
+            style = MaterialTheme.typography.displaySmall,
+            fontWeight = FontWeight.Bold,
+            color = textColor,
+            maxLines = 1
+        )
+        Text(
+            text = data.description,
+            style = MaterialTheme.typography.bodyLarge,
+            color = secondaryColor,
+            textAlign = textAlign,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = "Mín. ${formatTemperatureValue(data.minTemp)}${data.unitSymbol}  ·  Máx. ${formatTemperatureValue(data.maxTemp)}${data.unitSymbol}",
+            style = MaterialTheme.typography.labelLarge,
+            color = textColor,
+            textAlign = textAlign
+        )
+    }
+}
+
+@Composable
+private fun FeaturedForecastDay(
+    day: ForecastDayData,
+    unitSymbol: String,
+    textColor: Color,
+    secondaryColor: Color
+) {
+    val condition = mapCondition(day.conditionId, day.icon)
+    val shape = RoundedCornerShape(20.dp)
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Color.Black.copy(alpha = 0.16f))
+            .border(1.dp, Color.White.copy(alpha = 0.16f), shape)
+            .semantics(mergeDescendants = true) {
+                contentDescription = forecastDayDescription(day, unitSymbol)
+            }
+            .padding(16.dp)
+    ) {
+        val compact = maxWidth < 280.dp
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "DÍA CONSULTADO",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = secondaryColor
+            )
+            Spacer(Modifier.height(8.dp))
+            FeaturedForecastSummary(
+                day = day,
+                condition = condition,
+                unitSymbol = unitSymbol,
+                textColor = textColor,
+                secondaryColor = secondaryColor
+            )
+            Spacer(Modifier.height(14.dp))
+            AdaptiveWeatherStats(
+                stats = listOf(
+                    WeatherStatData("Humedad media", "${day.avgHumidity}%"),
+                    WeatherStatData("Prob. de lluvia", "${day.maxPop}%")
+                ),
+                columns = if (compact) 1 else 2,
+                textColor = textColor,
+                secondaryColor = secondaryColor
+            )
+        }
+    }
+}
+
+@Composable
+private fun FeaturedForecastSummary(
+    day: ForecastDayData,
+    condition: WeatherCondition,
+    unitSymbol: String,
+    textColor: Color,
+    secondaryColor: Color
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = getConditionEmoji(condition),
+            fontSize = 44.sp,
+            modifier = Modifier.clearAndSetSemantics { }
+        )
+        Spacer(Modifier.width(14.dp))
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = day.date,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.semantics { heading() }
+                color = textColor,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
             )
-            Spacer(Modifier.height(14.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(60.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(accent.copy(alpha = 0.18f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("${data.aqi}/5", color = accent, fontWeight = FontWeight.Bold)
-                }
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(data.aqiLabel, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text(data.recommendation, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (day.description.isNotBlank()) {
+                Text(
+                    text = day.description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = secondaryColor,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
+                )
+            }
+            Text(
+                text = "${formatTemperatureValue(day.maxTemp)}${unitSymbol} / ${formatTemperatureValue(day.minTemp)}${unitSymbol}",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = textColor,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyForecast(textColor: Color, secondaryColor: Color) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color.Black.copy(alpha = 0.12f))
+            .padding(horizontal = 16.dp, vertical = 22.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text("—", style = MaterialTheme.typography.headlineSmall, color = textColor)
+        Text(
+            "No hay días disponibles",
+            color = secondaryColor,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun AdaptiveForecastDays(
+    days: List<ForecastDayData>,
+    unitSymbol: String,
+    textColor: Color,
+    secondaryColor: Color,
+    scrolling: Boolean
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val gap = 10.dp
+        val availablePerDay = (maxWidth - gap * (days.size - 1)) / days.size
+        if (!scrolling) {
+            val cardWidth = minOf(availablePerDay, 154.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(gap, Alignment.CenterHorizontally)
+            ) {
+                days.forEach { day ->
+                    ForecastDayMiniCard(
+                        day = day,
+                        unitSymbol = unitSymbol,
+                        textColor = textColor,
+                        secondaryColor = secondaryColor,
+                        modifier = Modifier.width(cardWidth)
+                    )
                 }
             }
-            Spacer(Modifier.height(14.dp))
-            val pollutants = buildList {
-                data.pm2_5?.let { add(WeatherStatData("PM2.5", "${it.rounded()} μg/m³")) }
-                data.pm10?.let { add(WeatherStatData("PM10", "${it.rounded()} μg/m³")) }
-                data.o3?.let { add(WeatherStatData("Ozono", "${it.rounded()} μg/m³")) }
-                data.no2?.let { add(WeatherStatData("NO₂", "${it.rounded()} μg/m³")) }
+        } else {
+            val cardWidth = minOf(146.dp, maxOf(122.dp, maxWidth * 0.44f))
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(gap)
+            ) {
+                items(days, key = { it.isoDate.ifBlank { it.date } }) { day ->
+                    ForecastDayMiniCard(
+                        day = day,
+                        unitSymbol = unitSymbol,
+                        textColor = textColor,
+                        secondaryColor = secondaryColor,
+                        modifier = Modifier.width(cardWidth)
+                    )
+                }
             }
-            AdaptiveWeatherStats(
-                stats = pollutants,
-                columns = 2,
-                textColor = MaterialTheme.colorScheme.onSurface,
-                secondaryColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                darkTile = false
-            )
-            WeatherFooter(
-                data.updatedAt,
-                data.timezone,
-                data.source,
-                data.isCached,
-                MaterialTheme.colorScheme.onSurface
-            )
         }
     }
 }
@@ -567,16 +910,18 @@ private fun ForecastDayMiniCard(
     day: ForecastDayData,
     unitSymbol: String,
     textColor: Color,
-    secondaryColor: Color
+    secondaryColor: Color,
+    modifier: Modifier = Modifier
 ) {
     val condition = mapCondition(day.conditionId, day.icon)
     Column(
-        modifier = Modifier
-            .width(116.dp)
+        modifier = modifier
+            .heightIn(min = 174.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(Color.Black.copy(alpha = 0.18f))
+            .border(1.dp, Color.White.copy(alpha = 0.13f), RoundedCornerShape(16.dp))
             .semantics(mergeDescendants = true) {
-                contentDescription = "${day.date}. ${day.description}. Máxima ${formatTemperatureValue(day.maxTemp)}, mínima ${formatTemperatureValue(day.minTemp)} $unitSymbol. Probabilidad de precipitación ${day.maxPop} por ciento."
+                contentDescription = forecastDayDescription(day, unitSymbol)
             }
             .padding(horizontal = 10.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -598,16 +943,37 @@ private fun ForecastDayMiniCard(
         )
         Spacer(Modifier.height(5.dp))
         Text(
-            text = "${formatTemperatureValue(day.maxTemp)}° / ${formatTemperatureValue(day.minTemp)}°",
+            text = "${formatTemperatureValue(day.maxTemp)}${unitSymbol} / ${formatTemperatureValue(day.minTemp)}${unitSymbol}",
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Bold,
-            color = textColor
+            color = textColor,
+            maxLines = 1
         )
         Text(
-            text = "💧 ${day.maxPop}%",
-            style = MaterialTheme.typography.labelMedium,
-            color = secondaryColor
+            text = day.description.ifBlank { "Condiciones previstas" },
+            style = MaterialTheme.typography.labelSmall,
+            color = secondaryColor,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.heightIn(min = 32.dp)
         )
+        Spacer(Modifier.height(5.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            Text(
+                text = "💧 ${day.maxPop}%",
+                style = MaterialTheme.typography.labelSmall,
+                color = secondaryColor
+            )
+            Text(
+                text = "H ${day.avgHumidity}%",
+                style = MaterialTheme.typography.labelSmall,
+                color = secondaryColor
+            )
+        }
     }
 }
 
@@ -621,10 +987,12 @@ private fun AdaptiveWeatherStats(
 ) {
     stats.chunked(columns.coerceAtLeast(1)).forEachIndexed { rowIndex, rowStats ->
         if (rowIndex > 0) Spacer(Modifier.height(8.dp))
+        val missingSlotWeight = (columns - rowStats.size).coerceAtLeast(0) / 2f
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            if (missingSlotWeight > 0f) Spacer(Modifier.weight(missingSlotWeight))
             rowStats.forEach { stat ->
                 WeatherStat(
                     stat = stat,
@@ -634,7 +1002,7 @@ private fun AdaptiveWeatherStats(
                     modifier = Modifier.weight(1f)
                 )
             }
-            repeat(columns - rowStats.size) { Spacer(Modifier.weight(1f)) }
+            if (missingSlotWeight > 0f) Spacer(Modifier.weight(missingSlotWeight))
         }
     }
 }
@@ -727,19 +1095,53 @@ private fun WeatherFooter(
         if (timezone.isNotBlank()) append(" $timezone")
         if (isCached) append(" · caché")
     }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(
-            text = timeLabel,
-            style = MaterialTheme.typography.labelSmall,
-            color = textColor.copy(alpha = 0.78f),
-            modifier = Modifier.weight(1f)
-        )
-        if (source.isNotBlank()) {
-            Text(
-                text = "Fuente: $source",
-                style = MaterialTheme.typography.labelSmall,
-                color = textColor.copy(alpha = 0.78f)
-            )
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val sourceLabel = "Fuente: $source"
+        val stacked = maxWidth < 340.dp || timeLabel.length + sourceLabel.length > 54
+        if (stacked) {
+            Column(Modifier.fillMaxWidth()) {
+                if (timeLabel.isNotBlank()) {
+                    Text(
+                        text = timeLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = textColor.copy(alpha = 0.78f),
+                        maxLines = 2
+                    )
+                }
+                if (source.isNotBlank()) {
+                    if (timeLabel.isNotBlank()) Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = sourceLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = textColor.copy(alpha = 0.78f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                if (timeLabel.isNotBlank()) {
+                    Text(
+                        text = timeLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = textColor.copy(alpha = 0.78f),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+                if (source.isNotBlank()) {
+                    Text(
+                        text = sourceLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = textColor.copy(alpha = 0.78f),
+                        maxLines = 1
+                    )
+                }
+            }
         }
     }
 }
@@ -802,6 +1204,15 @@ private fun WeatherErrorCard(data: WeatherErrorData, modifier: Modifier = Modifi
 }
 
 private data class WeatherStatData(val label: String, val value: String)
+
+private fun forecastDayDescription(day: ForecastDayData, unitSymbol: String): String = buildString {
+    append("${day.date}. ")
+    if (day.description.isNotBlank()) append("${day.description}. ")
+    append("Máxima ${formatTemperatureValue(day.maxTemp)}$unitSymbol, ")
+    append("mínima ${formatTemperatureValue(day.minTemp)}$unitSymbol. ")
+    append("Probabilidad de precipitación ${day.maxPop} por ciento. ")
+    append("Humedad media ${day.avgHumidity} por ciento.")
+}
 
 private fun JSONObject.optionalString(name: String): String? =
     if (has(name) && !isNull(name)) optString(name).takeIf { it.isNotBlank() } else null

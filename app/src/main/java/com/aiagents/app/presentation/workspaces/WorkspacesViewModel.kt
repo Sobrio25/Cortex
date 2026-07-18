@@ -14,6 +14,7 @@ import com.aiagents.app.MainActivity
 import com.aiagents.app.R
 import com.aiagents.app.data.diagnostics.AppErrorReporter
 import com.aiagents.app.data.diagnostics.ErrorReportContext
+import com.aiagents.app.data.local.ChatPreferences
 import com.aiagents.app.data.remote.ChatMessage
 import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.data.repository.FileRepository
@@ -64,6 +65,7 @@ data class WorkspaceUiState(
 @HiltViewModel
 class WorkspacesViewModel @Inject constructor(
     private val repository: AgentRepository,
+    private val chatPreferences: ChatPreferences,
     private val fileRepository: FileRepository,
     private val errorReporter: AppErrorReporter,
     private val application: Application
@@ -346,7 +348,9 @@ class WorkspacesViewModel @Inject constructor(
 
                 // 3. Resolve model
                 val selectedModels = repository.getSelectedModels()
-                val fullKey = selectedModels.firstOrNull() ?: ""
+                val fullKey = chatPreferences.defaultModel.value
+                    .takeIf(String::isNotBlank)
+                    ?: selectedModels.sorted().firstOrNull().orEmpty()
                 val modelId = if ("|" in fullKey) fullKey.substringAfter("|") else fullKey
                 val provider: ProviderType? = if ("|" in fullKey)
                     runCatching { ProviderType.valueOf(fullKey.substringBefore("|")) }.getOrNull()

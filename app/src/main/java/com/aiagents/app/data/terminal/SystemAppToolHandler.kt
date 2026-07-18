@@ -134,7 +134,16 @@ GESTIÓN DE APPS:
             val args = gson.fromJson(arguments, JsonObject::class.java) ?: JsonObject()
             val action = args.get("action")?.asString
                 ?: return SystemAppToolResult(toolCallId, toolName, false, "Parámetro 'action' requerido.")
-            val params = args.getAsJsonObject("params") ?: JsonObject()
+            val paramsElement = args.get("params")
+            if (paramsElement != null && !paramsElement.isJsonNull && !paramsElement.isJsonObject) {
+                return SystemAppToolResult(
+                    toolCallId,
+                    toolName,
+                    false,
+                    "Parámetro 'params' inválido: debe ser un objeto JSON."
+                )
+            }
+            val params = paramsElement?.takeIf { it.isJsonObject }?.asJsonObject ?: JsonObject()
 
             when (action) {
                 "open_app" -> openApp(toolCallId, params)

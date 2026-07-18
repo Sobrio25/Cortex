@@ -1,11 +1,14 @@
 package com.aiagents.app.data.skills
 
+import com.aiagents.app.data.local.MCPDao
 import com.aiagents.app.data.repository.SkillRepository
 import com.aiagents.app.domain.model.Skill
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -13,24 +16,51 @@ import javax.inject.Singleton
 /** Keeps a bounded synchronous skill index for progressive disclosure at model runtime. */
 @Singleton
 class SkillRuntimeProvider @Inject constructor(
-    private val repository: SkillRepository
+    private val repository: SkillRepository,
+    private val mcpDao: MCPDao
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Volatile
     private var activeSkills: List<Skill> = emptyList()
+    @Volatile
+    private var enabledMcpIds: Set<String> = emptySet()
+    @Volatile
+    private var revision: Long = 0
 
     init {
         scope.launch {
-            repository.observeActiveSkills().collectLatest { activeSkills = it }
+            combine(repository.observeActiveSkills(), mcpDao.getAllServers()) { skills, servers ->
+                skills to servers.filter { it.isEnabled }.mapTo(linkedSetOf()) { it.id }
+            }.collectLatest { (skills, mcpIds) ->
+                activeSkills = skills
+                enabledMcpIds = mcpIds
+                revision += 1
+            }
         }
     }
 
     suspend fun refresh() {
         activeSkills = repository.getActiveSkillsOnce()
+        enabledMcpIds = mcpDao.getAllServers().first()
+            .filter { it.isEnabled }
+            .mapTo(linkedSetOf()) { it.id }
+        revision += 1
     }
 
     fun names(): List<String> = activeSkills.map { it.name }
+
+    fun enabledToolNames(): Set<String> =
+        activeSkills.flatMapTo(linkedSetOf()) { it.requiredTools }
+
+    fun isToolEnabled(toolName: String): Boolean = activeSkills.any { toolName in it.requiredTools }
+
+    fun activeSkillNamesFor(toolName: String): List<String> =
+        activeSkills.filter { toolName in it.requiredTools }.map { it.name }
+
+    fun isMcpEnabled(id: String): Boolean = id in enabledMcpIds
+
+    fun revision(): Long = revision
 
     fun render(maxChars: Int = MAX_INDEX_CHARS): String = renderIndex(activeSkills, maxChars)
 

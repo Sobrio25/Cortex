@@ -21,6 +21,25 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 ./gradlew connectedAndroidTest
 ```
 
+## Direct Distribution (Current)
+
+The app is not being distributed through Google Play yet. For direct APK installs, always use the `sideload` build variant rather than `release`:
+
+```bash
+# Build the directly distributed app and refresh the hosted voice pack artifacts
+./gradlew prepareSideloadVoicePack
+
+# Install the directly distributed app on a connected device
+./gradlew installSideload
+
+# Publish the STT/TTS voice pack used by sideload builds
+firebase deploy --only hosting:voicepack --project cortex-agents-ai
+```
+
+The `sideload` variant sets `BuildConfig.EXTERNAL_VOICE_PACK=true` and downloads the installable STT/TTS voice feature from Firebase Hosting using `https://cortex-agents-voice-pack.web.app/cortex-voice-pack.json`. Do not change direct-distribution builds back to Play Feature Delivery while the app is outside Google Play.
+
+`prepareSideloadVoicePack` copies the signed `voice-sideload.apk` to `dashboard/downloads/cortex-voice-pack.apk` and regenerates `dashboard/downloads/cortex-voice-pack.json` with the current app `versionCode`, byte size, and SHA-256. The hosted manifest and app must have matching version codes, and the base APK and voice pack must be signed with the same certificate or Android will reject installation.
+
 ## Architecture
 
 **Native Android app** — MVVM + Clean Architecture with Jetpack Compose, Hilt DI, Room database, Retrofit.
