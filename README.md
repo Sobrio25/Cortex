@@ -17,14 +17,8 @@ Aplicación Android nativa para gestionar múltiples agentes de IA con workspace
 - Gestión de archivos adjuntos por workspace
 
 ### 🔌 Múltiples proveedores de IA
-Soporta 7 proveedores con sus logos oficiales:
-- **OpenRouter** - Acceso a múltiples modelos (Claude, GPT, Llama, etc.)
-- **Google AI (Gemini)** - Modelos Gemini 2.5/3.0
-- **OpenAI** - GPT-4, GPT-3.5, o1
-- **Anthropic** - Claude 4.6
-- **Moonshot AI** - Modelos Moonshot
-- **MiniMax** - Modelos MiniMax
-- **Ollama** - Modelos locales (sin API Key)
+Soporta Cortex administrado, OpenRouter, Google AI, OpenAI, NVIDIA, Anthropic, Moonshot, MiniMax,
+DeepSeek, xAI, Ollama, LM Studio, Kilo, Alibaba, OpenCode, Z.AI y modelos locales en el dispositivo.
 
 ### 🔒 Seguridad
 - API Keys almacenadas con **EncryptedSharedPreferences**
@@ -91,15 +85,9 @@ O instalar directamente en un dispositivo conectado:
 
 ## Proveedores soportados
 
-| Proveedor | API Key | Modelos |
-|-----------|---------|---------|
-| OpenRouter | Requerida | Claude, GPT, Llama, Mistral, etc. |
-| Google AI | Requerida | Gemini 3.1 Flash/Pro |
-| OpenAI | Requerida | GPT-4o, GPT-4, GPT-3.5, o1 |
-| Anthropic | Requerida | Claude 4.6 Sonnet, Claude 4.6 Opus |
-| Moonshot | Requerida | Moonshot v1 |
-| MiniMax | Requerida | MiniMax-M2.5 |
-| Ollama | No requerida | Modelos locales (Llama, Mistral, etc.) |
+El catálogo de modelos se obtiene dinámicamente cuando el proveedor lo permite. Ollama, LM Studio
+y los modelos en el dispositivo funcionan como rutas locales; los demás usan el plan administrado
+o credenciales aportadas por el usuario.
 
 ## Estructura del proyecto
 

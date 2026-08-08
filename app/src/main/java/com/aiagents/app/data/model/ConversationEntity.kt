@@ -32,7 +32,8 @@ data class ConversationEntity(
     val status: String = "active",
     val lastMemoryExtraction: Long? = null,  // Timestamp of last successful memory extraction
     val contextKind: String = ConversationContextKind.CHAT.name,
-    val selectedModelOverride: String = ""
+    val selectedModelOverride: String = "",
+    val isPinned: Boolean = false
 ) {
     fun toDomain(): Conversation = Conversation(
         id = id,
@@ -47,7 +48,8 @@ data class ConversationEntity(
         lastMemoryExtraction = lastMemoryExtraction,
         contextKind = runCatching { ConversationContextKind.valueOf(contextKind) }
             .getOrDefault(ConversationContextKind.CHAT),
-        selectedModelOverride = selectedModelOverride
+        selectedModelOverride = selectedModelOverride,
+        isPinned = isPinned
     )
 
     /**
@@ -70,7 +72,8 @@ data class ConversationEntity(
             status = conversation.status,
             lastMemoryExtraction = conversation.lastMemoryExtraction,
             contextKind = conversation.contextKind.name,
-            selectedModelOverride = conversation.selectedModelOverride
+            selectedModelOverride = conversation.selectedModelOverride,
+            isPinned = conversation.isPinned
         )
     }
 }

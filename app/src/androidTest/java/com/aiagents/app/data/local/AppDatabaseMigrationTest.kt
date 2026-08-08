@@ -316,6 +316,38 @@ class AppDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun migrates50To51AddingConversationPinnedFlag() {
+        helper.createDatabase(PIN_DATABASE_NAME, 50).apply {
+            execSQL(
+                "INSERT INTO workspaces (id, name, description, activeAgentId, selectedModel, " +
+                    "systemPrompt, externalStorageUri, createdAt, updatedAt) " +
+                    "VALUES (201, 'Proyecto', '', NULL, 'OPENAI|gpt-4o', '', NULL, 1, 1)"
+            )
+            execSQL(
+                "INSERT INTO conversations (id, workspaceId, title, createdAt, updatedAt, " +
+                    "parentConversationId, delegationAgentName, delegationTask, status, " +
+                    "lastMemoryExtraction, contextKind, selectedModelOverride) VALUES " +
+                    "(202, 201, 'Chat existente', 1, 1, NULL, NULL, NULL, 'active', NULL, 'CHAT', '')"
+            )
+            close()
+        }
+
+        helper.runMigrationsAndValidate(
+            PIN_DATABASE_NAME,
+            51,
+            true,
+            AppDatabase.MIGRATION_50_51
+        ).use { database ->
+            database.query(
+                "SELECT isPinned FROM conversations WHERE id = 202"
+            ).use { cursor ->
+                assertEquals(true, cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+        }
+    }
+
     private companion object {
         const val DATABASE_NAME = "migration-38-41"
         const val SCHEDULED_TASK_DATABASE_NAME = "migration-43-44"
@@ -324,5 +356,6 @@ class AppDatabaseMigrationTest {
         const val VOICE_DATABASE_NAME = "migration-47-48-global-voice"
         const val CAPABILITIES_DATABASE_NAME = "migration-48-49-capabilities"
         const val CHAT_MODEL_DATABASE_NAME = "migration-49-50-chat-model"
+        const val PIN_DATABASE_NAME = "migration-50-51-pin"
     }
 }

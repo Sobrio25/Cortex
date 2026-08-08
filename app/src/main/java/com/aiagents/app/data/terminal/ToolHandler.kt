@@ -146,6 +146,11 @@ class ToolHandler @Inject constructor(
     suspend fun checkPermission(request: ToolExecutionRequest): PermissionCheckResult {
         return permissionManager.checkPermission(request.command)
     }
+
+    /** Bloquea de forma permanente (glob sobre el comando base) un comando denegado. */
+    suspend fun blockCommand(command: String) {
+        permissionManager.grantPermission(command, PermissionLevel.BLOCKED)
+    }
     
     suspend fun executeWithPermission(
         request: ToolExecutionRequest,

@@ -65,6 +65,12 @@ abstract class BaseSTTService(protected val context: Context) : STTService {
                 startRecording(started)
                     ?.takeIf(ByteArray::isNotEmpty)
                     ?.let { onAudioCaptured(it) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                // A failure in the subclass transcription pipeline (disk full, network) must not
+                // escape into serviceScope and crash the app. Subclasses surface the message.
+                Log.e("BaseSTTService", "Fallo la sesion de grabacion/transcripcion", error)
             } finally {
                 started.complete(false)
             }

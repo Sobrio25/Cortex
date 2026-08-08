@@ -2,6 +2,7 @@ package com.aiagents.app.data.repository
 
 import android.util.Log
 import com.aiagents.app.data.auth.OpenAIEndpointPolicy
+import com.aiagents.app.data.auth.ProviderEndpointPolicy
 import com.aiagents.app.data.auth.ProviderCredentialResolver
 import com.aiagents.app.data.diagnostics.DiagnosticTraceStore
 import com.aiagents.app.data.diagnostics.TurnCorrelationId
@@ -311,6 +312,10 @@ class AgentRepository @Inject constructor(
         conversationDao.updateTitle(id, title)
     }
 
+    suspend fun setConversationPinned(id: Long, pinned: Boolean) {
+        conversationDao.setPinned(id, pinned)
+    }
+
     suspend fun touchConversation(id: Long) {
         conversationDao.touchConversation(id)
     }
@@ -331,6 +336,11 @@ class AgentRepository @Inject constructor(
 
     suspend fun clearConversation(conversationId: Long) {
         messageDao.deleteMessagesForConversation(conversationId)
+    }
+
+    /** Borra mensajes concretos (usado por /undo y /retry para eliminar un turno). */
+    suspend fun deleteMessages(ids: List<Long>) {
+        ids.forEach { messageDao.deleteMessage(it) }
     }
 
     suspend fun saveContextCheckpoint(
@@ -417,12 +427,15 @@ class AgentRepository @Inject constructor(
         val result = client.chat(
             model = modelToUse,
             messages = chatMessages,
-            systemPrompt = runtimeContextProvider.enrich(
-                basePrompt = agent.systemPrompt,
-                agentName = agent.name,
-                agentRole = agent.role,
-                memorySessionKey = memorySessionKey ?: deriveMemorySessionKey(agent, messages),
-                profile = runtimeContextProfile
+            systemPrompt = buildProviderSystemPrompt(
+                provider = activeProvider,
+                agent = agent,
+                messages = messages,
+                exposedTools = emptyList(),
+                enableTerminal = false,
+                workspaceFolderPath = null,
+                memorySessionKey = memorySessionKey,
+                runtimeContextProfile = runtimeContextProfile
             ),
             temperature = agent.temperature,
             maxTokens = agent.maxTokens
@@ -589,7 +602,10 @@ class AgentRepository @Inject constructor(
         require(provider != ProviderType.OPENAI) {
             "OpenAI usa exclusivamente la URL oficial"
         }
-        securePreferences.saveBaseUrl(provider, baseUrl)
+        securePreferences.saveBaseUrl(
+            provider,
+            ProviderEndpointPolicy.validate(provider, baseUrl)
+        )
     }
 
     fun getBaseUrl(provider: ProviderType): String? {
@@ -688,7 +704,13 @@ class AgentRepository @Inject constructor(
             )
         }
         
-        val tools = buildToolDefinitions(agent, enableTerminal, workspaceFolderPath, allowedToolNames)
+        val tools = buildProviderToolDefinitions(
+            provider = activeProvider,
+            agent = agent,
+            enableTerminal = enableTerminal,
+            workspaceFolderPath = workspaceFolderPath,
+            allowedToolNames = allowedToolNames
+        )
         val traceId = beginDiagnosticTrace(
             agent = agent,
             messages = messages,
@@ -699,15 +721,16 @@ class AgentRepository @Inject constructor(
         val diagnosticStartedAt = System.nanoTime()
 
         val sanitized = sanitizeToolCallHistory(chatMessages)
-        val runtimePrompt = buildRuntimeSystemPrompt(
-            agent,
-            messages,
-            tools,
-            enableTerminal,
-            workspaceFolderPath,
-            allowedToolNames,
-            memorySessionKey,
-            runtimeContextProfile
+        val runtimePrompt = buildProviderSystemPrompt(
+            provider = activeProvider,
+            agent = agent,
+            messages = messages,
+            exposedTools = tools,
+            enableTerminal = enableTerminal,
+            workspaceFolderPath = workspaceFolderPath,
+            allowedToolNames = allowedToolNames,
+            memorySessionKey = memorySessionKey,
+            runtimeContextProfile = runtimeContextProfile
         )
         val requiresTextToolHistory = activeProvider == ProviderType.KILO &&
             modelToUse.startsWith("tencent/hy3", ignoreCase = true) &&
@@ -815,7 +838,13 @@ class AgentRepository @Inject constructor(
             )
         }
 
-        val tools = buildToolDefinitions(agent, enableTerminal, workspaceFolderPath, allowedToolNames)
+        val tools = buildProviderToolDefinitions(
+            provider = activeProvider,
+            agent = agent,
+            enableTerminal = enableTerminal,
+            workspaceFolderPath = workspaceFolderPath,
+            allowedToolNames = allowedToolNames
+        )
 
         val sanitized = sanitizeToolCallHistory(chatMessages)
         Log.d("AgentRepository", "Streaming ${sanitized.size} messages to API with ${tools.size} tools")
@@ -830,15 +859,16 @@ class AgentRepository @Inject constructor(
         val upstream = client.chatWithToolsStreaming(
             model = modelToUse,
             messages = sanitized,
-            systemPrompt = buildRuntimeSystemPrompt(
-                agent,
-                messages,
-                tools,
-                enableTerminal,
-                workspaceFolderPath,
-                allowedToolNames,
-                memorySessionKey,
-                runtimeContextProfile
+            systemPrompt = buildProviderSystemPrompt(
+                provider = activeProvider,
+                agent = agent,
+                messages = messages,
+                exposedTools = tools,
+                enableTerminal = enableTerminal,
+                workspaceFolderPath = workspaceFolderPath,
+                allowedToolNames = allowedToolNames,
+                memorySessionKey = memorySessionKey,
+                runtimeContextProfile = runtimeContextProfile
             ),
             temperature = agent.temperature,
             maxTokens = agent.maxTokens,
@@ -959,7 +989,13 @@ class AgentRepository @Inject constructor(
             )
         }
         
-        val tools = buildToolDefinitions(agent, enableTerminal, workspaceFolderPath, allowedToolNames)
+        val tools = buildProviderToolDefinitions(
+            provider = activeProvider,
+            agent = agent,
+            enableTerminal = enableTerminal,
+            workspaceFolderPath = workspaceFolderPath,
+            allowedToolNames = allowedToolNames
+        )
 
         val sanitized = sanitizeToolCallHistory(chatMessages)
         Log.d("AgentRepository", "Sending ${sanitized.size} messages with ${imageDataUris.size} images")
@@ -974,15 +1010,16 @@ class AgentRepository @Inject constructor(
         val result = client.chatWithTools(
             model = modelToUse,
             messages = sanitized,
-            systemPrompt = buildRuntimeSystemPrompt(
-                agent,
-                messages,
-                tools,
-                enableTerminal,
-                workspaceFolderPath,
-                allowedToolNames,
-                memorySessionKey,
-                runtimeContextProfile
+            systemPrompt = buildProviderSystemPrompt(
+                provider = activeProvider,
+                agent = agent,
+                messages = messages,
+                exposedTools = tools,
+                enableTerminal = enableTerminal,
+                workspaceFolderPath = workspaceFolderPath,
+                allowedToolNames = allowedToolNames,
+                memorySessionKey = memorySessionKey,
+                runtimeContextProfile = runtimeContextProfile
             ),
             temperature = agent.temperature,
             maxTokens = agent.maxTokens,
@@ -1231,6 +1268,47 @@ class AgentRepository @Inject constructor(
         memorySessionKey = memorySessionKey ?: deriveMemorySessionKey(agent, messages),
         profile = runtimeContextProfile
     )
+
+    /**
+     * Device models have much smaller context windows than cloud providers. Their prompt omits
+     * stored personality, memory, skills, device state, and the deferred-tool catalog entirely.
+     */
+    private fun buildProviderSystemPrompt(
+        provider: ProviderType,
+        agent: Agent,
+        messages: List<Message>,
+        exposedTools: List<Map<String, Any>>,
+        enableTerminal: Boolean,
+        workspaceFolderPath: String?,
+        allowedToolNames: Set<String>? = null,
+        memorySessionKey: String? = null,
+        runtimeContextProfile: RuntimeContextProfile = RuntimeContextProfile.STANDARD
+    ): String = if (provider == ProviderType.LOCAL) {
+        runtimeContextProvider.localModelPrompt(agent.name)
+    } else {
+        buildRuntimeSystemPrompt(
+            agent = agent,
+            messages = messages,
+            exposedTools = exposedTools,
+            enableTerminal = enableTerminal,
+            workspaceFolderPath = workspaceFolderPath,
+            allowedToolNames = allowedToolNames,
+            memorySessionKey = memorySessionKey,
+            runtimeContextProfile = runtimeContextProfile
+        )
+    }
+
+    private fun buildProviderToolDefinitions(
+        provider: ProviderType,
+        agent: Agent,
+        enableTerminal: Boolean,
+        workspaceFolderPath: String?,
+        allowedToolNames: Set<String>? = null
+    ): List<Map<String, Any>> = if (provider == ProviderType.LOCAL) {
+        UnifiedWebToolHandler.getToolDefinitionsJson()
+    } else {
+        buildToolDefinitions(agent, enableTerminal, workspaceFolderPath, allowedToolNames)
+    }
 
     /** Stable for every continuation/tool round in one conversation, without storing content. */
     private fun deriveMemorySessionKey(agent: Agent, messages: List<Message>): String? {

@@ -30,7 +30,9 @@ data class SkillEntity(
     val createdAt: Long,
     val updatedAt: Long,
     val activatedAt: Long? = null,
-    val archivedAt: Long? = null
+    val archivedAt: Long? = null,
+    val usageCount: Int = 0,
+    val lastUsedAt: Long? = null
 )
 
 @Entity(

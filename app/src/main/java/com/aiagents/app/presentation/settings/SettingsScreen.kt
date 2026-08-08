@@ -1,5 +1,6 @@
 package com.aiagents.app.presentation.settings
 
+import android.app.ActivityManager
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,7 @@ import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.DeveloperBoard
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.RecordVoiceOver
@@ -36,13 +38,22 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -70,6 +81,65 @@ fun SettingsScreen(
 ) {
     val globalUsageAnalyticsEnabled by viewModel.globalUsageAnalyticsEnabled
     val errorReportingEnabled by viewModel.errorReportingEnabled
+    val deleteAccountState by viewModel.deleteAccountState
+    var showDeleteAccountDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+
+    LaunchedEffect(deleteAccountState) {
+        if (deleteAccountState == DeleteAccountState.Deleted) {
+            context.getSystemService(ActivityManager::class.java).clearApplicationUserData()
+        }
+    }
+
+    if (showDeleteAccountDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                if (deleteAccountState != DeleteAccountState.Deleting) {
+                    showDeleteAccountDialog = false
+                    viewModel.resetDeleteAccountState()
+                }
+            },
+            title = { Text(stringResource(R.string.settings_delete_account_dialog_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.settings_delete_account_dialog_body))
+                    if (deleteAccountState is DeleteAccountState.Error) {
+                        Text(
+                            (deleteAccountState as DeleteAccountState.Error).message,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = viewModel::deleteAccount,
+                    enabled = deleteAccountState != DeleteAccountState.Deleting
+                ) {
+                    if (deleteAccountState == DeleteAccountState.Deleting) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text(
+                            stringResource(R.string.settings_delete_account_confirm),
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteAccountDialog = false
+                        viewModel.resetDeleteAccountState()
+                    },
+                    enabled = deleteAccountState != DeleteAccountState.Deleting
+                ) {
+                    Text(stringResource(R.string.settings_delete_account_cancel))
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -215,6 +285,19 @@ fun SettingsScreen(
                             stringResource(R.string.settings_diagnostics_title),
                             stringResource(R.string.settings_diagnostics_subtitle),
                             onNavigateToDiagnostics
+                        ),
+                        SettingsEntry.Navigation(
+                            null,
+                            stringResource(R.string.settings_privacy_policy_title),
+                            stringResource(R.string.settings_privacy_policy_subtitle),
+                            { uriHandler.openUri("https://cortex-agents-ai.web.app/privacy.html") }
+                        ),
+                        SettingsEntry.Navigation(
+                            Icons.Default.DeleteForever,
+                            stringResource(R.string.settings_delete_account_title),
+                            stringResource(R.string.settings_delete_account_subtitle),
+                            { showDeleteAccountDialog = true },
+                            destructive = true
                         )
                     )
                 )
@@ -232,7 +315,8 @@ private sealed interface SettingsEntry {
         override val icon: ImageVector?,
         override val title: String,
         override val subtitle: String,
-        val onClick: () -> Unit
+        val onClick: () -> Unit,
+        val destructive: Boolean = false
     ) : SettingsEntry
 
     data class Toggle(
@@ -275,15 +359,26 @@ private fun SettingsSection(title: String, entries: List<SettingsEntry>) {
 
 @Composable
 private fun SettingsItem(entry: SettingsEntry) {
+    val destructive = entry is SettingsEntry.Navigation && entry.destructive
     ListItem(
-        headlineContent = { Text(entry.title, fontWeight = FontWeight.Medium) },
+        headlineContent = {
+            Text(
+                entry.title,
+                fontWeight = FontWeight.Medium,
+                color = if (destructive) MaterialTheme.colorScheme.error else Color.Unspecified
+            )
+        },
         supportingContent = { Text(entry.subtitle) },
         leadingContent = {
             val icon = entry.icon
             Surface(
                 modifier = Modifier.size(40.dp),
                 shape = MaterialTheme.shapes.medium,
-                color = MaterialTheme.colorScheme.secondaryContainer
+                color = if (destructive) {
+                    MaterialTheme.colorScheme.errorContainer
+                } else {
+                    MaterialTheme.colorScheme.secondaryContainer
+                }
             ) {
                 if (icon == null) {
                     CortexMark(Modifier.padding(5.dp).fillMaxSize())
@@ -291,7 +386,11 @@ private fun SettingsItem(entry: SettingsEntry) {
                     Icon(
                         icon,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        tint = if (destructive) {
+                            MaterialTheme.colorScheme.onErrorContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        },
                         modifier = Modifier.padding(9.dp)
                     )
                 }

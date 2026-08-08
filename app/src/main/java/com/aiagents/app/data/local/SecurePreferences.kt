@@ -284,6 +284,16 @@ class SecurePreferences @Inject constructor(
     fun getVoiceSttApiKey(providerId: String): String =
         encryptedPrefs.getString("VOICE_STT_${providerId.uppercase()}_API_KEY", null).orEmpty()
 
+    fun saveVoiceTtsApiKey(providerId: String, apiKey: String) {
+        encryptedPrefs.edit().also { editor ->
+            val key = "VOICE_TTS_${providerId.uppercase()}_API_KEY"
+            if (apiKey.isBlank()) editor.remove(key) else editor.putString(key, apiKey.trim())
+        }.apply()
+    }
+
+    fun getVoiceTtsApiKey(providerId: String): String =
+        encryptedPrefs.getString("VOICE_TTS_${providerId.uppercase()}_API_KEY", null).orEmpty()
+
     fun saveAssistantRemoteTtsApiKey(apiKey: String) {
         encryptedPrefs.edit().also { editor ->
             if (apiKey.isBlank()) editor.remove("ASSISTANT_REMOTE_TTS_API_KEY")

@@ -62,6 +62,22 @@ data class FreeDataConsentRequest(
     val version: Int = FREE_DATA_CONSENT_VERSION
 )
 
+enum class ContentReportCategory {
+    OFFENSIVE,
+    UNSAFE,
+    INACCURATE,
+    OTHER
+}
+
+data class ContentReportRequest(
+    val messageId: String,
+    val category: String,
+    val content: String,
+    val comment: String? = null,
+    val model: String? = null,
+    val appVersion: String = com.aiagents.app.BuildConfig.VERSION_NAME
+)
+
 /**
  * Wire model for `/v1/models`.
  *
@@ -137,6 +153,14 @@ class ManagedGatewayClient @Inject constructor(
         return gson.fromJson(response, ManagedAccountResponse::class.java).toDomain()
     }
 
+    suspend fun deleteAccount() {
+        authenticatedDelete("/v1/account")
+    }
+
+    suspend fun reportContent(request: ContentReportRequest) {
+        authenticatedPost("/v1/content-reports", gson.toJson(request))
+    }
+
     suspend fun infer(
         logicalModel: String,
         messages: List<ChatMessage>,
@@ -165,13 +189,18 @@ class ManagedGatewayClient @Inject constructor(
 
     private suspend fun authenticatedPost(path: String, body: String): String = request(path, "POST", body)
 
+    private suspend fun authenticatedDelete(path: String): String = request(path, "DELETE", null)
+
     private suspend fun request(path: String, method: String, body: String?): String = withContext(Dispatchers.IO) {
         val token = authManager.idToken()
         val builder = Request.Builder()
             .url("$MANAGED_BASE_URL$path")
             .header("Authorization", "Bearer $token")
             .header("Accept", "application/json")
-        if (method == "POST") builder.post((body ?: "{}").toRequestBody(jsonMediaType))
+        when (method) {
+            "POST" -> builder.post((body ?: "{}").toRequestBody(jsonMediaType))
+            "DELETE" -> builder.delete()
+        }
         val response = okHttpClient.newCall(builder.build()).execute()
         response.use {
             val responseBody = it.body?.string().orEmpty()

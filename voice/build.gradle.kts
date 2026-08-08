@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.aiagents.app.voice"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 26

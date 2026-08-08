@@ -58,6 +58,7 @@ class MemoryExtractor @Inject constructor(
         private const val MAX_TOTAL_MEMORIES = 500  // Increased from 200
         private const val MAX_CONVERSATION_SUMMARIES = 50  // Increased proportionally
         private const val EXTRACTION_COOLDOWN_MS = 60_000L  // 1 minute between batches
+        private const val RECALL_MAX_RESULTS = 10
         
         /**
          * Structured prompt that teaches the LLM the exact database schema
@@ -126,6 +127,17 @@ Return ONLY a JSON array. Use [] if nothing to extract.
 Summarize this conversation as 'topic: result' (max 80 chars).
 Example: 'room_migration: upgraded v31 to v32 adding finance tables'
 Use same language as the conversation.
+"""
+
+        private const val RECALL_SYSTEM_PROMPT = """
+You are the memory recall assistant. The user asks about something from their history, and below you will find raw entries retrieved from a secondary memory archive.
+
+Synthesize these entries into a concise, well-structured answer in the user's language. Rules:
+- Answer directly and naturally, like a personal assistant recalling something about the user.
+- Group related facts; do not enumerate every entry verbatim.
+- If the entries are sparse, contradictory, or incomplete, say so honestly.
+- Never invent facts that are not present in the entries.
+- Keep the answer under 200 words.
 """
     }
     
@@ -465,6 +477,58 @@ Use same language as the conversation.
         }
     }
     
+    /**
+     * Searches secondary memory (FTS) for [query] and asks the LLM to synthesize
+     * the raw entries into a concise narrative. Returns null when nothing is found
+     * or the summarization fails. Access counts are bumped for the retrieved entries.
+     */
+    suspend fun recallAndSummarize(query: String, modelId: String, provider: ProviderType): String? {
+        val ftsQuery = query.trim().split("\\s+".toRegex())
+            .filter { it.length > 1 }
+            .joinToString(" ") { "$it*" }
+        if (ftsQuery.isBlank()) return null
+
+        val results = try {
+            memoryDao.searchFts(ftsQuery, RECALL_MAX_RESULTS)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "FTS recall query failed: '$query'", e)
+            emptyList()
+        }
+        if (results.isEmpty()) return null
+
+        val now = System.currentTimeMillis()
+        results.forEach { memoryDao.incrementAccess(it.id, now) }
+
+        return try {
+            runtimeContextProvider.refreshIdentityFromMemory()
+            val credentials = providerCredentialResolver.resolve(provider) ?: return null
+            val client = aiClientFactory.createClient(provider, credentials.apiKey, credentials.baseUrl)
+
+            val memoryText = results.joinToString("\n") { m ->
+                "- ${m.content} (categoría: ${m.category}, importancia: ${m.importance})"
+            }
+            val result = client.chat(
+                model = modelId,
+                messages = listOf(ChatMessage(role = "user", content = "Consulta: $query\n\nMemorias encontradas:\n$memoryText")),
+                systemPrompt = runtimeContextProvider.enrich(
+                    RECALL_SYSTEM_PROMPT,
+                    "Memory recall",
+                    "Internal memory maintenance"
+                ),
+                temperature = 0.3f,
+                maxTokens = 512
+            )
+            result.getOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Recall summarization failed (non-critical)", e)
+            null
+        }
+    }
+
     /**
      * Enforces global memory cap.
      */

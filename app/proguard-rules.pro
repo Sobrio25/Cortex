@@ -26,6 +26,12 @@
 -dontwarn com.google.mediapipe.framework.image.**
 -dontwarn com.google.mediapipe.framework.**
 
+# LiteRT-LM invokes Kotlin API methods from its native runtime by their JVM names. R8 must keep
+# the complete bridge intact; otherwise nativeCreateConversation aborts the whole process with
+# "JNI DETECTED ERROR: mid == null" in minified sideload/release builds.
+-keep class com.google.ai.edge.litertlm.** { *; }
+-dontwarn com.google.ai.edge.litertlm.**
+
 # Protobuf
 -keep class com.google.protobuf.** { *; }
 -dontwarn com.google.protobuf.**

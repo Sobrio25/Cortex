@@ -20,7 +20,15 @@ data class ProviderCredentials(
 class ProviderCredentialResolver @Inject constructor(
     private val securePreferences: SecurePreferences
 ) {
-    fun resolve(provider: ProviderType): ProviderCredentials? = when (provider) {
+    fun resolve(provider: ProviderType): ProviderCredentials? {
+        val credentials = resolveStored(provider) ?: return null
+        val validatedBaseUrl = runCatching {
+            ProviderEndpointPolicy.validate(provider, credentials.baseUrl.orEmpty())
+        }.getOrNull() ?: return null
+        return credentials.copy(baseUrl = validatedBaseUrl.ifBlank { null })
+    }
+
+    private fun resolveStored(provider: ProviderType): ProviderCredentials? = when (provider) {
         ProviderType.MANAGED -> ProviderCredentials(apiKey = "managed", baseUrl = null)
         ProviderType.LOCAL -> ProviderCredentials(apiKey = "", baseUrl = null)
         ProviderType.OLLAMA -> ProviderCredentials(
@@ -31,7 +39,7 @@ class ProviderCredentialResolver @Inject constructor(
             apiKey = securePreferences.getApiKey(provider).orEmpty(),
             baseUrl = securePreferences.getBaseUrl(provider)
         )
-        ProviderType.OPENAI -> resolveOpenAI()
+        ProviderType.OPENAI -> resolveStoredOpenAI()
         ProviderType.MOONSHOT -> resolveVariant(
             active = securePreferences.getActiveMoonshotEndpoint(),
             variants = MoonshotEndpointType.entries,
@@ -56,7 +64,9 @@ class ProviderCredentialResolver @Inject constructor(
             ?.let { ProviderCredentials(it, securePreferences.getBaseUrl(provider)) }
     }
 
-    fun resolveOpenAI(): ProviderCredentials? =
+    fun resolveOpenAI(): ProviderCredentials? = resolve(ProviderType.OPENAI)
+
+    private fun resolveStoredOpenAI(): ProviderCredentials? =
         securePreferences.getOpenAIProviderApiKey()
             ?.trim()
             ?.takeIf(String::isNotEmpty)

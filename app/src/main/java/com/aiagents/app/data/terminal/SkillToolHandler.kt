@@ -158,8 +158,13 @@ class SkillToolHandler @Inject constructor(
         val content = if (skills.isEmpty()) {
             "No hay skills para el filtro $requested."
         } else {
-            skills.joinToString("\n") {
-                "- #${it.id} ${it.slug}: ${it.name} [${it.status}] (${it.origin}) — ${it.description}"
+            skills.joinToString("\n") { skill ->
+                val usage = if (skill.usageCount > 0) {
+                    " — usos: ${skill.usageCount}"
+                } else {
+                    ""
+                }
+                "- #${skill.id} ${skill.slug}: ${skill.name} [${skill.status}] (${skill.origin}) — ${skill.description}$usage"
             }
         }
         return SkillToolResult(toolCallId, TOOL_LIST, true, content)
@@ -186,6 +191,8 @@ class SkillToolHandler @Inject constructor(
             appendLine()
             append(skill.instructions)
         }
+        // Loading a skill counts as usage: it feeds the learning loop's feedback signal.
+        repository.recordSkillUsage(skill.id)
         return SkillToolResult(toolCallId, TOOL_VIEW, true, content)
     }
 

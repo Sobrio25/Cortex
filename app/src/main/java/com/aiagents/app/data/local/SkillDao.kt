@@ -115,6 +115,9 @@ interface SkillDao {
         activatedAt: Long?,
         archivedAt: Long?
     ): Int
+
+    @Query("UPDATE skills SET usageCount = usageCount + 1, lastUsedAt = :now WHERE id = :id")
+    suspend fun recordUsage(id: Long, now: Long): Int
 }
 
 @Dao

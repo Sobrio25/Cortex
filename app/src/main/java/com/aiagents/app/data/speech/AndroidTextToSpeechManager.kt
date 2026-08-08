@@ -4,28 +4,29 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import android.util.Log
 import com.aiagents.app.data.local.VoicePreferences
+import com.aiagents.app.data.speech.GROQ_TTS_ENDPOINT
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
@@ -58,7 +59,6 @@ class AndroidTextToSpeechManager @Inject constructor(
     val error: StateFlow<String?> = _error.asStateFlow()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val mainHandler = Handler(Looper.getMainLooper())
     private val playbackTracker = SpeechPlaybackTracker()
     private val requestCounter = AtomicLong(0L)
 
@@ -96,7 +96,12 @@ class AndroidTextToSpeechManager @Inject constructor(
             AssistantTtsMode.PIPER_ALD,
             AssistantTtsMode.PIPER_CLAUDE -> speakWithPiper(text, checkNotNull(mode.assetId))
             AssistantTtsMode.REMOTE_SERVER -> speakWithRemote(text)
+            AssistantTtsMode.GROQ -> speakWithGroq(text)
         }
+    }
+
+    fun previewGroqVoice() {
+        speakWithGroq("Hola, soy Cortex. Esta es una prueba de la voz de Groq.")
     }
 
     fun previewGoogleVoice(voiceId: String) {
@@ -213,6 +218,7 @@ class AndroidTextToSpeechManager @Inject constructor(
                 mode.assetId?.let { OnDemandVoiceFeatureLoader.isAssetReady(context, it) } == true
             AssistantTtsMode.REMOTE_SERVER ->
                 SelfHostedVoiceApi.isConfigured(preferences.remoteTtsConfig.value)
+            AssistantTtsMode.GROQ -> preferences.groqTtsConfig.value.isConfigured
             AssistantTtsMode.NONE -> false
         }
         _isReady.value = true
@@ -288,18 +294,186 @@ class AndroidTextToSpeechManager @Inject constructor(
         _isSpeaking.value = true
         _error.value = null
         piperJob = scope.launch {
-            val result = OnDemandVoiceFeatureLoader.synthesize(
-                context = context,
-                assetId = assetId,
-                text = SpokenTextFormatter.clean(text),
-                speed = 1f
-            )
-            if (requestId != requestCounter.get()) return@launch
-            result.onSuccess { audio -> playPiperAudio(audio, requestId) }
-                .onFailure { error ->
-                    _isSpeaking.value = false
+            try {
+                streamPiperAudio(
+                    text = SpokenTextFormatter.clean(text),
+                    assetId = assetId,
+                    requestId = requestId
+                )
+            } catch (_: CancellationException) {
+                if (requestId == requestCounter.get()) finishPiperPlayback(requestId)
+            } catch (error: Throwable) {
+                if (requestId == requestCounter.get()) {
+                    finishPiperPlayback(requestId)
                     _error.value = error.message ?: "No se pudo generar la voz Piper"
                 }
+            }
+        }
+    }
+
+    /**
+     * Piper's native API returns one complete waveform per call. To avoid waiting for the whole
+     * response, synthesize sentence-sized pieces ahead of playback and feed them to a streaming
+     * track. One buffered piece keeps synthesis and playback overlapped without retaining an
+     * entire response in memory.
+     */
+    private suspend fun streamPiperAudio(text: String, assetId: String, requestId: Long) {
+        val textChunks = SpokenTextFormatter.chunk(text, PIPER_STREAM_CHUNK_MAX_CHARS)
+        if (textChunks.isEmpty()) {
+            finishPiperPlayback(requestId)
+            return
+        }
+
+        coroutineScope {
+            val audioChunks = Channel<OfflineTtsAudio>(capacity = PIPER_BUFFERED_CHUNKS)
+            val producer = launch(Dispatchers.Default) {
+                try {
+                    for (chunk in textChunks) {
+                        if (requestId != requestCounter.get()) {
+                            throw CancellationException("TTS cancelado")
+                        }
+                        val audio = OnDemandVoiceFeatureLoader.synthesize(
+                            context = context,
+                            assetId = assetId,
+                            text = chunk,
+                            speed = 1f
+                        ).getOrElse { throw it }
+                        if (audio.samples.isNotEmpty()) audioChunks.send(audio)
+                    }
+                    audioChunks.close()
+                } catch (error: Throwable) {
+                    audioChunks.close(error)
+                }
+            }
+
+            var track: AudioTrack? = null
+            var sampleRate = 0
+            var expectedFrames = 0L
+            try {
+                for (audio in audioChunks) {
+                    if (requestId != requestCounter.get()) {
+                        throw CancellationException("TTS cancelado")
+                    }
+                    val activeTrack = track ?: createPiperStreamTrack(audio.sampleRate).also {
+                        track = it
+                        piperTrack = it
+                        sampleRate = audio.sampleRate
+                        it.play()
+                    }
+                    check(audio.sampleRate == sampleRate) {
+                        "Piper cambio la frecuencia de muestreo durante la reproduccion"
+                    }
+                    writePiperSamples(activeTrack, audio.samples, requestId)
+                    expectedFrames += audio.samples.size
+                }
+                val completedTrack = track
+                if (completedTrack != null && requestId == requestCounter.get()) {
+                    waitForPiperDrain(completedTrack, expectedFrames, sampleRate, requestId)
+                }
+            } finally {
+                producer.cancel()
+                audioChunks.cancel()
+            }
+        }
+        if (requestId == requestCounter.get()) finishPiperPlayback(requestId)
+    }
+
+    private fun createPiperStreamTrack(sampleRate: Int): AudioTrack {
+        val minBufferBytes = AudioTrack.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_FLOAT
+        )
+        check(minBufferBytes > 0) { "Android no admite audio PCM float a $sampleRate Hz" }
+        return AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build()
+            )
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .setBufferSizeInBytes(maxOf(minBufferBytes, PIPER_MIN_BUFFER_BYTES))
+            .build()
+            .also { track ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val lowLatencyFrames = (sampleRate / 50).coerceAtLeast(1)
+                    track.setStartThresholdInFrames(
+                        lowLatencyFrames.coerceAtMost(track.bufferSizeInFrames)
+                    )
+                }
+            }
+    }
+
+    private suspend fun writePiperSamples(
+        track: AudioTrack,
+        samples: FloatArray,
+        requestId: Long
+    ) {
+        var offset = 0
+        while (offset < samples.size) {
+            if (requestId != requestCounter.get()) throw CancellationException("TTS cancelado")
+            val written = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                track.write(samples, offset, samples.size - offset, AudioTrack.WRITE_BLOCKING)
+            }
+            check(written >= 0) { "AudioTrack no pudo escribir PCM de Piper: $written" }
+            check(written > 0) { "AudioTrack no acepto los datos PCM de Piper" }
+            offset += written
+        }
+    }
+
+    private suspend fun waitForPiperDrain(
+        track: AudioTrack,
+        expectedFrames: Long,
+        sampleRate: Int,
+        requestId: Long
+    ) {
+        val maximumDrainMs = expectedFrames * 1_000L / sampleRate + PIPER_DRAIN_GRACE_MS
+        val drainStartedAt = System.currentTimeMillis()
+        while (requestId == requestCounter.get() &&
+            track.playedFrames() < expectedFrames &&
+            System.currentTimeMillis() - drainStartedAt < maximumDrainMs
+        ) {
+            delay(20L)
+        }
+    }
+
+    private fun speakWithGroq(text: String) {
+        val config = preferences.groqTtsConfig.value
+        if (!config.isConfigured) {
+            _error.value = "Configura la API key y la voz de Groq en Ajustes > Voz"
+            return
+        }
+        stop()
+        val requestId = requestCounter.incrementAndGet()
+        _isSpeaking.value = true
+        _error.value = null
+        remoteJob = scope.launch {
+            selfHostedVoiceApi.synthesize(
+                text = text,
+                config = RemoteTtsConfig(
+                    endpointUrl = GROQ_TTS_ENDPOINT,
+                    model = config.model,
+                    voice = config.voice,
+                    apiKey = config.apiKey,
+                    apiFlavor = RemoteTtsApiFlavor.OPENAI,
+                    audioMode = RemoteTtsAudioMode.BUFFERED_WAV
+                )
+            ).onSuccess { audio ->
+                if (requestId != requestCounter.get()) return@onSuccess
+                playRemoteAudio(audio, requestId)
+            }.onFailure { error ->
+                if (requestId != requestCounter.get()) return@onFailure
+                _isSpeaking.value = false
+                _error.value = error.message ?: "No se pudo generar la voz de Groq"
+            }
         }
     }
 
@@ -427,7 +601,6 @@ class AndroidTextToSpeechManager @Inject constructor(
             )
             .setTransferMode(AudioTrack.MODE_STREAM)
             .setBufferSizeInBytes(bufferBytes)
-            .setSessionId(AudioManager.AUDIO_SESSION_ID_GENERATE)
             .build()
             .also { track ->
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -453,13 +626,17 @@ class AndroidTextToSpeechManager @Inject constructor(
         _isSpeaking.value = false
     }
 
-    private fun playRemoteAudio(audio: RemoteTtsAudio, requestId: Long) {
+    private suspend fun playRemoteAudio(audio: RemoteTtsAudio, requestId: Long) {
         if (audio.bytes.isEmpty() || requestId != requestCounter.get()) {
             _isSpeaking.value = false
             return
         }
-        val file = File.createTempFile("cortex_remote_tts_", audio.fileExtension, context.cacheDir)
-        file.writeBytes(audio.bytes)
+        // Keep disk I/O and the blocking prepare() off the main thread; MediaPlayer itself is
+        // created here (Looper thread) so completion/error listeners fire reliably.
+        val file = withContext(Dispatchers.IO) {
+            File.createTempFile("cortex_remote_tts_", audio.fileExtension, context.cacheDir)
+                .apply { writeBytes(audio.bytes) }
+        }
         remoteAudioFile = file
         runCatching {
             MediaPlayer().also { player ->
@@ -482,7 +659,7 @@ class AndroidTextToSpeechManager @Inject constructor(
                     finishRemotePlayback(requestId)
                     true
                 }
-                player.prepare()
+                withContext(Dispatchers.IO) { player.prepare() }
                 player.start()
             }
         }.onFailure { error ->
@@ -502,65 +679,14 @@ class AndroidTextToSpeechManager @Inject constructor(
         _isSpeaking.value = false
     }
 
-    private fun playPiperAudio(audio: OfflineTtsAudio, requestId: Long) {
-        if (audio.samples.isEmpty() || requestId != requestCounter.get()) {
-            _isSpeaking.value = false
-            return
-        }
-        val format = AudioFormat.Builder()
-            .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
-            .setSampleRate(audio.sampleRate)
-            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-            .build()
-        val attributes = AudioAttributes.Builder()
-            // Follow the user's media volume. Some devices keep the dedicated assistant
-            // stream muted even while media is audible, which makes previews appear broken.
-            .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-            .build()
-        val bufferBytes = audio.samples.size * Float.SIZE_BYTES
-        val track = AudioTrack.Builder()
-            .setAudioAttributes(attributes)
-            .setAudioFormat(format)
-            .setTransferMode(AudioTrack.MODE_STATIC)
-            .setBufferSizeInBytes(bufferBytes)
-            .setSessionId(AudioManager.AUDIO_SESSION_ID_GENERATE)
-            .build()
-        piperTrack = track
-        val written = track.write(audio.samples, 0, audio.samples.size, AudioTrack.WRITE_BLOCKING)
-        if (written <= 0) {
-            track.release()
-            piperTrack = null
-            _isSpeaking.value = false
-            _error.value = "No se pudo reproducir la voz Piper"
-            return
-        }
-        track.notificationMarkerPosition = written
-        track.setPlaybackPositionUpdateListener(
-            object : AudioTrack.OnPlaybackPositionUpdateListener {
-                override fun onMarkerReached(audioTrack: AudioTrack) {
-                    finishPiperPlayback(requestId)
-                }
-
-                override fun onPeriodicNotification(audioTrack: AudioTrack) = Unit
-            },
-            mainHandler
-        )
-        track.play()
-
-        val durationMillis = written * 1_000L / audio.sampleRate
-        scope.launch {
-            delay(durationMillis + 750L)
-            if (requestId == requestCounter.get() && _isSpeaking.value) {
-                finishPiperPlayback(requestId)
-            }
-        }
-    }
-
     private fun finishPiperPlayback(requestId: Long) {
         if (requestId != requestCounter.get()) return
-        piperTrack?.release()
+        piperTrack?.runCatching {
+            stop()
+            release()
+        }
         piperTrack = null
+        piperJob = null
         _isSpeaking.value = false
     }
 
@@ -620,5 +746,9 @@ class AndroidTextToSpeechManager @Inject constructor(
     companion object {
         private const val PCM16_MONO_BYTES_PER_FRAME = 2L
         private const val MAX_ZERO_WRITE_RETRIES = 50
+        private const val PIPER_STREAM_CHUNK_MAX_CHARS = 180
+        private const val PIPER_BUFFERED_CHUNKS = 1
+        private const val PIPER_MIN_BUFFER_BYTES = 4 * 1024
+        private const val PIPER_DRAIN_GRACE_MS = 1_000L
     }
 }

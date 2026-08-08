@@ -13,7 +13,9 @@ data class Conversation(
     val lastMemoryExtraction: Long? = null,
     val contextKind: ConversationContextKind = ConversationContextKind.CHAT,
     /** Empty means this conversation follows the global default chat model. */
-    val selectedModelOverride: String = ""
+    val selectedModelOverride: String = "",
+    /** When true, the conversation is pinned to the top of the chat history. */
+    val isPinned: Boolean = false
 )
 
 enum class ConversationContextKind {

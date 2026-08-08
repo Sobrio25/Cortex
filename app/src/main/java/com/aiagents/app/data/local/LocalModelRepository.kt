@@ -7,10 +7,13 @@ import com.aiagents.app.data.model.CustomLocalModelEntity
 import com.aiagents.app.domain.model.LocalModel
 import com.aiagents.app.domain.model.RecommendedModels
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -37,6 +40,19 @@ class LocalModelRepository @Inject constructor(
     private val _isDownloading = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val isDownloading: Flow<Map<String, Boolean>> = _isDownloading.asStateFlow()
 
+    // Cache de la lista de modelos. getAvailableModels() es síncrono (lo llaman
+    // getContextWindowForModel/hasApiKey desde hilos no suspendibles); para evitar
+    // que el runBlocking de la query a Room bloquee la UI, se precarga en segundo
+    // plano y se invalida en cada mutación (descarga/borrado/importación/CRUD).
+    @Volatile
+    private var cachedModels: List<LocalModel>? = null
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    init {
+        scope.launch { recomputeAvailableModels() }
+    }
+
     // Cliente HTTP con timeouts extendidos para descargas grandes
     // readTimeout: tiempo máximo sin recibir datos (no tiempo total de descarga)
     private val okHttpClient = OkHttpClient.Builder()
@@ -48,6 +64,22 @@ class LocalModelRepository @Inject constructor(
         .build()
 
     fun getAvailableModels(): List<LocalModel> {
+        cachedModels?.let { return it }
+        return recomputeAvailableModels()
+    }
+
+    private fun recomputeAvailableModels(): List<LocalModel> {
+        cachedModels?.let { return it }
+        val models = computeAvailableModels()
+        cachedModels = models
+        return models
+    }
+
+    private fun invalidateModelsCache() {
+        cachedModels = null
+    }
+
+    private fun computeAvailableModels(): List<LocalModel> {
         val recommended = RecommendedModels.MODELS.map { model ->
             val localFile = File(modelsDir, model.fileName)
             model.copy(
@@ -84,10 +116,12 @@ class LocalModelRepository @Inject constructor(
 
     suspend fun addCustomModel(entity: CustomLocalModelEntity) {
         customLocalModelDao.insert(entity)
+        invalidateModelsCache()
     }
 
     suspend fun removeCustomModel(id: String) {
         customLocalModelDao.delete(id)
+        invalidateModelsCache()
     }
 
     fun getDownloadedModels(): List<LocalModel> {
@@ -194,12 +228,14 @@ class LocalModelRepository @Inject constructor(
 
             _isDownloading.value = _isDownloading.value - model.id
             _downloadProgress.value = _downloadProgress.value - model.id
+            invalidateModelsCache()
 
             Result.success(outputFile.absolutePath)
         } catch (e: Exception) {
             Log.e(TAG, "Error descargando modelo: ${e.message}", e)
             _isDownloading.value = _isDownloading.value - model.id
             _downloadProgress.value = _downloadProgress.value - model.id
+            invalidateModelsCache()
 
             // Limpiar archivo parcial si existe
             try {
@@ -218,6 +254,7 @@ class LocalModelRepository @Inject constructor(
         val partialFile = File(modelsDir, "${model.fileName}.part")
         val deletedModel = !file.exists() || file.delete()
         val deletedPartial = !partialFile.exists() || partialFile.delete()
+        invalidateModelsCache()
         return deletedModel && deletedPartial
     }
 
@@ -238,6 +275,7 @@ class LocalModelRepository @Inject constructor(
         return try {
             val destFile = File(modelsDir, targetFileName)
             sourceFile.copyTo(destFile, overwrite = true)
+            invalidateModelsCache()
             if (destFile.exists() && destFile.length() > 0) {
                 Result.success(destFile.absolutePath)
             } else {

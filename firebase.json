@@ -80,6 +80,15 @@
         ]
       },
       {
+        "source": "/@(privacy|delete-account).html",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
         "source": "**/*.@(js|css)",
         "headers": [
           {

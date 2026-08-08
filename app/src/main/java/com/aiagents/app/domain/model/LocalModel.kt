@@ -99,7 +99,10 @@ object RecommendedModels {
             requiresLicense = true,
             requiresHFToken = true
         ),
-        // Gemma 4 E2B IT — modelo multimodal de nueva generación (2.58 GB)
+
+        // ── GEMMA 4 SIN TOKEN ─────────────────────────────────────────
+
+        // Gemma 4 E2B IT — Apache 2.0 y descarga pública (2.58 GB)
         // Repo: litert-community/gemma-4-E2B-it-litert-lm
         LocalModel(
             id = "gemma-4-e2b-it-litertlm",
@@ -107,12 +110,12 @@ object RecommendedModels {
             huggingFaceUrl = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm",
             fileName = "gemma-4-E2B-it.litertlm",
             sizeBytes = 2_580_000_000L,
-            description = "Gemma 4 multimodal (texto + imagen). Máximo razonamiento on-device, 32K contexto. Requiere token HF + licencia.",
+            description = "Gemma 4 multimodal (texto + imagen). Máximo razonamiento on-device, 32K contexto. Descarga pública bajo Apache 2.0.",
             contextLength = 32768,
-            requiresLicense = true,
-            requiresHFToken = true
+            requiresLicense = false,
+            requiresHFToken = false
         ),
-        // Gemma 4 E4B IT — modelo multimodal más potente (3.65 GB)
+        // Gemma 4 E4B IT — Apache 2.0 y descarga pública (3.65 GB)
         // Repo: litert-community/gemma-4-E4B-it-litert-lm
         LocalModel(
             id = "gemma-4-e4b-it-litertlm",
@@ -120,11 +123,14 @@ object RecommendedModels {
             huggingFaceUrl = "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm",
             fileName = "gemma-4-E4B-it.litertlm",
             sizeBytes = 3_650_000_000L,
-            description = "Gemma 4 multimodal 4B, máxima calidad on-device. 32K contexto, tool calling avanzado. Requiere token HF + licencia.",
+            description = "Gemma 4 multimodal 4B, máxima calidad on-device. 32K contexto y descarga pública bajo Apache 2.0.",
             contextLength = 32768,
-            requiresLicense = true,
-            requiresHFToken = true
+            requiresLicense = false,
+            requiresHFToken = false
         ),
+
+        // ── REQUIEREN TOKEN HF + LICENCIA ───────────────────────────────────
+
         // Gemma 3n E2B IT — modelo multimodal (3.14 GB)
         // Repo: google/gemma-3n-E2B-it-litert-preview
         LocalModel(

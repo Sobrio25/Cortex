@@ -5,7 +5,6 @@ import android.util.Log
 import com.aiagents.app.domain.service.STTConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.FormBody
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -46,31 +45,40 @@ class WhisperCloudSTTService(
     }
     
     override suspend fun transcribeAudio(audioData: ByteArray): Result<String> = withContext(Dispatchers.IO) {
-        val tempFile = saveTempWavFile(audioData)
-        
-        val result = when (provider) {
-            STTConfig.CloudSTTProvider.WHISPER_API -> transcribeWithOpenAI(tempFile)
-            STTConfig.CloudSTTProvider.SELF_HOSTED -> {
-                selfHostedVoiceApi?.transcribe(
-                    audioFile = tempFile,
-                    config = RemoteSttConfig(
-                        endpointUrl = remoteEndpointUrl,
-                        model = remoteModel,
-                        apiKey = apiKey
-                    ),
-                    language = requestedLanguage
-                ) ?: Result.failure(
-                    IllegalStateException("Cliente de voz autohospedada no disponible")
-                )
+        // Disk write failures (full storage, etc.) must surface as a transcription error instead of
+        // crashing the recording coroutine.
+        runCatching { saveTempWavFile(audioData) }.fold(
+            onSuccess = { tempFile ->
+                try {
+                    when (provider) {
+                        STTConfig.CloudSTTProvider.WHISPER_API -> transcribeWithOpenAI(tempFile)
+                        STTConfig.CloudSTTProvider.SELF_HOSTED -> {
+                            selfHostedVoiceApi?.transcribe(
+                                audioFile = tempFile,
+                                config = RemoteSttConfig(
+                                    endpointUrl = remoteEndpointUrl,
+                                    model = remoteModel,
+                                    apiKey = apiKey
+                                ),
+                                language = requestedLanguage
+                            ) ?: Result.failure(
+                                IllegalStateException("Cliente de voz autohosted no disponible")
+                            )
+                        }
+                        STTConfig.CloudSTTProvider.ASSEMBLY_AI -> transcribeWithAssemblyAI(tempFile)
+                        STTConfig.CloudSTTProvider.DEEPGRAM -> transcribeWithDeepgram(tempFile)
+                        STTConfig.CloudSTTProvider.GOOGLE_SPEECH -> transcribeWithGoogle(tempFile)
+                        else -> Result.failure(IllegalArgumentException("Proveedor no soportado: $provider"))
+                    }
+                } finally {
+                    tempFile.delete()
+                }
+            },
+            onFailure = { error ->
+                Log.e("WhisperCloudSTT", "No se pudo guardar el audio temporal", error)
+                Result.failure(error)
             }
-            STTConfig.CloudSTTProvider.ASSEMBLY_AI -> transcribeWithAssemblyAI(tempFile)
-            STTConfig.CloudSTTProvider.DEEPGRAM -> transcribeWithDeepgram(tempFile)
-            STTConfig.CloudSTTProvider.GOOGLE_SPEECH -> transcribeWithGoogle(tempFile)
-            else -> Result.failure(IllegalArgumentException("Proveedor no soportado: $provider"))
-        }
-        
-        tempFile.delete()
-        result
+        )
     }
     
     /**
@@ -133,46 +141,61 @@ class WhisperCloudSTTService(
                 .header("authorization", apiKey)
                 .post(audioFile.asRequestBody("audio/wav".toMediaType()))
                 .build()
-            
+
             val uploadResponse = client.newCall(uploadRequest).execute()
+            if (!uploadResponse.isSuccessful) {
+                return Result.failure(
+                    Exception(
+                        "AssemblyAI upload Error: ${uploadResponse.code} - " +
+                            uploadResponse.body?.string().orEmpty()
+                    )
+                )
+            }
             val uploadUrl = JSONObject(uploadResponse.body?.string() ?: "")
                 .getString("upload_url")
-            
-            // Paso 2: Iniciar transcripción
+
+            // Paso 2: Iniciar transcripción (AssemblyAI espera un cuerpo JSON)
+            val transcriptBody = JSONObject().apply {
+                put("audio_url", uploadUrl)
+                put("language_code", "es")
+            }
             val transcriptRequest = Request.Builder()
                 .url("https://api.assemblyai.com/v2/transcript")
                 .header("authorization", apiKey)
                 .header("content-type", "application/json")
-                .post(
-                    FormBody.Builder()
-                        .add("audio_url", uploadUrl)
-                        .add("language_code", "es")
-                        .build()
-                )
+                .post(transcriptBody.toString().toRequestBody())
                 .build()
-            
+
             val transcriptResponse = client.newCall(transcriptRequest).execute()
+            if (!transcriptResponse.isSuccessful) {
+                return Result.failure(
+                    Exception(
+                        "AssemblyAI transcript Error: ${transcriptResponse.code} - " +
+                            transcriptResponse.body?.string().orEmpty()
+                    )
+                )
+            }
             val transcriptId = JSONObject(transcriptResponse.body?.string() ?: "")
                 .getString("id")
-            
+
             // Paso 3: Polling hasta completar
             var completed = false
             var text = ""
             var attempts = 0
-            
+
             while (!completed && attempts < 60) {
                 Thread.sleep(1000)
                 attempts++
-                
+
                 val checkRequest = Request.Builder()
                     .url("https://api.assemblyai.com/v2/transcript/$transcriptId")
                     .header("authorization", apiKey)
                     .get()
                     .build()
-                
+
                 val checkResponse = client.newCall(checkRequest).execute()
                 val json = JSONObject(checkResponse.body?.string() ?: "")
-                
+
                 when (json.getString("status")) {
                     "completed" -> {
                         completed = true
@@ -181,7 +204,12 @@ class WhisperCloudSTTService(
                     "error" -> return Result.failure(Exception("Transcription error"))
                 }
             }
-            
+
+            if (!completed) {
+                return Result.failure(
+                    Exception("La transcripcion de AssemblyAI supero el tiempo limite")
+                )
+            }
             Result.success(text)
         } catch (e: Exception) {
             Log.e("WhisperCloudSTT", "Error AssemblyAI", e)

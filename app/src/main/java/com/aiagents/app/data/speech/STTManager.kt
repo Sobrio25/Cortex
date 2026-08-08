@@ -133,8 +133,15 @@ class STTManager @Inject constructor(
 
     @Synchronized
     private fun releaseService() {
-        _currentService.value?.release()
+        val previous = _currentService.value
         _currentService.value = null
+        if (previous != null) {
+            // release() en BaseSTTService hace runBlocking { stopListening() };
+            // ejecutarla fuera del hilo principal para no bloquear la UI.
+            scope.launch(Dispatchers.IO) {
+                runCatching { previous.release() }
+            }
+        }
     }
 
     fun release() = releaseService()

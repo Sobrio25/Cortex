@@ -2,6 +2,7 @@ package com.aiagents.app.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -51,15 +52,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
+import coil.request.ImageRequest
 import com.aiagents.app.R
 import com.aiagents.app.presentation.tool_results.ArtifactPresentation
 import com.aiagents.app.presentation.tool_results.ResearchSource
@@ -226,35 +234,39 @@ fun ResearchSourcesCard(
     modifier: Modifier = Modifier
 ) {
     if (sources.isEmpty()) return
-    var expanded by remember(sources) { mutableStateOf(false) }
-    val visible = if (expanded) sources else sources.take(3)
     val uriHandler = LocalUriHandler.current
 
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.50f))
     ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 11.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(17.dp), tint = MaterialTheme.colorScheme.secondary)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = stringResource(R.string.research_sources_count, sources.size),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-            Spacer(Modifier.height(5.dp))
-            visible.forEachIndexed { index, source ->
-                SourceRow(index + 1, source) { runCatching { uriHandler.openUri(source.url) } }
-            }
-            if (sources.size > 3) {
-                TextButton(onClick = { expanded = !expanded }) {
-                    Text(
-                        if (expanded) stringResource(R.string.research_sources_less)
-                        else stringResource(R.string.research_sources_more, sources.size - 3)
-                    )
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.Link,
+                contentDescription = null,
+                modifier = Modifier.size(15.dp),
+                tint = MaterialTheme.colorScheme.secondary
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = stringResource(R.string.research_sources_count, sources.size),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.width(10.dp))
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                sources.forEach { source ->
+                    SourceFaviconChip(source) { runCatching { uriHandler.openUri(source.url) } }
                 }
             }
         }
@@ -262,41 +274,48 @@ fun ResearchSourcesCard(
 }
 
 @Composable
-private fun SourceRow(index: Int, source: ResearchSource, onOpen: () -> Unit) {
-    Row(
+private fun SourceFaviconChip(source: ResearchSource, onOpen: () -> Unit) {
+    val context = LocalContext.current
+    var faviconFailed by remember(source.url) { mutableStateOf(false) }
+    Box(
         modifier = Modifier
-            .fillMaxWidth()
+            .size(26.dp)
+            .clip(CircleShape)
+            .background(domainColor(source.domain))
+            .border(1.dp, Color.White.copy(alpha = 0.22f), CircleShape)
             .clickable(onClick = onOpen)
-            .semantics {
-                contentDescription = "$index. ${source.title}. ${source.domain}"
-            }
-            .padding(vertical = 7.dp),
-        verticalAlignment = Alignment.Top
+            .semantics { contentDescription = "${source.title}. ${source.domain}" },
+        contentAlignment = Alignment.Center
     ) {
-        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.14f)) {
-            Text(
-                text = index.toString(),
-                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.secondary,
-                fontWeight = FontWeight.Bold
+        Text(
+            text = source.domain.firstOrNull()?.uppercase() ?: "?",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            modifier = Modifier.clearAndSetSemantics { }
+        )
+        if (!faviconFailed) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data("https://www.google.com/s2/favicons?domain=${source.domain}&sz=64")
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null,
+                modifier = Modifier
+                    .size(18.dp)
+                    .clearAndSetSemantics { },
+                contentScale = ContentScale.Fit,
+                onState = { state ->
+                    if (state is AsyncImagePainter.State.Error) faviconFailed = true
+                }
             )
         }
-        Spacer(Modifier.width(9.dp))
-        Column(Modifier.weight(1f)) {
-            Text(source.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(source.domain, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
-            if (source.snippet.isNotBlank()) {
-                Text(source.snippet, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            }
-        }
-        Icon(
-            Icons.AutoMirrored.Filled.Launch,
-            contentDescription = stringResource(R.string.research_source_open),
-            modifier = Modifier.size(16.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
+}
+
+private fun domainColor(domain: String): Color {
+    val hue = (domain.hashCode() and 0x7FFFFFFF) % 360
+    return Color.hsl(hue.toFloat(), 0.55f, 0.42f)
 }
 
 @Composable

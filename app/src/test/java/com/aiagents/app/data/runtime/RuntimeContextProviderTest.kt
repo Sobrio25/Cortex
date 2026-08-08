@@ -43,6 +43,24 @@ class RuntimeContextProviderTest {
     }
 
     @Test
+    fun localModelPromptKeepsOnlyIdentityDateAndWebTools() {
+        val prompt = RuntimeContextProvider.renderLocalModelPrompt(
+            agentName = "Atlas",
+            userName = "Gabo",
+            date = "2026-07-31"
+        )
+
+        assertTrue(prompt.contains("Agent: Atlas"))
+        assertTrue(prompt.contains("User: Gabo"))
+        assertTrue(prompt.contains("Date: 2026-07-31"))
+        assertTrue(prompt.contains("web_search"))
+        assertTrue(prompt.contains("web_fetch"))
+        assertFalse(prompt.contains("MEMORY"))
+        assertFalse(prompt.contains("SOUL"))
+        assertFalse(prompt.contains("Android"))
+    }
+
+    @Test
     fun voiceSoulUsesDedicatedAssistantDocument() {
         val voiceSoul = RuntimeContextProvider.renderVoiceSoul(
             snapshot("# ASSISTANT_SOUL.md\n\nSé cálido y conciso.", maxChars = 20_000),

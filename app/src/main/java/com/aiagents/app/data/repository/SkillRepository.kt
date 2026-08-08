@@ -182,6 +182,11 @@ class SkillRepository @Inject constructor(
         id
     }
 
+    /** Records that the agent loaded and applied a skill. Feeds the learning loop. */
+    suspend fun recordSkillUsage(id: Long): Result<Unit> = runCatching {
+        skillDao.recordUsage(id, System.currentTimeMillis())
+    }
+
     suspend fun activate(id: Long): Result<Unit> = updateStatus(id, SkillStatus.ACTIVE)
 
     suspend fun deactivate(id: Long): Result<Unit> = updateStatus(id, SkillStatus.INACTIVE)
@@ -303,7 +308,9 @@ private fun SkillEntity.toDomain(): Skill = Skill(
     createdAt = createdAt,
     updatedAt = updatedAt,
     activatedAt = activatedAt,
-    archivedAt = archivedAt
+    archivedAt = archivedAt,
+    usageCount = usageCount,
+    lastUsedAt = lastUsedAt
 )
 
 private fun SkillReviewEntity.toDomain(): SkillReview = SkillReview(

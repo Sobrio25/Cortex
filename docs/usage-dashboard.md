@@ -67,9 +67,9 @@ Prompts, responses, files, images, tool payloads, API keys and provider credenti
 never sent to the telemetry endpoint. BYOK/local token counts are estimates; managed
 requests retain the upstream measurement flag.
 
-Global analytics is enabled by default and can be disabled in **Settings → Privacy and
-analytics → Global usage statistics**. Reporting is asynchronous and failures never
-change or delay a model response.
+Global analytics is disabled by default and can be enabled explicitly in **Settings → Privacy and
+analytics → Global usage statistics**. Reporting is asynchronous and failures never change or
+delay a model response.
 
 Both dashboards start collecting data only after their instrumented clients and
 Functions are deployed; they cannot reconstruct historical requests.

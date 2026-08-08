@@ -153,4 +153,11 @@ class DrawerViewModel @Inject constructor(
             repository.updateConversationTitle(id, title)
         }
     }
+
+    fun togglePinConversation(id: Long) {
+        viewModelScope.launch {
+            val current = conversations.value.find { it.id == id } ?: return@launch
+            repository.setConversationPinned(id, !current.isPinned)
+        }
+    }
 }

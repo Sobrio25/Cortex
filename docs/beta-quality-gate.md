@@ -43,8 +43,9 @@ La suite debe cubrir, como mínimo:
 - Estado de borrador tras reconstruir la dependencia de preferencias.
 - Conversión de fallo offline a estado recuperable, seguida de un reintento exitoso.
 - Ausencia de permisos de almacenamiento heredado y `USE_EXACT_ALARM`.
-- Migraciones 38→41, 41→46, 43→44 y 44→46, incluyendo FTS, agentes personalizados, tareas
-  programadas e identidad del orquestador.
+- Migraciones 38→41, 41→46, 43→44, 44→46, 46→47, 47→48, 48→49, 49→50 y 50→51,
+  incluyendo FTS, agentes personalizados, tareas programadas, skills, ejecuciones de subagentes y
+  conversaciones fijadas.
 
 Para una versión candidata, repetir la migración instalando primero el último APK publicado con
 una base representativa, crear conversaciones/tareas/memorias, actualizar encima con el APK nuevo
@@ -63,6 +64,9 @@ En un dispositivo/emulador limpio:
    cargo lógico del turno.
 5. Probar una función que sí necesita cada permiso. La app debe explicar por qué lo necesita y
    ofrecer volver a Ajustes; no debe inventar un resultado exitoso.
+6. Intentar guardar una URL HTTP pública con credenciales para un proveedor remoto: debe
+   rechazarse. Verificar que Ollama y LM Studio sí aceptan HTTP para `localhost`, el emulador y una
+   dirección privada de la LAN.
 
 ## 5. Compatibilidad de páginas de 16 KiB
 

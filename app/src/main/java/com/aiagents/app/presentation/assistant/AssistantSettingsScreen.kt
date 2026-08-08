@@ -77,7 +77,10 @@ import com.aiagents.app.R
 import com.aiagents.app.presentation.voice.VoiceAssetUiState
 import com.aiagents.app.data.speech.AssistantSttMode
 import com.aiagents.app.data.speech.AssistantTtsMode
+import com.aiagents.app.data.speech.GROQ_TTS_DEFAULT_MODEL
+import com.aiagents.app.data.speech.GROQ_TTS_VOICES
 import com.aiagents.app.data.speech.GoogleTtsVoice
+import com.aiagents.app.data.speech.GroqTtsConfig
 import com.aiagents.app.data.speech.Qwen3TtsVoiceSkill
 import com.aiagents.app.data.speech.RemoteSttConfig
 import com.aiagents.app.data.speech.RemoteTtsAudioMode
@@ -725,6 +728,88 @@ internal fun RemoteTtsServerCard(
         }
         VoiceServerApiKeyField(apiKey = apiKey, onApiKeyChange = { apiKey = it })
         HttpEndpointNotice(endpointUrl)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = { onSave(draft()) },
+                enabled = draftComplete,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Guardar y usar")
+            }
+            OutlinedButton(
+                onClick = { onPreview(draft()) },
+                enabled = draftComplete
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null)
+                Text("Probar")
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun GroqTtsCard(
+    selected: Boolean,
+    config: GroqTtsConfig,
+    onSelect: () -> Unit,
+    onSave: (GroqTtsConfig) -> Unit,
+    onPreview: (GroqTtsConfig) -> Unit
+) {
+    var apiKey by remember(config.apiKey) { mutableStateOf(config.apiKey) }
+    var voice by remember(config.voice) { mutableStateOf(config.voice) }
+    var model by remember(config.model) { mutableStateOf(config.model) }
+    var expanded by remember { mutableStateOf(false) }
+    val draft = { GroqTtsConfig(apiKey = apiKey, voice = voice, model = model) }
+    val draftComplete = apiKey.isNotBlank() && voice.isNotBlank() && model.isNotBlank()
+
+    VoiceServerCard(
+        title = "Groq TTS",
+        description = "Canopy Orpheus en GroqCloud: voz inglesa rapida via /v1/audio/speech de OpenAI",
+        selected = selected,
+        configured = config.isConfigured,
+        onSelect = onSelect
+    ) {
+        VoiceServerApiKeyField(apiKey = apiKey, onApiKeyChange = { apiKey = it })
+        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+            OutlinedTextField(
+                value = voice,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Voz de Orpheus") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+            )
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                GROQ_TTS_VOICES.forEach { name ->
+                    DropdownMenuItem(
+                        text = { Text(name) },
+                        onClick = {
+                            voice = name
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+        OutlinedTextField(
+            value = model,
+            onValueChange = { model = it },
+            label = { Text("Modelo") },
+            placeholder = { Text(GROQ_TTS_DEFAULT_MODEL) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(
+            "Solo ingles por ahora. Soporta direcciones vocales como [cheerful] y [sad] dentro del texto.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
 import { parseUsageDays, utcDayKey } from "./usage";
+import { userHash } from "./privacy";
 
 const APP_USAGE_FIELDS = [
   "requests",
@@ -114,7 +115,7 @@ export async function recordAppUsageEvent(input: AppUsageEventInput): Promise<vo
   const promptTokens = finiteNonNegative(input.promptTokens, 100_000_000);
   const completionTokens = finiteNonNegative(input.completionTokens, 100_000_000);
   const durationMs = finiteNonNegative(input.durationMs, 24 * 60 * 60 * 1_000);
-  const userHash = createHash("sha256").update(input.uid).digest("hex").slice(0, 16);
+  const hashedUser = userHash(input.uid);
   const dimensionHash = createHash("sha256")
     .update(`${source}\u0000${provider}\u0000${model}`)
     .digest("hex")
@@ -132,7 +133,7 @@ export async function recordAppUsageEvent(input: AppUsageEventInput): Promise<vo
   await db.runTransaction(async (transaction) => {
     if (eventDocumentId && (await transaction.get(eventRef)).exists) return;
     transaction.create(eventRef, {
-      userHash,
+      userHash: hashedUser,
       day,
       source,
       provider,

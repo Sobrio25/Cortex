@@ -3,6 +3,9 @@ package com.aiagents.app.data.local
 import android.content.Context
 import com.aiagents.app.data.speech.AssistantSttMode
 import com.aiagents.app.data.speech.AssistantTtsMode
+import com.aiagents.app.data.speech.GROQ_TTS_DEFAULT_MODEL
+import com.aiagents.app.data.speech.GROQ_TTS_DEFAULT_VOICE
+import com.aiagents.app.data.speech.GroqTtsConfig
 import com.aiagents.app.data.speech.OnDemandVoiceFeatureLoader
 import com.aiagents.app.data.speech.Qwen3TtsVoiceSkill
 import com.aiagents.app.data.speech.RemoteSttConfig
@@ -75,6 +78,9 @@ class VoicePreferences @Inject constructor(
 
     private val _remoteTtsConfig = MutableStateFlow(readRemoteTtsConfig())
     val remoteTtsConfig: StateFlow<RemoteTtsConfig> = _remoteTtsConfig.asStateFlow()
+
+    private val _groqTtsConfig = MutableStateFlow(readGroqTtsConfig())
+    val groqTtsConfig: StateFlow<GroqTtsConfig> = _groqTtsConfig.asStateFlow()
 
     private val _sttSettings = MutableStateFlow(buildSttSettings())
     val sttSettings: StateFlow<GlobalSttSettings> = _sttSettings.asStateFlow()
@@ -168,6 +174,20 @@ class VoicePreferences @Inject constructor(
             .apply()
         securePreferences.saveAssistantRemoteTtsApiKey(normalized.apiKey)
         _remoteTtsConfig.value = normalized
+    }
+
+    fun setGroqTtsConfig(config: GroqTtsConfig) {
+        val normalized = config.copy(
+            apiKey = config.apiKey.trim(),
+            voice = config.voice.trim().ifBlank { GROQ_TTS_DEFAULT_VOICE },
+            model = config.model.trim().ifBlank { GROQ_TTS_DEFAULT_MODEL }
+        )
+        preferences.edit()
+            .putString(KEY_GROQ_TTS_VOICE, normalized.voice)
+            .putString(KEY_GROQ_TTS_MODEL, normalized.model)
+            .apply()
+        securePreferences.saveVoiceTtsApiKey(AssistantTtsMode.GROQ.id, normalized.apiKey)
+        _groqTtsConfig.value = normalized
     }
 
     override fun import(settings: LegacyWorkspaceVoiceSettings?): Boolean {
@@ -277,6 +297,14 @@ class VoicePreferences @Inject constructor(
         pcmSampleRate = preferences.getInt(KEY_REMOTE_TTS_PCM_SAMPLE_RATE, 24_000)
     )
 
+    private fun readGroqTtsConfig() = GroqTtsConfig(
+        apiKey = securePreferences.getVoiceTtsApiKey(AssistantTtsMode.GROQ.id),
+        voice = preferences.getString(KEY_GROQ_TTS_VOICE, GROQ_TTS_DEFAULT_VOICE)
+            .orEmpty().ifBlank { GROQ_TTS_DEFAULT_VOICE },
+        model = preferences.getString(KEY_GROQ_TTS_MODEL, GROQ_TTS_DEFAULT_MODEL)
+            .orEmpty().ifBlank { GROQ_TTS_DEFAULT_MODEL }
+    )
+
     companion object {
         private const val FILE_NAME = "cortex_assistant_preferences"
         private const val KEY_AUTO_LISTEN = "auto_listen"
@@ -297,6 +325,8 @@ class VoicePreferences @Inject constructor(
         private const val KEY_REMOTE_TTS_ADAPTIVE_STYLE = "assistant_remote_tts_adaptive_style"
         private const val KEY_REMOTE_TTS_AUDIO_MODE = "assistant_remote_tts_audio_mode"
         private const val KEY_REMOTE_TTS_PCM_SAMPLE_RATE = "assistant_remote_tts_pcm_sample_rate"
+        private const val KEY_GROQ_TTS_VOICE = "assistant_groq_tts_voice"
+        private const val KEY_GROQ_TTS_MODEL = "assistant_groq_tts_model"
         private const val LEGACY_DISABLED_STT_MODE = "none"
         private const val DEFAULT_STT_LANGUAGE = "es"
         private const val DEFAULT_REMOTE_STT_MODEL = "whisper-1"

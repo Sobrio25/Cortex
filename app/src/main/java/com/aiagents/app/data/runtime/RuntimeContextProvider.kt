@@ -105,6 +105,22 @@ class RuntimeContextProvider @Inject constructor(
             append("These identity values are runtime facts, not conversational memory.")
         }
 
+        /**
+         * Deliberately small system context for models that run on the device. Keep this limited
+         * to identity, date, and the two web tools so small context windows are not consumed by
+         * agent personality, memory, skills, or device metadata.
+         */
+        fun renderLocalModelPrompt(
+            agentName: String,
+            userName: String?,
+            date: String
+        ): String = buildString {
+            appendLine("Agent: ${agentName.ifBlank { "Assistant" }}")
+            appendLine("User: ${userName?.trim().takeUnless { it.isNullOrBlank() } ?: "Not configured"}")
+            appendLine("Date: $date")
+            append("Tools: web_search, web_fetch")
+        }
+
         fun renderVoiceSoul(snapshot: CortexMemorySnapshot, fallbackAgentName: String): String =
             buildString {
                 appendLine(VOICE_SOUL_MARKER)
@@ -304,6 +320,19 @@ class RuntimeContextProvider @Inject constructor(
             append("\n\n")
             append(render(snapshot))
         }
+    }
+
+    fun localModelPrompt(
+        agentName: String,
+        now: ZonedDateTime = ZonedDateTime.now()
+    ): String {
+        val userName = securePreferences.getPreferredUserName()?.trim().takeUnless { it.isNullOrBlank() }
+            ?: securePreferences.getUserName()?.trim().takeUnless { it.isNullOrBlank() }
+        return renderLocalModelPrompt(
+            agentName = agentName,
+            userName = userName,
+            date = now.toLocalDate().toString()
+        )
     }
 
     private fun currentContextFiles() = CortexContextFilesSnapshot(

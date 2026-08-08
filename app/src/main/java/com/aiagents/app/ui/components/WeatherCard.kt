@@ -177,16 +177,16 @@ fun mapCondition(conditionId: Int, icon: String): WeatherCondition {
 }
 
 fun getWeatherGradient(condition: WeatherCondition): Brush = when (condition) {
-    WeatherCondition.CLEAR_DAY -> Brush.linearGradient(listOf(Color(0xFF0277BD), Color(0xFF29B6F6)))
-    WeatherCondition.CLEAR_NIGHT -> Brush.linearGradient(listOf(Color(0xFF11183E), Color(0xFF3949AB)))
-    WeatherCondition.PARTLY_CLOUDY -> Brush.linearGradient(listOf(Color(0xFF1565C0), Color(0xFF78909C)))
-    WeatherCondition.CLOUDY -> Brush.linearGradient(listOf(Color(0xFF455A64), Color(0xFF78909C)))
-    WeatherCondition.OVERCAST -> Brush.linearGradient(listOf(Color(0xFF37474F), Color(0xFF607D8B)))
-    WeatherCondition.RAIN -> Brush.linearGradient(listOf(Color(0xFF263238), Color(0xFF455A64)))
-    WeatherCondition.DRIZZLE -> Brush.linearGradient(listOf(Color(0xFF37474F), Color(0xFF607D8B)))
-    WeatherCondition.THUNDERSTORM -> Brush.linearGradient(listOf(Color(0xFF17152E), Color(0xFF37474F)))
-    WeatherCondition.SNOW -> Brush.linearGradient(listOf(Color(0xFFE3F2FD), Color(0xFF90CAF9)))
-    WeatherCondition.MIST_FOG -> Brush.linearGradient(listOf(Color(0xFFCFD8DC), Color(0xFF90A4AE)))
+    WeatherCondition.CLEAR_DAY -> Brush.linearGradient(listOf(Color(0xFF1565C0), Color(0xFF1E88E5), Color(0xFF4FC3F7)))
+    WeatherCondition.CLEAR_NIGHT -> Brush.linearGradient(listOf(Color(0xFF0B1035), Color(0xFF1A237E), Color(0xFF3949AB)))
+    WeatherCondition.PARTLY_CLOUDY -> Brush.linearGradient(listOf(Color(0xFF1A6FB5), Color(0xFF4F8FBF), Color(0xFF8FA9B8)))
+    WeatherCondition.CLOUDY -> Brush.linearGradient(listOf(Color(0xFF37474F), Color(0xFF546E7A), Color(0xFF78909C)))
+    WeatherCondition.OVERCAST -> Brush.linearGradient(listOf(Color(0xFF263238), Color(0xFF37474F), Color(0xFF546E7A)))
+    WeatherCondition.RAIN -> Brush.linearGradient(listOf(Color(0xFF16232E), Color(0xFF2A3F4D), Color(0xFF46607A)))
+    WeatherCondition.DRIZZLE -> Brush.linearGradient(listOf(Color(0xFF2E4756), Color(0xFF4A6572), Color(0xFF728E9E)))
+    WeatherCondition.THUNDERSTORM -> Brush.linearGradient(listOf(Color(0xFF14122B), Color(0xFF2C2450), Color(0xFF4A3F6B)))
+    WeatherCondition.SNOW -> Brush.linearGradient(listOf(Color(0xFFE1F5FE), Color(0xFFB3E5FC), Color(0xFF81D4FA)))
+    WeatherCondition.MIST_FOG -> Brush.linearGradient(listOf(Color(0xFFCFD8DC), Color(0xFFB0BEC5), Color(0xFF90A4AE)))
 }
 
 fun getWeatherTextColor(condition: WeatherCondition): Color = when (condition) {
@@ -197,13 +197,13 @@ fun getWeatherTextColor(condition: WeatherCondition): Color = when (condition) {
 fun getConditionEmoji(condition: WeatherCondition): String = when (condition) {
     WeatherCondition.CLEAR_DAY -> "☀️"
     WeatherCondition.CLEAR_NIGHT -> "🌙"
-    WeatherCondition.PARTLY_CLOUDY -> "⛅"
+    WeatherCondition.PARTLY_CLOUDY -> "🌤️"
     WeatherCondition.CLOUDY -> "☁️"
     WeatherCondition.OVERCAST -> "🌥️"
     WeatherCondition.RAIN -> "🌧️"
     WeatherCondition.DRIZZLE -> "🌦️"
     WeatherCondition.THUNDERSTORM -> "⛈️"
-    WeatherCondition.SNOW -> "🌨️"
+    WeatherCondition.SNOW -> "❄️"
     WeatherCondition.MIST_FOG -> "🌫️"
 }
 
@@ -382,15 +382,15 @@ fun CurrentWeatherCard(
         append("Fuente ${data.source}.")
     }
 
-    val shape = RoundedCornerShape(24.dp)
+    val shape = RoundedCornerShape(28.dp)
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
             .clip(shape)
             .background(getWeatherGradient(condition))
-            .border(1.dp, Color.White.copy(alpha = 0.18f), shape)
+            .border(1.dp, textColor.copy(alpha = 0.16f), shape)
             .semantics(mergeDescendants = true) { contentDescription = accessibilityText }
-            .padding(18.dp)
+            .padding(20.dp)
     ) {
         val compact = maxWidth < 310.dp
         val statsColumns = if (maxWidth < 360.dp) 2 else 3
@@ -429,9 +429,16 @@ fun CurrentWeatherCard(
             )
             if (data.sunrise.isNotBlank() && data.sunset.isNotBlank()) {
                 Spacer(Modifier.height(12.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    Text("🌅 ${data.sunrise}", color = secondaryColor, style = MaterialTheme.typography.bodyMedium)
-                    Text("🌇 ${data.sunset}", color = secondaryColor, style = MaterialTheme.typography.bodyMedium)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(textColor.copy(alpha = 0.10f))
+                        .padding(vertical = 9.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    Text("🌅 ${data.sunrise}", color = textColor, style = MaterialTheme.typography.bodyMedium)
+                    Text("🌇 ${data.sunset}", color = textColor, style = MaterialTheme.typography.bodyMedium)
                 }
             }
             WeatherFooter(data.updatedAt, data.timezone, data.source, data.isCached, textColor)
@@ -450,17 +457,17 @@ fun ForecastWeatherCard(
     val secondaryColor = textColor.copy(alpha = 0.84f)
     val location = displayLocation(data.city, data.country)
 
-    val shape = RoundedCornerShape(24.dp)
+    val shape = RoundedCornerShape(28.dp)
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
             .clip(shape)
             .background(getWeatherGradient(condition))
-            .border(1.dp, Color.White.copy(alpha = 0.18f), shape)
+            .border(1.dp, textColor.copy(alpha = 0.16f), shape)
             .semantics {
                 contentDescription = "Pronóstico para $location, ${data.days.size} días. Fuente ${data.source}."
             }
-            .padding(18.dp)
+            .padding(20.dp)
     ) {
         val layoutMode = resolveForecastLayoutMode(data.days.size, maxWidth.value)
         Column(Modifier.fillMaxWidth()) {
@@ -649,7 +656,7 @@ private fun CurrentWeatherHero(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            WeatherConditionBadge(condition, compact = true)
+            WeatherConditionBadge(condition, compact = true, textColor = textColor)
             Spacer(Modifier.height(9.dp))
             CurrentTemperatureSummary(
                 data = data,
@@ -664,8 +671,8 @@ private fun CurrentWeatherHero(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            WeatherConditionBadge(condition, compact = false)
-            Spacer(Modifier.width(16.dp))
+            WeatherConditionBadge(condition, compact = false, textColor = textColor)
+            Spacer(Modifier.width(18.dp))
             CurrentTemperatureSummary(
                 data = data,
                 textColor = textColor,
@@ -679,22 +686,22 @@ private fun CurrentWeatherHero(
 }
 
 @Composable
-private fun WeatherConditionBadge(condition: WeatherCondition, compact: Boolean) {
+private fun WeatherConditionBadge(condition: WeatherCondition, compact: Boolean, textColor: Color) {
     Box(
         modifier = Modifier
-            .size(if (compact) 68.dp else 76.dp)
-            .clip(RoundedCornerShape(if (compact) 20.dp else 23.dp))
-            .background(Color.White.copy(alpha = 0.14f))
+            .size(if (compact) 72.dp else 80.dp)
+            .clip(RoundedCornerShape(if (compact) 22.dp else 24.dp))
+            .background(textColor.copy(alpha = 0.14f))
             .border(
                 1.dp,
-                Color.White.copy(alpha = 0.16f),
-                RoundedCornerShape(if (compact) 20.dp else 23.dp)
+                textColor.copy(alpha = 0.18f),
+                RoundedCornerShape(if (compact) 22.dp else 24.dp)
             ),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = getConditionEmoji(condition),
-            fontSize = if (compact) 38.sp else 44.sp,
+            fontSize = if (compact) 40.sp else 46.sp,
             modifier = Modifier.clearAndSetSemantics { }
         )
     }
@@ -712,7 +719,7 @@ private fun CurrentTemperatureSummary(
     Column(modifier = modifier, horizontalAlignment = horizontalAlignment) {
         Text(
             text = "${formatTemperatureValue(data.temp)}${data.unitSymbol}",
-            style = MaterialTheme.typography.displaySmall,
+            style = MaterialTheme.typography.displayMedium,
             fontWeight = FontWeight.Bold,
             color = textColor,
             maxLines = 1
@@ -720,6 +727,7 @@ private fun CurrentTemperatureSummary(
         Text(
             text = data.description,
             style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Medium,
             color = secondaryColor,
             textAlign = textAlign,
             maxLines = 2,
@@ -728,7 +736,7 @@ private fun CurrentTemperatureSummary(
         Text(
             text = "Mín. ${formatTemperatureValue(data.minTemp)}${data.unitSymbol}  ·  Máx. ${formatTemperatureValue(data.maxTemp)}${data.unitSymbol}",
             style = MaterialTheme.typography.labelLarge,
-            color = textColor,
+            color = textColor.copy(alpha = 0.92f),
             textAlign = textAlign
         )
     }
@@ -742,13 +750,13 @@ private fun FeaturedForecastDay(
     secondaryColor: Color
 ) {
     val condition = mapCondition(day.conditionId, day.icon)
-    val shape = RoundedCornerShape(20.dp)
+    val shape = RoundedCornerShape(22.dp)
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(Color.Black.copy(alpha = 0.16f))
-            .border(1.dp, Color.White.copy(alpha = 0.16f), shape)
+            .background(textColor.copy(alpha = 0.10f))
+            .border(1.dp, textColor.copy(alpha = 0.14f), shape)
             .semantics(mergeDescendants = true) {
                 contentDescription = forecastDayDescription(day, unitSymbol)
             }
@@ -845,7 +853,8 @@ private fun EmptyForecast(textColor: Color, secondaryColor: Color) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
-            .background(Color.Black.copy(alpha = 0.12f))
+            .background(textColor.copy(alpha = 0.08f))
+            .border(1.dp, textColor.copy(alpha = 0.12f), RoundedCornerShape(18.dp))
             .padding(horizontal = 16.dp, vertical = 22.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -917,9 +926,9 @@ private fun ForecastDayMiniCard(
     Column(
         modifier = modifier
             .heightIn(min = 174.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color.Black.copy(alpha = 0.18f))
-            .border(1.dp, Color.White.copy(alpha = 0.13f), RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(18.dp))
+            .background(textColor.copy(alpha = 0.10f))
+            .border(1.dp, textColor.copy(alpha = 0.13f), RoundedCornerShape(18.dp))
             .semantics(mergeDescendants = true) {
                 contentDescription = forecastDayDescription(day, unitSymbol)
             }
@@ -935,10 +944,10 @@ private fun ForecastDayMiniCard(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        Spacer(Modifier.height(7.dp))
+        Spacer(Modifier.height(8.dp))
         Text(
             getConditionEmoji(condition),
-            fontSize = 28.sp,
+            fontSize = 30.sp,
             modifier = Modifier.clearAndSetSemantics { }
         )
         Spacer(Modifier.height(5.dp))
@@ -1017,10 +1026,17 @@ private fun WeatherStat(
 ) {
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(13.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(
-                if (darkTile) Color.Black.copy(alpha = 0.16f)
+                if (darkTile) textColor.copy(alpha = 0.12f)
                 else MaterialTheme.colorScheme.surfaceContainerHighest
+            )
+            .then(
+                if (darkTile) Modifier.border(
+                    1.dp,
+                    textColor.copy(alpha = 0.14f),
+                    RoundedCornerShape(14.dp)
+                ) else Modifier
             )
             .padding(horizontal = 8.dp, vertical = 9.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -1075,7 +1091,8 @@ private fun StatusPill(text: String, textColor: Color) {
         color = textColor,
         modifier = Modifier
             .clip(RoundedCornerShape(50))
-            .background(Color.Black.copy(alpha = 0.16f))
+            .background(textColor.copy(alpha = 0.12f))
+            .border(1.dp, textColor.copy(alpha = 0.14f), RoundedCornerShape(50))
             .padding(horizontal = 10.dp, vertical = 6.dp)
     )
 }

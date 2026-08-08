@@ -4,6 +4,7 @@ import android.app.Activity
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.NoCredentialException
 import com.aiagents.app.R
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
@@ -37,9 +38,16 @@ class FirebaseAuthManager @Inject constructor(
         val request = GetCredentialRequest.Builder()
             .addCredentialOption(googleIdOption)
             .build()
-        val credential = CredentialManager.create(activity)
-            .getCredential(context = activity, request = request)
-            .credential
+        val credential = try {
+            CredentialManager.create(activity)
+                .getCredential(context = activity, request = request)
+                .credential
+        } catch (error: NoCredentialException) {
+            throw IllegalStateException(
+                "No hay una cuenta de Google disponible para iniciar sesión",
+                error
+            )
+        }
         if (
             credential !is CustomCredential ||
             credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
@@ -67,6 +75,10 @@ class FirebaseAuthManager @Inject constructor(
         } == true
 
     val uid: String? get() = auth.currentUser?.uid
+
+    fun signOut() {
+        auth.signOut()
+    }
 }
 
 private suspend fun <T> Task<T>.awaitResult(): T = suspendCancellableCoroutine { continuation ->

@@ -361,6 +361,13 @@ private fun SkillListCard(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        if (skill.usageCount > 0) {
+                            Text(
+                                "· ${skill.usageCount} ${if (skill.usageCount == 1) "uso" else "usos"}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }

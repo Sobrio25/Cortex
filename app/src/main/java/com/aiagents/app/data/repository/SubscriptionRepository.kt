@@ -3,6 +3,9 @@ package com.aiagents.app.data.repository
 import com.aiagents.app.data.remote.ManagedGatewayClient
 import com.aiagents.app.data.remote.FreeDataConsentRequest
 import com.aiagents.app.data.remote.PurchaseVerificationRequest
+import com.aiagents.app.data.remote.ContentReportCategory
+import com.aiagents.app.data.remote.ContentReportRequest
+import com.aiagents.app.data.auth.FirebaseAuthManager
 import com.aiagents.app.domain.model.ManagedModel
 import com.aiagents.app.domain.model.ManagedModelCatalog
 import com.aiagents.app.domain.model.SubscriptionPlan
@@ -15,7 +18,8 @@ import javax.inject.Singleton
 
 @Singleton
 class SubscriptionRepository @Inject constructor(
-    private val gateway: ManagedGatewayClient
+    private val gateway: ManagedGatewayClient,
+    private val authManager: FirebaseAuthManager
 ) {
     private val _usage = MutableStateFlow(UsageSnapshot())
     val usage: StateFlow<UsageSnapshot> = _usage.asStateFlow()
@@ -46,6 +50,30 @@ class SubscriptionRepository @Inject constructor(
         val account = gateway.acceptFreeDataConsent(FreeDataConsentRequest())
         _usage.value = account
         refreshCatalog(account.plan)
+    }
+
+    suspend fun deleteAccount(): Result<Unit> = runCatching {
+        gateway.deleteAccount()
+        authManager.signOut()
+        _usage.value = UsageSnapshot()
+    }
+
+    suspend fun reportContent(
+        messageId: Long,
+        category: ContentReportCategory,
+        content: String,
+        comment: String?,
+        model: String?
+    ): Result<Unit> = runCatching {
+        gateway.reportContent(
+            ContentReportRequest(
+                messageId = messageId.toString(),
+                category = category.name.lowercase(),
+                content = content,
+                comment = comment?.trim()?.takeIf(String::isNotEmpty),
+                model = model?.takeIf(String::isNotBlank)
+            )
+        )
     }
 
     private suspend fun refreshCatalog(plan: SubscriptionPlan) {

@@ -103,7 +103,9 @@ object DatabaseModule {
                 AppDatabase.MIGRATION_46_47,
                 AppDatabase.migration47To48(voicePreferences),
                 AppDatabase.MIGRATION_48_49,
-                AppDatabase.MIGRATION_49_50
+                AppDatabase.MIGRATION_49_50,
+                AppDatabase.MIGRATION_50_51,
+                AppDatabase.MIGRATION_51_52
             )
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onCreate(db: SupportSQLiteDatabase) {

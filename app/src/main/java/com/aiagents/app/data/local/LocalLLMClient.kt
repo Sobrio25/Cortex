@@ -1,6 +1,8 @@
 package com.aiagents.app.data.local
 
+import android.app.ActivityManager
 import android.content.Context
+import android.util.Log
 import com.aiagents.app.data.remote.AIClient
 import com.aiagents.app.data.remote.ChatMessage
 import com.aiagents.app.data.remote.ChatResponseWithTools
@@ -12,20 +14,40 @@ import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
-import com.google.ai.edge.litertlm.Message
+import com.google.ai.edge.litertlm.OpenApiTool
 import com.google.ai.edge.litertlm.SamplerConfig
+import com.google.ai.edge.litertlm.tool
+import com.google.gson.Gson
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
+import java.io.File
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class LocalLLMClient(
     private val context: Context,
     private val modelRepository: LocalModelRepository
 ) : AIClient {
+
+    private companion object {
+        const val TAG = "LocalLLMClient"
+        const val IDLE_RELEASE_DELAY_MS = 60_000L
+    }
+
+    private val localWebToolNames = setOf("web_search", "web_fetch")
+    private val inferenceMutex = Mutex()
+    private val lifecycleScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var idleReleaseJob: Job? = null
+    private var lastModelLoadError: String? = null
 
     // MediaPipe (legacy .task/.bin)
     private var llmInference: LlmInference? = null
@@ -43,17 +65,22 @@ class LocalLLMClient(
         temperature: Float,
         maxTokens: Int
     ): Result<String> = withContext(Dispatchers.Default) {
-        try {
-            val modelEntity = modelRepository.getAvailableModels().find { it.id == model && it.isDownloaded }
-                ?: return@withContext Result.failure(IllegalStateException("Modelo no encontrado: $model"))
+        inferenceMutex.withLock {
+            cancelIdleRelease()
+            try {
+                val modelEntity = modelRepository.getAvailableModels().find { it.id == model && it.isDownloaded }
+                    ?: return@withLock Result.failure(IllegalStateException("Modelo no encontrado: $model"))
 
-            if (isLitertModel(modelEntity)) {
-                chatWithLiteRT(model, messages, systemPrompt, temperature)
-            } else {
-                chatWithMediaPipe(model, messages, systemPrompt, temperature, maxTokens)
+                if (isLitertModel(modelEntity)) {
+                    chatWithLiteRT(model, messages, systemPrompt, temperature)
+                } else {
+                    chatWithMediaPipe(model, messages, systemPrompt, temperature, maxTokens)
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            } finally {
+                scheduleIdleRelease()
             }
-        } catch (e: Exception) {
-            Result.failure(e)
         }
     }
 
@@ -65,17 +92,30 @@ class LocalLLMClient(
         maxTokens: Int,
         tools: List<Map<String, Any>>
     ): Result<ChatResponseWithTools> = withContext(Dispatchers.Default) {
-        try {
-            val modelEntity = modelRepository.getAvailableModels().find { it.id == model && it.isDownloaded }
-                ?: return@withContext Result.failure(IllegalStateException("Modelo no encontrado: $model"))
+        inferenceMutex.withLock {
+            cancelIdleRelease()
+            try {
+                val modelEntity = modelRepository.getAvailableModels().find { it.id == model && it.isDownloaded }
+                    ?: return@withLock Result.failure(IllegalStateException("Modelo no encontrado: $model"))
 
-            if (isLitertModel(modelEntity)) {
-                chatWithToolsLiteRT(model, messages, systemPrompt, temperature)
-            } else {
-                chatWithToolsMediaPipe(model, messages, systemPrompt, temperature, maxTokens, tools)
+                // Keep the local surface intentionally small, even for auxiliary callers
+                // that may pass the broader cloud tool catalog.
+                val localTools = tools.filter { definition ->
+                    @Suppress("UNCHECKED_CAST")
+                    val function = definition["function"] as? Map<String, Any>
+                    function?.get("name") in localWebToolNames
+                }
+
+                if (isLitertModel(modelEntity)) {
+                    chatWithToolsLiteRT(model, messages, systemPrompt, temperature, localTools)
+                } else {
+                    chatWithToolsMediaPipe(model, messages, systemPrompt, temperature, maxTokens, localTools)
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            } finally {
+                scheduleIdleRelease()
             }
-        } catch (e: Exception) {
-            Result.failure(e)
         }
     }
 
@@ -92,15 +132,18 @@ class LocalLLMClient(
 
     private fun loadLiteRTModelIfNeeded(modelId: String): Boolean {
         if (currentLitertModel == modelId && litertEngine != null) {
+            lastModelLoadError = null
             return true
         }
 
-        unloadLiteRTModel()
+        unloadModelInternal()
 
         val model = modelRepository.getAvailableModels().find { it.id == modelId && it.isDownloaded }
-            ?: return false
+            ?: return failModelLoad("Modelo no encontrado: $modelId")
 
-        val modelPath = model.localPath ?: return false
+        val modelPath = model.localPath
+            ?: return failModelLoad("El archivo del modelo no está disponible: $modelId")
+        if (!hasSafeMemoryFor(model, modelPath)) return false
 
         return try {
             val engineConfig = EngineConfig(
@@ -110,18 +153,45 @@ class LocalLLMClient(
             litertEngine = Engine(engineConfig)
             litertEngine!!.initialize()
             currentLitertModel = modelId
+            lastModelLoadError = null
             true
         } catch (e: Exception) {
-            e.printStackTrace()
-            false
+            unloadLiteRTModel()
+            Log.e(TAG, "LiteRT model initialization failed for $modelId", e)
+            failModelLoad("No se pudo inicializar el modelo local $modelId: ${e.message ?: "error nativo"}")
         }
     }
 
-    private fun createLiteRTConversation(systemPrompt: String, temperature: Float): Conversation? {
+    private fun createLiteRTConversation(
+        systemPrompt: String,
+        temperature: Float,
+        toolDefinitions: List<Map<String, Any>> = emptyList()
+    ): Conversation? {
         val engine = litertEngine ?: return null
+
+        val toolProviders = toolDefinitions.mapNotNull { definition ->
+            @Suppress("UNCHECKED_CAST")
+            val function = definition["function"] as? Map<String, Any?> ?: return@mapNotNull null
+            val name = function["name"] as? String ?: return@mapNotNull null
+            val description = function["description"] as? String ?: ""
+            val parameters = function["parameters"] ?: emptyMap<String, Any>()
+            val openApiDescription = Gson().toJson(
+                mapOf(
+                    "name" to name,
+                    "description" to description,
+                    "parameters" to parameters
+                )
+            )
+            tool(LiteRtLocalTool(openApiDescription))
+        }
 
         val config = ConversationConfig(
             systemInstruction = com.google.ai.edge.litertlm.Contents.of(systemPrompt.takeIf { it.isNotBlank() } ?: "You are a helpful assistant."),
+            tools = toolProviders,
+            // The host owns execution so the same web-tool dispatcher is used for
+            // both MediaPipe and LiteRT local models. LiteRT still exposes the
+            // schemas and returns structured tool calls to this class.
+            automaticToolCalling = toolProviders.isEmpty(),
             samplerConfig = SamplerConfig(
                 topK = 40,
                 topP = 0.95,
@@ -138,7 +208,7 @@ class LocalLLMClient(
         temperature: Float
     ): Result<String> {
         if (!loadLiteRTModelIfNeeded(model)) {
-            return Result.failure(IllegalStateException("No se pudo cargar el modelo: $model"))
+            return Result.failure(modelLoadException(model))
         }
 
         val conversation = createLiteRTConversation(systemPrompt, temperature)
@@ -169,13 +239,14 @@ class LocalLLMClient(
         model: String,
         messages: List<ChatMessage>,
         systemPrompt: String,
-        temperature: Float
+        temperature: Float,
+        tools: List<Map<String, Any>>
     ): Result<ChatResponseWithTools> {
         if (!loadLiteRTModelIfNeeded(model)) {
-            return Result.failure(IllegalStateException("No se pudo cargar el modelo: $model"))
+            return Result.failure(modelLoadException(model))
         }
 
-        val conversation = createLiteRTConversation(systemPrompt, temperature)
+        val conversation = createLiteRTConversation(systemPrompt, temperature, tools)
             ?: return Result.failure(IllegalStateException("No se pudo crear la conversación"))
 
         return try {
@@ -186,10 +257,10 @@ class LocalLLMClient(
                 .toList()
 
             val fullResponse = responseMessages.joinToString("") { it.toString() }
-            val toolCalls = responseMessages.flatMap { msg ->
-                msg.toolCalls.map { toolCall ->
+            val toolCalls = responseMessages.flatMapIndexed { messageIndex, msg ->
+                msg.toolCalls.mapIndexed { callIndex, toolCall ->
                     ToolCall(
-                        id = "litert_${System.currentTimeMillis()}",
+                        id = "litert_${System.currentTimeMillis()}_${messageIndex}_$callIndex",
                         function = ToolFunction(
                             name = toolCall.name,
                             arguments = com.google.gson.Gson().toJson(toolCall.arguments)
@@ -230,7 +301,7 @@ class LocalLLMClient(
         maxTokens: Int
     ): Result<String> {
         if (!loadModelIfNeeded(model, maxTokens)) {
-            return Result.failure(IllegalStateException("No se pudo cargar el modelo: $model"))
+            return Result.failure(modelLoadException(model))
         }
 
         val inference = llmInference ?: return Result.failure(
@@ -264,7 +335,7 @@ class LocalLLMClient(
         tools: List<Map<String, Any>>
     ): Result<ChatResponseWithTools> {
         if (!loadModelIfNeeded(model, maxTokens)) {
-            return Result.failure(IllegalStateException("No se pudo cargar el modelo: $model"))
+            return Result.failure(modelLoadException(model))
         }
 
         val inference = llmInference ?: return Result.failure(
@@ -300,15 +371,18 @@ class LocalLLMClient(
 
     private fun loadModelIfNeeded(modelId: String, maxTokens: Int = 4096): Boolean {
         if (currentModel == modelId && llmInference != null) {
+            lastModelLoadError = null
             return true
         }
 
-        unloadModel()
+        unloadModelInternal()
 
         val model = modelRepository.getAvailableModels().find { it.id == modelId && it.isDownloaded }
-            ?: return false
+            ?: return failModelLoad("Modelo no encontrado: $modelId")
 
-        val modelPath = model.localPath ?: return false
+        val modelPath = model.localPath
+            ?: return failModelLoad("El archivo del modelo no está disponible: $modelId")
+        if (!hasSafeMemoryFor(model, modelPath)) return false
 
         return try {
             val options = LlmInference.LlmInferenceOptions.builder()
@@ -318,12 +392,52 @@ class LocalLLMClient(
 
             llmInference = LlmInference.createFromOptions(context, options)
             currentModel = modelId
+            lastModelLoadError = null
             true
         } catch (e: Exception) {
-            e.printStackTrace()
-            false
+            try { llmInference?.close() } catch (_: Exception) {}
+            llmInference = null
+            currentModel = null
+            Log.e(TAG, "MediaPipe model initialization failed for $modelId", e)
+            failModelLoad("No se pudo inicializar el modelo local $modelId: ${e.message ?: "error nativo"}")
         }
     }
+
+    private fun hasSafeMemoryFor(model: LocalModel, modelPath: String): Boolean {
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            ?: return true
+        val memoryInfo = ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(memoryInfo)
+
+        val actualFileBytes = File(modelPath).length().takeIf { it > 0L } ?: model.sizeBytes
+        val decision = LocalModelMemoryPolicy.evaluate(
+            modelBytes = actualFileBytes,
+            totalMemoryBytes = memoryInfo.totalMem,
+            availableMemoryBytes = memoryInfo.availMem
+        )
+        if (decision.allowed) return true
+
+        val message = buildString {
+            append("El modelo ${model.name} necesita aproximadamente ")
+            append(formatGiB(decision.estimatedPeakBytes))
+            append(" GB de RAM, pero el límite seguro actual es ")
+            append(formatGiB(decision.safeBudgetBytes))
+            append(" GB. Usa un modelo local de hasta 1 GB, por ejemplo Gemma 3 1B o FunctionGemma 270M.")
+        }
+        Log.w(TAG, message)
+        return failModelLoad(message)
+    }
+
+    private fun failModelLoad(message: String): Boolean {
+        lastModelLoadError = message
+        return false
+    }
+
+    private fun modelLoadException(modelId: String): IllegalStateException =
+        IllegalStateException(lastModelLoadError ?: "No se pudo cargar el modelo: $modelId")
+
+    private fun formatGiB(bytes: Long): String =
+        String.format(java.util.Locale.US, "%.1f", bytes.toDouble() / (1024.0 * 1024.0 * 1024.0))
 
     private fun buildPrompt(messages: List<ChatMessage>, systemPrompt: String): String {
         val sb = StringBuilder()
@@ -349,20 +463,24 @@ class LocalLLMClient(
         tools: List<Map<String, Any>>
     ): String {
         val sb = StringBuilder()
-        
-        sb.appendLine("You are a helpful assistant with access to tools.")
         if (systemPrompt.isNotBlank()) {
             sb.appendLine(systemPrompt)
         }
         
         sb.appendLine("\nAvailable tools:")
         tools.forEach { tool ->
-            val name = tool["name"] as? String ?: ""
-            val description = tool["description"] as? String ?: ""
+            @Suppress("UNCHECKED_CAST")
+            val function = tool["function"] as? Map<String, Any>
+            val name = function?.get("name") as? String ?: ""
+            val description = function?.get("description") as? String ?: ""
             sb.appendLine("- $name: $description")
+            function?.get("parameters")?.let { parameters ->
+                sb.appendLine("  Parameters: ${Gson().toJson(parameters)}")
+            }
         }
         
-        sb.appendLine("\nIf you need to use a tool, respond with: TOOL_CALL: {\"name\": \"tool_name\", \"arguments\": {...}}")
+        sb.appendLine("\nIf you need to use a tool, respond with exactly: TOOL_CALL: {\"name\": \"tool_name\", \"arguments\": { ... }}")
+        sb.appendLine("You may emit more than one TOOL_CALL. The name must be web_search or web_fetch and arguments must be a JSON object.")
         sb.appendLine("Otherwise, respond normally.")
         
         messages.forEach { msg ->
@@ -376,37 +494,38 @@ class LocalLLMClient(
     }
 
     private fun parseToolCalls(response: String): List<ToolCall> {
-        val toolCallRegex = """TOOL_CALL:\s*(\{[^}]+\})""".toRegex()
-        val match = toolCallRegex.find(response)
-        
-        return if (match != null) {
-            try {
-                val json = org.json.JSONObject(match.groupValues[1])
-                val functionName = json.optString("name", "")
-                val arguments = json.optJSONObject("arguments")?.toString() ?: "{}"
-                
-                listOf(
-                    ToolCall(
-                        id = "call_${System.currentTimeMillis()}",
-                        function = ToolFunction(
-                            name = functionName,
-                            arguments = arguments
-                        )
-                    )
-                )
-            } catch (e: Exception) {
-                emptyList()
+        return LocalToolCallParser.parse(response)
+    }
+
+    private fun cancelIdleRelease() {
+        idleReleaseJob?.cancel()
+        idleReleaseJob = null
+    }
+
+    private fun scheduleIdleRelease() {
+        idleReleaseJob?.cancel()
+        idleReleaseJob = lifecycleScope.launch {
+            delay(IDLE_RELEASE_DELAY_MS)
+            inferenceMutex.withLock {
+                unloadModelInternal()
+                idleReleaseJob = null
             }
-        } else {
-            emptyList()
         }
     }
 
     fun unloadModel() {
-        llmInference?.close()
+        cancelIdleRelease()
+        unloadModelInternal()
+    }
+
+    private fun unloadModelInternal() {
+        try { llmInference?.close() } catch (error: Exception) {
+            Log.w(TAG, "MediaPipe model close failed", error)
+        }
         llmInference = null
         currentModel = null
         unloadLiteRTModel()
+        lastModelLoadError = null
     }
 
     suspend fun generateStream(
@@ -417,17 +536,22 @@ class LocalLLMClient(
         onDone: () -> Unit,
         onError: (String) -> Unit
     ) = withContext(Dispatchers.Default) {
-        try {
-            val modelEntity = modelRepository.getAvailableModels().find { it.id == model && it.isDownloaded }
-                ?: run { onError("Modelo no encontrado: $model"); return@withContext }
+        inferenceMutex.withLock {
+            cancelIdleRelease()
+            try {
+                val modelEntity = modelRepository.getAvailableModels().find { it.id == model && it.isDownloaded }
+                    ?: run { onError("Modelo no encontrado: $model"); return@withLock }
 
-            if (isLitertModel(modelEntity)) {
-                generateStreamLiteRT(model, messages, systemPrompt, onDelta, onDone, onError)
-            } else {
-                generateStreamMediaPipe(model, messages, systemPrompt, onDelta, onDone, onError)
+                if (isLitertModel(modelEntity)) {
+                    generateStreamLiteRT(model, messages, systemPrompt, onDelta, onDone, onError)
+                } else {
+                    generateStreamMediaPipe(model, messages, systemPrompt, onDelta, onDone, onError)
+                }
+            } catch (e: Exception) {
+                onError(e.message ?: "Error desconocido")
+            } finally {
+                scheduleIdleRelease()
             }
-        } catch (e: Exception) {
-            onError(e.message ?: "Error desconocido")
         }
     }
 
@@ -440,7 +564,7 @@ class LocalLLMClient(
         onError: (String) -> Unit
     ) {
         if (!loadLiteRTModelIfNeeded(model)) {
-            onError("No se pudo cargar el modelo: $model")
+            onError(modelLoadException(model).message ?: "No se pudo cargar el modelo: $model")
             return
         }
 
@@ -473,7 +597,7 @@ class LocalLLMClient(
         onError: (String) -> Unit
     ) {
         if (!loadModelIfNeeded(model)) {
-            onError("No se pudo cargar el modelo: $model")
+            onError(modelLoadException(model).message ?: "No se pudo cargar el modelo: $model")
             return
         }
 
@@ -506,4 +630,14 @@ class LocalLLMClient(
             onError(e.message ?: "Error desconocido")
         }
     }
+}
+
+/** Adapter used only to register local web schemas with LiteRT-LM. */
+private class LiteRtLocalTool(
+    private val descriptionJson: String
+) : OpenApiTool {
+    override fun getToolDescriptionJsonString(): String = descriptionJson
+
+    override fun execute(paramsJsonString: String): String =
+        "{\"error\":\"Tool execution is delegated to the host application\"}"
 }

@@ -47,7 +47,7 @@ import com.aiagents.app.domain.model.WeatherWidgetsBuiltin
         SkillReviewEntity::class,
         SubagentExecutionEntity::class
     ],
-    version = 50,
+    version = 52,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -1369,6 +1369,28 @@ SIEMPRE usa la herramienta pubmed_search para buscar estudios científicos relev
                 db.execSQL(
                     "ALTER TABLE conversations ADD COLUMN selectedModelOverride " +
                         "TEXT NOT NULL DEFAULT ''"
+                )
+            }
+        }
+
+        val MIGRATION_50_51 = object : Migration(50, 51) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE conversations ADD COLUMN isPinned " +
+                        "INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
+        val MIGRATION_51_52 = object : Migration(51, 52) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Usage telemetry for the skill learning loop (skill_view loads count as usage)
+                db.execSQL(
+                    "ALTER TABLE skills ADD COLUMN usageCount " +
+                        "INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL(
+                    "ALTER TABLE skills ADD COLUMN lastUsedAt INTEGER"
                 )
             }
         }

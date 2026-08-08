@@ -126,6 +126,59 @@ export function estimateFreeTokenReservation(body: any): number {
   return Math.ceil(inputUpperBound + outputUpperBound);
 }
 
+interface CompatibleCallOptions {
+  timeoutMs?: number;
+  temperature?: number;
+  maxTokens?: number;
+  responseFormat?: Record<string, unknown>;
+  acceptLanguage?: string;
+}
+
+interface OpenCodeCallOptions {
+  timeoutMs?: number;
+  temperature?: number;
+  maxTokens?: number;
+}
+
+async function callOpenCodeModel(
+  body: any,
+  apiKey: string,
+  model: string,
+  options: OpenCodeCallOptions = {},
+): Promise<UpstreamResult> {
+  return callCompatible(
+    "https://opencode.ai/zen/v1/chat/completions",
+    apiKey,
+    model,
+    body,
+    "OpenCode Zen",
+    "OpenCode",
+    { timeoutMs: 30_000, ...options },
+  );
+}
+
+export function callMimoFree(body: any, apiKey: string): Promise<UpstreamResult> {
+  return callOpenCodeModel(body, apiKey, "mimo-v2.5-free", {
+    timeoutMs: 15_000,
+    temperature: 0,
+    maxTokens: 512,
+  });
+}
+
+
+function extractCompatibleContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part: any) => typeof part === "string" ? part : typeof part?.text === "string" ? part.text : "")
+      .join("");
+  }
+  if (content && typeof content === "object" && typeof (content as any).text === "string") {
+    return (content as any).text;
+  }
+  return "";
+}
+
 async function callCompatible(
   url: string,
   apiKey: string,
@@ -133,15 +186,17 @@ async function callCompatible(
   body: any,
   gateway: string,
   fallbackProvider: string,
+  options: CompatibleCallOptions = {},
 ): Promise<UpstreamResult> {
   const payload: Record<string, unknown> = {
     model,
     messages: toOpenAiMessages(body),
-    temperature: body.temperature ?? 0.7,
-    max_tokens: Math.min(Number(body.maxTokens ?? 4096), 65_536),
+    temperature: options.temperature ?? body.temperature ?? 0.7,
+    max_tokens: Math.min(Number(options.maxTokens ?? body.maxTokens ?? 4096), 65_536),
     stream: false,
   };
   if (Array.isArray(body.tools) && body.tools.length) payload.tools = body.tools;
+  if (options.responseFormat) payload.response_format = options.responseFormat;
   let response: Response;
   try {
     response = await fetch(url, {
@@ -149,9 +204,10 @@ async function callCompatible(
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
+        ...(options.acceptLanguage ? { "Accept-Language": options.acceptLanguage } : {}),
       },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(540_000),
+      signal: AbortSignal.timeout(options.timeoutMs ?? 540_000),
     });
   } catch (error) {
     const timedOut = error instanceof Error &&
@@ -159,18 +215,23 @@ async function callCompatible(
     throw new UpstreamError(0, timedOut ? "TIMEOUT" : "NETWORK", true);
   }
   const json: any = await response.json().catch(() => ({}));
-  if (!response.ok || json.error) {
-    const classified = classifyUpstreamStatus(response.status);
-    throw new UpstreamError(response.status, classified.category, classified.retryable);
+  if (!response.ok || json.error || json.code) {
+    const status = response.ok && json.code ? 400 : response.status;
+    const classified = classifyUpstreamStatus(status);
+    throw new UpstreamError(status, classified.category, classified.retryable);
   }
   if (!Array.isArray(json.choices) || json.choices.length === 0) {
     throw new UpstreamError(response.status, "MALFORMED_RESPONSE", true);
   }
   const choice = json.choices?.[0] ?? {};
   const message = choice.message ?? {};
+  const content = extractCompatibleContent(message.content);
+  if (!content && !Array.isArray(message.tool_calls)) {
+    throw new UpstreamError(response.status, "MALFORMED_RESPONSE", true);
+  }
   const estimatedPromptTokens = Math.ceil(JSON.stringify(payload.messages).length / 4);
   const estimatedCompletionTokens = Math.ceil(
-    (String(message.content ?? "").length + JSON.stringify(message.tool_calls ?? []).length) / 4,
+    (content.length + JSON.stringify(message.tool_calls ?? []).length) / 4,
   );
   const resolvedModel = typeof json.model === "string" && json.model.trim()
     ? json.model.trim()
@@ -179,14 +240,14 @@ async function callCompatible(
   const hasCompletionUsage = Number.isFinite(Number(json.usage?.completion_tokens));
   return {
     response: {
-      content: typeof message.content === "string" ? message.content : "",
+      content,
       toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls.map((call: any) => ({
         id: call.id,
         type: call.type ?? "function",
         function: call.function,
       })) : null,
       finishReason: choice.finish_reason ?? null,
-      reasoning: message.reasoning ?? message.thinking ?? null,
+      reasoning: message.reasoning ?? message.reasoning_content ?? message.thinking ?? null,
     },
     usage: {
       promptTokens: hasPromptUsage ? Number(json.usage.prompt_tokens) : estimatedPromptTokens,
@@ -200,6 +261,22 @@ async function callCompatible(
       fallback: false,
     },
   };
+}
+
+export function callZai(
+  body: any,
+  apiKey: string,
+  options: CompatibleCallOptions = {},
+): Promise<UpstreamResult> {
+  return callCompatible(
+    "https://api.z.ai/api/paas/v4/chat/completions",
+    apiKey,
+    "glm-4.6v-flash",
+    body,
+    "Z.AI API",
+    "Z.AI",
+    { timeoutMs: 30_000, acceptLanguage: "en-US,en", ...options },
+  );
 }
 
 export async function callPaid(model: ModelDefinition, body: any, apiKey: string): Promise<UpstreamResult> {
@@ -218,38 +295,57 @@ export async function callFree(body: any, secrets: {
   openRouter?: string;
   kilo?: string;
   openCode?: string;
+  zai?: string;
 }, preferFlash: boolean): Promise<UpstreamResult> {
   const attempts: Array<() => Promise<UpstreamResult>> = [];
-  if (preferFlash && secrets.openCode) {
-    attempts.push(() => callCompatible(
-      "https://opencode.ai/zen/v1/chat/completions",
-      secrets.openCode!,
-      "deepseek-v4-flash-free",
-      body,
-      "OpenCode Zen",
-      "OpenCode",
-    ));
+  const hasImage = JSON.stringify(body ?? {}).includes("data:image/") ||
+    JSON.stringify(body ?? {}).includes("imageDataUri");
+
+  if (hasImage) {
+    if (secrets.openCode) attempts.push(() => callMimoFree(body, secrets.openCode!));
+    if (secrets.zai) attempts.push(() => callZai(body, secrets.zai!));
+  } else {
+    if (preferFlash && secrets.openCode) {
+      attempts.push(() => callCompatible(
+        "https://opencode.ai/zen/v1/chat/completions",
+        secrets.openCode!,
+        "deepseek-v4-flash-free",
+        body,
+        "OpenCode Zen",
+        "OpenCode",
+      ));
+    }
+    if (secrets.openCode) attempts.push(() => callMimoFree(body, secrets.openCode!));
+    if (secrets.openRouter) {
+      attempts.push(() => callCompatible(
+        "https://openrouter.ai/api/v1/chat/completions",
+        secrets.openRouter!,
+        "openrouter/free",
+        body,
+        "OpenRouter",
+        "OpenRouter",
+      ));
+    }
+    if (secrets.kilo) {
+      attempts.push(() => callCompatible(
+        "https://api.kilo.ai/api/gateway/chat/completions",
+        secrets.kilo!,
+        "kilo-auto/free",
+        body,
+        "Kilo AI",
+        "Kilo AI",
+      ));
+    }
+    if (secrets.zai) {
+      attempts.push(() => callZai(body, secrets.zai!));
+    }
   }
-  if (secrets.openRouter) {
-    attempts.push(() => callCompatible(
-      "https://openrouter.ai/api/v1/chat/completions",
-      secrets.openRouter!,
-      "openrouter/free",
-      body,
-      "OpenRouter",
-      "OpenRouter",
-    ));
+
+  for (let index = attempts.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    [attempts[index], attempts[randomIndex]] = [attempts[randomIndex], attempts[index]];
   }
-  if (secrets.kilo) {
-    attempts.push(() => callCompatible(
-      "https://api.kilo.ai/api/gateway/chat/completions",
-      secrets.kilo!,
-      "kilo-auto/free",
-      body,
-      "Kilo AI",
-      "Kilo AI",
-    ));
-  }
+
   let firstFailure: UpstreamFailureCategory | undefined;
   for (let index = 0; index < attempts.length; index += 1) {
     try {

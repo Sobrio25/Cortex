@@ -6,8 +6,11 @@ La primera fase prioriza conversión, publicación y observabilidad sobre nuevas
 
 - El onboarding ofrece tres rutas deliberadas: Cortex Cloud, API keys propias y ejecución local.
   Sólo Cortex Cloud exige Google y el consentimiento específico del plan administrado.
-- Release no solicita permisos heredados de almacenamiento, no declara `USE_EXACT_ALARM`, no
-  permite HTTP global y mantiene los archivos internos privados.
+- Release no solicita permisos heredados de almacenamiento, no declara `USE_EXACT_ALARM` y
+  mantiene los archivos internos privados. La configuración de red conserva soporte HTTP de
+  plataforma porque Ollama, LM Studio y las previsualizaciones locales suelen ejecutarse sin TLS;
+  la política de endpoints impide asociar credenciales de proveedores remotos con HTTP y limita
+  Ollama/LM Studio en texto claro a este dispositivo o a hosts de la red local.
 - Sherpa usa un AAR oficial compatible con páginas de 16 KiB. Vosk queda fuera de release hasta
   disponer de binarios compatibles.
 - Diagnóstico local registra tiempo hasta el primer dibujo, última razón de salida del proceso y un
@@ -34,6 +37,8 @@ contabilizan dentro de ese presupuesto.
 
 - Primera conversación posible sin Google mediante BYOK o local.
 - Cero permisos heredados de almacenamiento y cero `USE_EXACT_ALARM` en el manifest combinado.
+- Cero credenciales de proveedores remotos enviadas a endpoints HTTP; las excepciones locales se
+  limitan a Ollama y LM Studio en loopback o LAN.
 - Cero binarios arm64 con alineación ELF inferior a 16 KiB en release.
 - Métrica local de primer dibujo y razón de salida visible en Diagnóstico.
 - Tests unitarios, instrumentados, lint y ensamble release aprobados.

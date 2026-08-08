@@ -76,7 +76,8 @@ enum class AssistantTtsMode(val id: String, val assetId: String? = null) {
     GOOGLE("google_tts"),
     PIPER_ALD(VoiceCatalog.PIPER_ALD_ID, VoiceCatalog.PIPER_ALD_ID),
     PIPER_CLAUDE(VoiceCatalog.PIPER_CLAUDE_ID, VoiceCatalog.PIPER_CLAUDE_ID),
-    REMOTE_SERVER("remote_tts");
+    REMOTE_SERVER("remote_tts"),
+    GROQ("groq_tts");
 
     companion object {
         fun fromId(id: String?): AssistantTtsMode = entries.firstOrNull { it.id == id } ?: NONE
@@ -124,6 +125,26 @@ enum class RemoteTtsApiFlavor(val id: String) {
             entries.firstOrNull { it.id == id } ?: AUTO
     }
 }
+
+/** Managed Groq TTS (Canopy Orpheus, OpenAI-compatible /v1/audio/speech endpoint). */
+data class GroqTtsConfig(
+    val apiKey: String = "",
+    val voice: String = GROQ_TTS_DEFAULT_VOICE,
+    val model: String = GROQ_TTS_DEFAULT_MODEL
+) {
+    val isConfigured: Boolean
+        get() = apiKey.isNotBlank() && voice.isNotBlank() && model.isNotBlank()
+}
+
+const val GROQ_TTS_ENDPOINT = "https://api.groq.com/openai/v1/audio/speech"
+const val GROQ_TTS_DEFAULT_MODEL = "canopylabs/orpheus-v1-english"
+const val GROQ_TTS_DEFAULT_VOICE = "troy"
+
+/** Voices shipped by Canopy Orpheus; Groq validates unknown names, so a custom field is allowed. */
+val GROQ_TTS_VOICES = listOf(
+    "tara", "leah", "jess", "leo", "dan", "mia", "zac", "zoe", "troy", "drea",
+    "autumn", "austin", "daniel", "diana", "hannah"
+)
 
 data class RemoteTtsAudio(
     val bytes: ByteArray,

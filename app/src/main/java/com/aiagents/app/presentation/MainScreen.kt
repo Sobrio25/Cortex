@@ -209,6 +209,9 @@ private fun MainAppContent(
                 onRenameConversation = { id, title ->
                     drawerViewModel.renameConversation(id, title)
                 },
+                onTogglePin = { id ->
+                    drawerViewModel.togglePinConversation(id)
+                },
                 onGoToGlobal = {
                     scope.launch { drawerState.close() }
                     drawerViewModel.goToGlobalMode()

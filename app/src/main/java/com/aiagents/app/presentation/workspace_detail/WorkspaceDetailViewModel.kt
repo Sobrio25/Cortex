@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.WorkManager
 import androidx.core.content.ContextCompat
 import com.aiagents.app.data.background.CortexTaskCoordinator
 import com.aiagents.app.data.diagnostics.AppErrorReporter
@@ -30,6 +31,7 @@ import com.aiagents.app.data.orchestration.ParallelDelegationEntry
 import com.aiagents.app.data.orchestration.ToolCompletionPolicy
 import com.aiagents.app.data.remote.ChatMessage
 import com.aiagents.app.data.remote.ChatResponseWithTools
+import com.aiagents.app.data.remote.ContentReportCategory
 import com.aiagents.app.data.local.SecurePreferences
 import com.aiagents.app.data.repository.AgentRepository
 import com.aiagents.app.data.repository.ContextInfo
@@ -74,6 +76,7 @@ import com.aiagents.app.data.terminal.ImageGenerationToolHandler
 import com.aiagents.app.data.remote.StreamingChunk
 import com.aiagents.app.data.model.SubagentExecutionEntity
 import com.aiagents.app.data.terminal.MemoryExtractor
+import com.aiagents.app.data.terminal.MemoryNudgeWorker
 import com.aiagents.app.data.terminal.TaskCompletionNotifier
 import com.aiagents.app.data.terminal.DelegationToolHandler
 import com.aiagents.app.data.terminal.PermissionRequest
@@ -108,9 +111,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -148,6 +154,7 @@ data class WorkspaceDetailState(
     val inputText: String = "",
     val isLoading: Boolean = false,
     val error: String? = null,
+    val infoMessage: String? = null,
     val activeTab: WorkspaceTab = WorkspaceTab.Chat,
     val attachedFiles: List<AttachedFile> = emptyList(),
     val showInfoDialog: Boolean = false,
@@ -203,6 +210,11 @@ private data class ResolvedSubagentTask(
 
 enum class WorkspaceTab {
     Chat, Files
+}
+
+sealed interface ContentReportResult {
+    data object Sent : ContentReportResult
+    data object Failed : ContentReportResult
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -300,6 +312,28 @@ class WorkspaceDetailViewModel @Inject constructor(
     val isSpeaking: StateFlow<Boolean> = textToSpeechManager.isSpeaking
     val ttsError: StateFlow<String?> = textToSpeechManager.error
     val agentChangeEvents = agentChangeNotifier.events
+    private val _contentReportResults = MutableSharedFlow<ContentReportResult>(extraBufferCapacity = 1)
+    val contentReportResults: SharedFlow<ContentReportResult> = _contentReportResults.asSharedFlow()
+
+    fun reportGeneratedContent(
+        message: Message,
+        category: ContentReportCategory,
+        comment: String?
+    ) {
+        if (message.role != MessageRole.ASSISTANT || message.content.isBlank()) return
+        viewModelScope.launch {
+            val result = subscriptionRepository.reportContent(
+                messageId = message.id,
+                category = category,
+                content = message.content,
+                comment = comment,
+                model = effectiveSelectedModel()
+            )
+            _contentReportResults.emit(
+                if (result.isSuccess) ContentReportResult.Sent else ContentReportResult.Failed
+            )
+        }
+    }
 
     // Observe todos for the active conversation, update UI state reactively
     init {
@@ -1245,6 +1279,11 @@ Directorio de trabajo: $workspacePath""".trimIndent())
 
         if (text.isEmpty() && attachedFiles.isEmpty()) return
 
+        // Slash commands: solo texto sin adjuntos. Consumen el input y no llegan al LLM.
+        if (attachedFiles.isEmpty() && text.startsWith("/")) {
+            if (handleSlashCommand(text)) return
+        }
+
         val agent = _activeAgent.value
         if (agent == null) {
             _uiState.value = _uiState.value.copy(error = "Selecciona un agente primero")
@@ -1368,6 +1407,168 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                 currentAgentJob = null
             }
         }
+    }
+
+    // ── Slash commands: /compress, /usage, /undo, /retry ────────────────────
+
+    private fun handleSlashCommand(raw: String): Boolean {
+        val text = raw.trim()
+        return when {
+            text == "/compress" -> { runCompressCommand(); true }
+            text == "/usage" -> { runUsageCommand(); true }
+            text == "/undo" -> { runUndoCommand(); true }
+            text == "/retry" -> { runRetryCommand(); true }
+            text == "/recall" || text.startsWith("/recall ") -> {
+                runRecallCommand(text.removePrefix("/recall").trim())
+                true
+            }
+            text == "/help" || text == "/" -> {
+                showInfo("Comandos: /compress, /usage, /undo, /retry, /recall <tema>, /help")
+                _uiState.value = _uiState.value.copy(inputText = "")
+                true
+            }
+            else -> {
+                showInfo("Comando desconocido. Disponibles: /compress, /usage, /undo, /retry, /recall <tema>, /help")
+                _uiState.value = _uiState.value.copy(inputText = "")
+                true
+            }
+        }
+    }
+
+    private fun runCompressCommand() {
+        if (_uiState.value.isCompacting) return
+        if (messages.value.isEmpty()) {
+            showInfo("No hay mensajes que compactar.")
+            _uiState.value = _uiState.value.copy(inputText = "")
+            return
+        }
+        _uiState.value = _uiState.value.copy(inputText = "", isCompacting = true)
+        compactionDismissedAtTokens = 0
+        viewModelScope.launch {
+            try {
+                performContextCompaction()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("WorkspaceDetailVM", "Context compaction failed", e)
+                _uiState.value = _uiState.value.copy(
+                    isCompacting = false,
+                    error = userFacingError(e, "context_compaction")
+                )
+            }
+        }
+    }
+
+    private fun runRecallCommand(query: String) {
+        if (query.isBlank()) {
+            showInfo("Uso: /recall <tema o pregunta>")
+            _uiState.value = _uiState.value.copy(inputText = "")
+            return
+        }
+        if (_uiState.value.isLoading) {
+            showInfo("Espera a que termine el agente antes de buscar en memoria.")
+            _uiState.value = _uiState.value.copy(inputText = "")
+            return
+        }
+        _uiState.value = _uiState.value.copy(inputText = "", isLoading = true)
+        viewModelScope.launch {
+            try {
+                val modelId = extractModelId(effectiveSelectedModel())
+                val provider = extractProvider(effectiveSelectedModel())
+                if (provider == null || modelId.isBlank()) {
+                    showInfo("Configura un modelo para usar /recall.")
+                    return@launch
+                }
+                val summary = memoryExtractor.recallAndSummarize(query, modelId, provider)
+                if (summary == null) {
+                    showInfo("No encontré memorias relacionadas con: $query")
+                } else {
+                    repository.addMessage(
+                        workspaceId,
+                        _conversationId.value,
+                        Message(role = MessageRole.ASSISTANT, content = summary),
+                        null
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("WorkspaceDetailVM", "Memory recall failed", e)
+                showInfo("Error al recuperar memorias: ${e.message}")
+            } finally {
+                _uiState.value = _uiState.value.copy(isLoading = false)
+            }
+        }
+    }
+
+    private fun runUsageCommand() {
+        val info = contextInfo.value
+        val model = effectiveSelectedModel()
+        val percentage = (info.usagePercentage * 10).toInt() / 10f
+        val text = buildString {
+            appendLine("Uso de contexto")
+            appendLine("Modelo: ${model.ifBlank { "sin seleccionar" }}")
+            appendLine("En uso: ${info.currentTokens} tokens ($percentage%)")
+            appendLine("Ventana: ${info.maxTokens} tokens")
+            appendLine("Disponibles: ${info.availableTokens} tokens")
+            if (info.currentTokens >= info.compactionWarningTokens) {
+                appendLine("Sugerencia: usa /compress para compactar.")
+            }
+        }
+        _uiState.value = _uiState.value.copy(inputText = "")
+        showInfo(text.trim())
+    }
+
+    private fun runUndoCommand() {
+        if (_uiState.value.isLoading) {
+            showInfo("Espera a que termine el agente antes de deshacer.")
+            _uiState.value = _uiState.value.copy(inputText = "")
+            return
+        }
+        val current = messages.value
+        val lastUserIndex = current.indexOfLast { it.role == MessageRole.USER }
+        if (lastUserIndex < 0) {
+            showInfo("No hay nada que deshacer.")
+            _uiState.value = _uiState.value.copy(inputText = "")
+            return
+        }
+        val idsToDelete = current.drop(lastUserIndex).mapNotNull { it.id.takeIf { id -> id > 0 } }
+        _uiState.value = _uiState.value.copy(inputText = "")
+        viewModelScope.launch {
+            if (idsToDelete.isNotEmpty()) repository.deleteMessages(idsToDelete)
+            showInfo("Último turno eliminado.")
+        }
+    }
+
+    private fun runRetryCommand() {
+        if (_uiState.value.isLoading) {
+            showInfo("Espera a que termine el agente antes de reintentar.")
+            _uiState.value = _uiState.value.copy(inputText = "")
+            return
+        }
+        val current = messages.value
+        val lastUserIndex = current.indexOfLast { it.role == MessageRole.USER }
+        if (lastUserIndex < 0) {
+            showInfo("No hay mensaje que reintentar.")
+            _uiState.value = _uiState.value.copy(inputText = "")
+            return
+        }
+        val lastUserMessage = current[lastUserIndex]
+        val idsToDelete = current.drop(lastUserIndex).mapNotNull { it.id.takeIf { id -> id > 0 } }
+        _uiState.value = _uiState.value.copy(inputText = "", attachedFiles = emptyList())
+        viewModelScope.launch {
+            if (idsToDelete.isNotEmpty()) repository.deleteMessages(idsToDelete)
+            _uiState.value = _uiState.value.copy(inputText = lastUserMessage.content)
+            sendMessage()
+        }
+    }
+
+    fun showInfo(message: String) {
+        _uiState.value = _uiState.value.copy(infoMessage = message)
+    }
+
+    fun dismissInfo() {
+        _uiState.value = _uiState.value.copy(infoMessage = null)
     }
 
     fun stopAgent() {
@@ -3408,11 +3609,15 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             }
 
             continueConversationAfterTools(agent, depth)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e("WorkspaceDetailVM", "Error in handleToolCalls", e)
             _uiState.value = _uiState.value.copy(
                 executingCommand = null,
-                error = userFacingError(e, "tool_execution")
+                error = userFacingError(e, "tool_execution"),
+                isLoading = false,
+                currentReasoning = null
             )
         }
     }
@@ -3932,10 +4137,26 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         taskCompletionNotifier.notifyPermissionDenied(workspaceId, agentName)
     }
 
+    /** Rechaza el comando y lo bloquea permanentemente (glob sobre el comando base). */
+    fun denyPermissionAlways() {
+        val command = _uiState.value.pendingPermissionRequest?.command
+            ?: _uiState.value.pendingToolExecution?.command
+        val agentName = _activeAgent.value?.name ?: "Assistant"
+        viewModelScope.launch {
+            if (!command.isNullOrBlank()) {
+                runCatching { repository.getToolHandler().blockCommand(command) }
+                    .onFailure { Log.e("WorkspaceDetailVM", "Error bloqueando comando", it) }
+            }
+            clearPendingCommandPermission()
+            taskCompletionNotifier.notifyPermissionDenied(workspaceId, agentName)
+        }
+    }
+
     private fun clearPendingCommandPermission() {
         _uiState.value = _uiState.value.copy(
             pendingPermissionRequest = null,
-            pendingToolExecution = null
+            pendingToolExecution = null,
+            terminalPendingCommand = null
         )
     }
 
@@ -5320,6 +5541,9 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         draftSaveGuard.invalidate()
         pendingMemoryExtractionJob?.cancel()
         conversationResumeExtractionJob?.cancel()
+        // Nudge de memoria en background: extraer la conversación que se abandona
+        // aunque la Activity ya no esté viva (WorkManager one-time).
+        enqueueMemoryNudge()
         val runningTask = currentAgentJob
         if (runningTask?.isActive == true) {
             // Keep Room flows and the execution coroutine alive until the foreground task ends.
@@ -5328,6 +5552,22 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             executionJob.cancel()
         }
         super.onCleared()
+    }
+
+    /** Encola el worker de nudge de memoria para la conversación activa. */
+    private fun enqueueMemoryNudge() {
+        if (assistantModeEnabled) return
+        val conversationId = _conversationId.value ?: return
+        if (conversationId <= 0) return
+        val fullKey = effectiveSelectedModel()
+        val modelId = extractModelId(fullKey).ifBlank { return }
+        val provider = extractProvider(fullKey) ?: return
+        MemoryNudgeWorker.enqueue(
+            workManager = WorkManager.getInstance(appContext),
+            conversationId = conversationId,
+            model = modelId,
+            provider = provider
+        )
     }
 
 }

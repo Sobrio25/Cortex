@@ -99,7 +99,18 @@ class STTViewModel @Inject constructor(
                     return@launch
                 }
 
-                service.isListening.first { !it }
+                val stopped = withTimeoutOrNull(120_000) {
+                    service.isListening.first { !it }
+                }
+                if (stopped == null) {
+                    // Timeout: el servicio nunca reportó que dejó de escuchar.
+                    runCatching { service.stopListening() }
+                    _error.value = voiceError(
+                        IllegalStateException("Voice recording timed out after 120s"),
+                        "voice_timeout"
+                    )
+                    return@launch
+                }
                 _isListening.value = false
                 _isProcessing.value = true
                 service.stopListening()

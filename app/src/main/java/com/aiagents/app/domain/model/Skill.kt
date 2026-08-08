@@ -48,7 +48,9 @@ data class Skill(
     val createdAt: Long,
     val updatedAt: Long,
     val activatedAt: Long?,
-    val archivedAt: Long?
+    val archivedAt: Long?,
+    val usageCount: Int = 0,
+    val lastUsedAt: Long? = null
 )
 
 data class SkillDraftInput(

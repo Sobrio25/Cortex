@@ -21,6 +21,18 @@ class AIClientFactory(
     private val managedAIClient: ManagedAIClient? = null,
     private val appUsageSink: AppUsageSink? = null
 ) {
+    /**
+     * Local engines own large native allocations. Reusing one client keeps every
+     * tool continuation on the same engine instead of mapping the model again.
+     * Cloud clients remain request-scoped as before.
+     */
+    private val sharedLocalClient: LocalLLMClient by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        LocalLLMClient(
+            requireNotNull(context) { "Context requerido para proveedor LOCAL" },
+            requireNotNull(localModelRepository) { "LocalModelRepository requerido para proveedor LOCAL" }
+        )
+    }
+
     fun createClient(
         providerType: ProviderType,
         apiKey: String,
@@ -64,11 +76,7 @@ class AIClientFactory(
                 baseUrl?.takeIf { it.isNotBlank() } ?: "https://opencode.ai/zen/v1/"
             )
             ProviderType.ZAI -> ZAIClient(okHttpClient, apiKey, baseUrl?.takeIf { it.isNotBlank() } ?: ZAIPlanType.STANDARD.baseUrl)
-            ProviderType.LOCAL -> {
-                requireNotNull(localModelRepository) { "LocalModelRepository requerido para proveedor LOCAL" }
-                requireNotNull(context) { "Context requerido para proveedor LOCAL" }
-                LocalLLMClient(context, localModelRepository)
-            }
+            ProviderType.LOCAL -> sharedLocalClient
         }
         val catalogBackedClient = modelsDevProviderId(providerType, baseUrl)?.let { providerId ->
             ModelsDevBackedClient(client, ModelsDevCatalog(okHttpClient), providerId)

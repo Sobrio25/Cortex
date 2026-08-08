@@ -54,6 +54,7 @@ import com.aiagents.app.data.speech.AssistantTtsMode
 import com.aiagents.app.data.speech.VoiceCatalog
 import com.aiagents.app.presentation.assistant.DownloadableVoiceCard
 import com.aiagents.app.presentation.assistant.GoogleTtsCard
+import com.aiagents.app.presentation.assistant.GroqTtsCard
 import com.aiagents.app.presentation.assistant.RemoteSttServerCard
 import com.aiagents.app.presentation.assistant.RemoteTtsServerCard
 import com.aiagents.app.presentation.assistant.SettingsCard
@@ -73,6 +74,7 @@ fun VoiceSettingsScreen(
     val googleVoiceId by viewModel.selectedGoogleVoiceId.collectAsState()
     val remoteSttConfig by viewModel.remoteSttConfig.collectAsState()
     val remoteTtsConfig by viewModel.remoteTtsConfig.collectAsState()
+    val groqTtsConfig by viewModel.groqTtsConfig.collectAsState()
     val voiceAssets by viewModel.voiceAssets.collectAsState()
     val voiceFeatureState by viewModel.voiceFeatureState.collectAsState()
     val error by viewModel.error.collectAsState()
@@ -240,6 +242,13 @@ fun VoiceSettingsScreen(
                         onSelect = { viewModel.selectTtsMode(AssistantTtsMode.REMOTE_SERVER) },
                         onSave = viewModel::saveRemoteTtsConfig,
                         onPreview = { viewModel.saveRemoteTtsConfig(it, preview = true) }
+                    )
+                    GroqTtsCard(
+                        selected = ttsMode == AssistantTtsMode.GROQ,
+                        config = groqTtsConfig,
+                        onSelect = { viewModel.selectTtsMode(AssistantTtsMode.GROQ) },
+                        onSave = viewModel::saveGroqTtsConfig,
+                        onPreview = { viewModel.saveGroqTtsConfig(it, preview = true) }
                     )
                     DownloadableVoiceCard(
                         title = "Piper · Ald",

@@ -13,6 +13,7 @@ import com.aiagents.app.domain.model.ProviderType
 import com.aiagents.app.domain.model.ZAIPlanType
 import android.content.Context
 import com.aiagents.app.data.auth.OpenAIEndpointPolicy
+import com.aiagents.app.data.auth.UnsafeProviderEndpointException
 import com.aiagents.app.data.auth.AnthropicOAuthManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -394,8 +395,10 @@ class ProvidersViewModel @Inject constructor(
                     clearSelectionsIfCredentialChanged(type, previousScope)
                 } else {
                     val previousScope = repository.getStoredCredentialScope(type)
-                    repository.saveApiKey(type, state.apiKey)
+                    // Validate and persist the destination before accepting a credential for it.
+                    // An unsafe URL must not leave a half-saved provider configuration behind.
                     repository.saveBaseUrl(type, state.baseUrl.trim())
+                    repository.saveApiKey(type, state.apiKey)
                     clearSelectionsIfCredentialChanged(type, previousScope)
                 }
             } catch (error: Exception) {
@@ -403,7 +406,11 @@ class ProvidersViewModel @Inject constructor(
                     type,
                     state.copy(
                         isLoading = false,
-                        catalogError = providerError(error, "provider_config_save", type)
+                        catalogError = if (error is UnsafeProviderEndpointException) {
+                            error.message
+                        } else {
+                            providerError(error, "provider_config_save", type)
+                        }
                     )
                 )
                 return@launch

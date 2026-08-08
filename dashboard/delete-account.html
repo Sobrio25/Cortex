@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Eliminar una cuenta de Cortex y sus datos">
+  <title>Cortex · Eliminar cuenta</title>
+  <link rel="stylesheet" href="/legal.css?v=1">
+</head>
+<body>
+  <main class="legal-shell">
+    <nav class="legal-nav"><a class="legal-brand" href="/">Cortex</a><a href="/privacy.html">Privacidad</a></nav>
+    <article class="legal-card">
+      <p class="eyebrow">Control de datos</p>
+      <h1>Eliminar tu cuenta de Cortex</h1>
+      <p>Inicia sesión con la misma cuenta de Google vinculada a Cortex. Eliminaremos permanentemente tu cuenta en la nube, historial administrado, vínculos de compra, eventos asociados y reportes de contenido.</p>
+      <p class="warning"><strong>Importante:</strong> eliminar la cuenta no cancela una suscripción activa. Cancélala primero en Google Play. Los datos que sólo existen en un dispositivo se eliminan desde Ajustes → Eliminar cuenta y datos, o al desinstalar la app.</p>
+      <label class="check"><input id="confirm" type="checkbox"> Entiendo que esta acción es permanente y que las métricas agregadas anónimas pueden permanecer.</label>
+      <div class="actions">
+        <button id="sign-in" class="primary" type="button">Entrar con Google</button>
+        <button id="delete" class="danger" type="button" disabled>Eliminar cuenta permanentemente</button>
+      </div>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+      <p class="small">Si ya no puedes acceder a la cuenta vinculada, solicita ayuda en <a href="mailto:gabo982@gmail.com">gabo982@gmail.com</a>.</p>
+    </article>
+  </main>
+  <script type="module" src="/delete-account.js?v=1"></script>
+</body>
+</html>

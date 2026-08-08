@@ -117,7 +117,7 @@ fun LocalModelsScreen(
                                     color = MaterialTheme.colorScheme.onErrorContainer
                                 )
                                 Text(
-                                    text = "Los modelos Gemma requieren autenticación. Toca aquí para configurar tu token.",
+                                    text = "Algunos modelos Gemma anteriores requieren autenticación. Toca aquí para configurar tu token.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onErrorContainer
                                 )

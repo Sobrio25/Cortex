@@ -2,6 +2,7 @@ import java.security.MessageDigest
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.Properties
 import java.util.zip.ZipFile
 
 plugins {
@@ -15,15 +16,23 @@ plugins {
 }
 
 val cortexDebugKeystore = file("${System.getProperty("user.home")}/.android/cortex-debug.keystore")
+val playSigningPropertiesFile = rootProject.file("keystore.properties")
+val playSigningProperties = Properties().apply {
+    if (playSigningPropertiesFile.isFile) {
+        playSigningPropertiesFile.inputStream().use(::load)
+    }
+}
+val playSigningKeys = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+val playSigningConfigured = playSigningKeys.all { !playSigningProperties.getProperty(it).isNullOrBlank() }
 
 android {
     namespace = "com.aiagents.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.aiagents.app"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 7
         versionName = "0.3.3"
         buildConfigField("boolean", "EXTERNAL_VOICE_PACK", "false")
@@ -48,6 +57,14 @@ android {
                 storePassword = "android"
                 keyAlias = "androiddebugkey"
                 keyPassword = "android"
+            }
+        }
+        if (playSigningConfigured) {
+            create("playUpload") {
+                storeFile = rootProject.file(playSigningProperties.getProperty("storeFile"))
+                storePassword = playSigningProperties.getProperty("storePassword")
+                keyAlias = playSigningProperties.getProperty("keyAlias")
+                keyPassword = playSigningProperties.getProperty("keyPassword")
             }
         }
     }
@@ -80,6 +97,7 @@ android {
             )
         }
         release {
+            signingConfigs.findByName("playUpload")?.let { signingConfig = it }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -110,6 +128,31 @@ android {
     }
     dynamicFeatures += setOf(":voice")
     sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
+}
+
+val verifyPlayUploadSigning = tasks.register("verifyPlayUploadSigning") {
+    group = "verification"
+    description = "Fails unless the dedicated Google Play upload key is configured."
+    doLast {
+        check(playSigningConfigured) {
+            "Google Play upload signing is not configured. Copy keystore.properties.example " +
+                "to keystore.properties and provide the dedicated upload key values."
+        }
+        val configuredStore = rootProject.file(playSigningProperties.getProperty("storeFile"))
+        check(configuredStore.isFile) {
+            "Google Play upload keystore does not exist: ${configuredStore.absolutePath}"
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name == "bundleRelease") mustRunAfter(verifyPlayUploadSigning)
+}
+
+tasks.register("bundlePlayRelease") {
+    group = "distribution"
+    description = "Verifies Play upload signing and builds the release Android App Bundle."
+    dependsOn(verifyPlayUploadSigning, "bundleRelease")
 }
 
 val releaseApkBudgetBytes = 240L * 1024L * 1024L
@@ -344,7 +387,9 @@ dependencies {
     implementation("com.google.mediapipe:tasks-genai:0.10.27")
     
     // LiteRT-LM for Gemma 4 and newer .litertlm models
-    implementation("com.google.ai.edge.litertlm:litertlm-android:0.9.0")
+    // Keep the Kotlin API and its JNI runtime on the same current LiteRT-LM release. Older
+    // runtimes can abort the whole process while creating a Conversation on newer Android builds.
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.12.0")
 
     // The optional offline STT engine lives in the :voice dynamic feature. The base app uses
     // Android's built-in recognizer and downloads no speech native code until it is requested.

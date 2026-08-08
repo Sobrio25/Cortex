@@ -15,6 +15,7 @@ import com.aiagents.app.data.speech.AndroidTextToSpeechManager
 import com.aiagents.app.data.speech.AssistantSttMode
 import com.aiagents.app.data.speech.AssistantTtsMode
 import com.aiagents.app.data.speech.GoogleTtsVoice
+import com.aiagents.app.data.speech.GroqTtsConfig
 import com.aiagents.app.data.speech.OnDemandVoiceFeatureLoader
 import com.aiagents.app.data.speech.Qwen3TtsVoiceSkill
 import com.aiagents.app.data.speech.RemoteSttConfig
@@ -60,6 +61,7 @@ class VoiceSettingsViewModel @Inject constructor(
     val selectedGoogleVoiceId = voicePreferences.googleVoiceId
     val remoteSttConfig = voicePreferences.remoteSttConfig
     val remoteTtsConfig = voicePreferences.remoteTtsConfig
+    val groqTtsConfig = voicePreferences.groqTtsConfig
     val googleVoices: StateFlow<List<GoogleTtsVoice>> = textToSpeech.googleVoices
     val voiceFeatureState = voiceFeatureInstaller.state
 
@@ -175,6 +177,12 @@ class VoiceSettingsViewModel @Inject constructor(
             _error.value = "Configura los datos requeridos del servidor TTS"
             return
         }
+        if (mode == AssistantTtsMode.GROQ &&
+            !voicePreferences.groqTtsConfig.value.isConfigured
+        ) {
+            _error.value = "Guarda la API key y elige una voz de Groq primero"
+            return
+        }
         voicePreferences.setTtsMode(mode)
         if (mode == AssistantTtsMode.NONE) {
             assistantPreferences.setSpeakResponses(false)
@@ -214,6 +222,17 @@ class VoiceSettingsViewModel @Inject constructor(
         voicePreferences.setTtsMode(AssistantTtsMode.REMOTE_SERVER)
         _error.value = null
         if (preview) textToSpeech.previewRemoteVoice()
+    }
+
+    fun saveGroqTtsConfig(config: GroqTtsConfig, preview: Boolean = false) {
+        if (config.apiKey.isBlank() || config.voice.isBlank()) {
+            _error.value = "Ingresa la API key y elige una voz de Groq"
+            return
+        }
+        voicePreferences.setGroqTtsConfig(config)
+        voicePreferences.setTtsMode(AssistantTtsMode.GROQ)
+        _error.value = null
+        if (preview) textToSpeech.previewGroqVoice()
     }
 
     fun downloadAsset(assetId: String) {

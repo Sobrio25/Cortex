@@ -64,21 +64,21 @@ class CommandPermissionManager @Inject constructor(
             }
         }
         
-        // Buscar coincidencias de wildcard en memoria
+        // Buscar coincidencias de glob en memoria (patrones con * y ? en cualquier posición).
+        // Gana el patrón más específico (más largo) para que `git commit *` prime sobre `git *`.
         val allPermissions = commandPermissionDao.getAllPermissionsOnce()
-        val wildcardMatch = allPermissions.find { permission ->
-            permission.commandPattern.endsWith("*") && 
-            command.startsWith(permission.commandPattern.removeSuffix("*"))
-        }
-        
-        if (wildcardMatch != null) {
-            return when (wildcardMatch.permissionLevel) {
+        val globMatch = allPermissions
+            .filter { matchesGlob(it.commandPattern, command) }
+            .maxByOrNull { it.commandPattern.length }
+
+        if (globMatch != null) {
+            return when (globMatch.permissionLevel) {
                 PermissionLevel.ALLOWED_ALWAYS.name -> {
-                    commandPermissionDao.updateLastUsed(wildcardMatch.id, System.currentTimeMillis())
+                    commandPermissionDao.updateLastUsed(globMatch.id, System.currentTimeMillis())
                     PermissionCheckResult.Allowed(command, PermissionLevel.ALLOWED_ALWAYS)
                 }
                 PermissionLevel.ALLOWED_ONCE.name -> {
-                    commandPermissionDao.deleteById(wildcardMatch.id)
+                    commandPermissionDao.deleteById(globMatch.id)
                     PermissionCheckResult.NeedsConfirmation(
                         PermissionRequest(command, riskLevel, baseCommand),
                         "Permitido una vez anteriormente, requiere confirmación nuevamente"
@@ -109,8 +109,10 @@ class CommandPermissionManager @Inject constructor(
     suspend fun grantPermission(command: String, permissionLevel: PermissionLevel): PermissionDecision {
         val baseCommand = extractBaseCommand(command)
         val pattern = when (permissionLevel) {
-            PermissionLevel.ALLOWED_ALWAYS -> "$baseCommand*"
-            PermissionLevel.ALLOWED_ONCE, PermissionLevel.BLOCKED -> command
+            // Tanto "siempre permitir" como "bloquear siempre" se guardan como glob
+            // sobre el comando base para cubrir toda la familia (ej. `git *`, `rm *`).
+            PermissionLevel.ALLOWED_ALWAYS, PermissionLevel.BLOCKED -> "$baseCommand*"
+            PermissionLevel.ALLOWED_ONCE -> command
         }
         
         val existing = commandPermissionDao.getPermissionByPattern(pattern)
@@ -140,6 +142,24 @@ class CommandPermissionManager @Inject constructor(
         val trimmed = command.trim()
         val parts = trimmed.split(Regex("\\s+"))
         return parts.firstOrNull() ?: trimmed
+    }
+
+    /** Matches a command against a stored glob pattern: `*` = cualquier secuencia, `?` = un carácter. */
+    private fun matchesGlob(pattern: String, command: String): Boolean {
+        val regex = buildString {
+            append('^')
+            var i = 0
+            while (i < pattern.length) {
+                when (val c = pattern[i]) {
+                    '*' -> append(".*")
+                    '?' -> append('.')
+                    else -> append(Regex.escape(c.toString()))
+                }
+                i++
+            }
+            append('$')
+        }.toRegex()
+        return regex.matches(command)
     }
 }
 

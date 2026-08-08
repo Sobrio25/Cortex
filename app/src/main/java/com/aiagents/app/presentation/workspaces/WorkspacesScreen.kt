@@ -161,14 +161,15 @@ fun WorkspacesScreen(
         }
 
         // Context Menu
-        if (uiState.showContextMenu && uiState.selectedWorkspace != null) {
+        val selectedWorkspace = uiState.selectedWorkspace
+        if (uiState.showContextMenu && selectedWorkspace != null) {
             WorkspaceContextMenu(
-                workspace = uiState.selectedWorkspace!!,
+                workspace = selectedWorkspace,
                 onDismiss = { viewModel.hideContextMenu() },
-                onRename = { viewModel.showRenameDialog(uiState.selectedWorkspace!!) },
-                onExport = { viewModel.exportWorkspace(uiState.selectedWorkspace!!) },
-                onChangeStorage = { viewModel.showChangeStorageDialog(uiState.selectedWorkspace!!) },
-                onDelete = { viewModel.showDeleteDialog(uiState.selectedWorkspace!!) }
+                onRename = { viewModel.showRenameDialog(selectedWorkspace) },
+                onExport = { viewModel.exportWorkspace(selectedWorkspace) },
+                onChangeStorage = { viewModel.showChangeStorageDialog(selectedWorkspace) },
+                onDelete = { viewModel.showDeleteDialog(selectedWorkspace) }
             )
         }
     }

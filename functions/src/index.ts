@@ -44,6 +44,9 @@ import {
   parseClientAppUsageEvent,
   recordAppUsageEvent,
 } from "./app-usage";
+import { deleteAccountData } from "./account-deletion";
+import { parseContentReport, recordContentReport } from "./content-reports";
+import { createFiberMeterScanHandler } from "./fibermeter-scan";
 
 initializeApp();
 getFirestore().settings({ ignoreUndefinedProperties: true });
@@ -53,6 +56,8 @@ const vercelKey = defineSecret("VERCEL_AI_GATEWAY_KEY");
 const openRouterKey = defineSecret("OPENROUTER_API_KEY");
 const kiloKey = defineSecret("KILO_GATEWAY_API_KEY");
 const openCodeKey = defineSecret("OPENCODE_API_KEY");
+const zaiKey = defineSecret("ZAI_API_KEY");
+const fiberMeterServiceToken = defineSecret("FIBERMETER_SERVICE_TOKEN");
 const adminEmails = defineSecret("ADMIN_EMAILS");
 
 interface AuthenticatedRequest extends Request {
@@ -64,6 +69,19 @@ interface AuthenticatedRequest extends Request {
 }
 const app = express();
 app.disable("x-powered-by");
+
+const fiberMeterScanApp = express();
+fiberMeterScanApp.disable("x-powered-by");
+fiberMeterScanApp.use(express.json({ limit: "2mb" }));
+fiberMeterScanApp.post(
+  "/v1/fibermeter/scan",
+  createFiberMeterScanHandler({
+    getServiceToken: () => fiberMeterServiceToken.value(),
+    getOpenCodeKey: () => openCodeKey.value(),
+  }),
+);
+
+app.use(fiberMeterScanApp);
 app.use(express.json({ limit: "12mb" }));
 
 const asyncRoute = (handler: (req: Request, res: Response) => Promise<void>) =>
@@ -90,6 +108,13 @@ app.use((req, _res, next) => {
 
 app.get("/v1/account", asyncRoute(async (req, res) => {
   res.json(await getAccount((req as AuthenticatedRequest).uid));
+}));
+
+app.delete("/v1/account", asyncRoute(async (req, res) => {
+  const uid = (req as AuthenticatedRequest).uid;
+  await deleteAccountData(uid);
+  await getAuth().deleteUser(uid);
+  res.status(204).send();
 }));
 
 app.get("/v1/models", asyncRoute(async (req, res) => {
@@ -134,6 +159,17 @@ app.post("/v1/app-usage", asyncRoute(async (req, res) => {
     ...(event),
     uid: (req as AuthenticatedRequest).uid,
   });
+  res.status(202).json({ accepted: true });
+}));
+
+app.post("/v1/content-reports", asyncRoute(async (req, res) => {
+  let report;
+  try {
+    report = parseContentReport(req.body);
+  } catch (error) {
+    throw new EntitlementError(400, error instanceof Error ? error.message : "Reporte inválido");
+  }
+  await recordContentReport((req as AuthenticatedRequest).uid, report);
   res.status(202).json({ accepted: true });
 }));
 
@@ -244,6 +280,7 @@ app.post("/v1/inference/chat", asyncRoute(async (req, res) => {
     openRouter: openRouterKey.value() || undefined,
     kilo: kiloKey.value() || undefined,
     openCode: openCodeKey.value() || undefined,
+    zai: zaiKey.value() || undefined,
   };
 
   const runFree = async () => {
@@ -401,7 +438,7 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 export const api = onRequest({
-  secrets: [vercelKey, openRouterKey, kiloKey, openCodeKey, adminEmails],
+  secrets: [vercelKey, openRouterKey, kiloKey, openCodeKey, zaiKey, fiberMeterServiceToken, adminEmails],
   cors: false,
 }, app);
 

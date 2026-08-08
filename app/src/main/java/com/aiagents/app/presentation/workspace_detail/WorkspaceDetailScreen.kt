@@ -86,6 +86,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -102,6 +103,8 @@ import com.aiagents.app.domain.model.AgentFile
 import com.aiagents.app.domain.model.Message
 import com.aiagents.app.domain.model.MessageRole
 import com.aiagents.app.domain.model.Workspace
+import com.aiagents.app.data.remote.ContentReportCategory
+import com.aiagents.app.R
 import com.aiagents.app.presentation.tool_results.DirectToolResultPolicy
 import com.aiagents.app.presentation.tool_results.ToolExperiencePolicy
 import com.aiagents.app.ui.components.DirectToolResultCard
@@ -206,6 +209,20 @@ fun WorkspaceDetailScreen(
             delay(3_200)
             if (visibleAgentChange == event) visibleAgentChange = null
             delay(180)
+        }
+    }
+
+    LaunchedEffect(viewModel, snackbarHostState) {
+        viewModel.contentReportResults.collect { result ->
+            snackbarHostState.showSnackbar(
+                context.getString(
+                    if (result == ContentReportResult.Sent) {
+                        R.string.content_report_sent
+                    } else {
+                        R.string.content_report_failed
+                    }
+                )
+            )
         }
     }
 
@@ -385,6 +402,13 @@ fun WorkspaceDetailScreen(
         }
     }
 
+    LaunchedEffect(uiState.infoMessage) {
+        uiState.infoMessage?.let { info ->
+            snackbarHostState.showSnackbar(info, duration = SnackbarDuration.Long)
+            viewModel.dismissInfo()
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         containerColor = Color.Transparent,
@@ -505,6 +529,7 @@ fun WorkspaceDetailScreen(
                             }
                         },
                         onStopSpeaking = viewModel::stopSpeaking,
+                        onReportMessage = viewModel::reportGeneratedContent,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -563,7 +588,8 @@ fun WorkspaceDetailScreen(
             request = permissionRequest,
             onAllowOnce = { viewModel.grantPermissionAndExecute(PermissionLevel.ALLOWED_ONCE) },
             onAllowAlways = { viewModel.grantPermissionAndExecute(PermissionLevel.ALLOWED_ALWAYS) },
-            onDeny = { viewModel.denyPermission() }
+            onDeny = { viewModel.denyPermission() },
+            onDenyAlways = { viewModel.denyPermissionAlways() }
         )
     }
 
@@ -1122,6 +1148,7 @@ fun ChatContent(
     onCancelTranscription: () -> Unit = {},
     onSpeakMessage: (Message) -> Unit = {},
     onStopSpeaking: () -> Unit = {},
+    onReportMessage: (Message, ContentReportCategory, String?) -> Unit = { _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -1252,6 +1279,13 @@ fun ChatContent(
                                     onSpeakMessage(message)
                                 }
                             }
+                        } else {
+                            null
+                        },
+                        onReport = if (
+                            message.role == MessageRole.ASSISTANT && message.content.isNotBlank()
+                        ) {
+                            { category, comment -> onReportMessage(message, category, comment) }
                         } else {
                             null
                         },
@@ -1617,6 +1651,7 @@ fun MessageBubble(
     onShareArtifact: (AgentFile) -> Unit = {},
     isSpeaking: Boolean = false,
     onSpeakToggle: (() -> Unit)? = null,
+    onReport: ((ContentReportCategory, String?) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val hasSubConversation = message.subConversationId != null
@@ -1631,6 +1666,69 @@ fun MessageBubble(
 
     val context = LocalContext.current
     var showCopiedToast by remember { mutableStateOf(false) }
+    var showReportDialog by remember { mutableStateOf(false) }
+    var reportCategory by remember { mutableStateOf(ContentReportCategory.OTHER) }
+    var reportComment by remember { mutableStateOf("") }
+
+    if (showReportDialog && onReport != null) {
+        val categories = listOf(
+            ContentReportCategory.OFFENSIVE to stringResource(R.string.content_report_category_offensive),
+            ContentReportCategory.UNSAFE to stringResource(R.string.content_report_category_unsafe),
+            ContentReportCategory.INACCURATE to stringResource(R.string.content_report_category_inaccurate),
+            ContentReportCategory.OTHER to stringResource(R.string.content_report_category_other)
+        )
+        AlertDialog(
+            onDismissRequest = { showReportDialog = false },
+            title = { Text(stringResource(R.string.content_report_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.content_report_description))
+                    categories.forEach { (category, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { reportCategory = category },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = reportCategory == category,
+                                onClick = { reportCategory = category }
+                            )
+                            Text(label)
+                        }
+                    }
+                    OutlinedTextField(
+                        value = reportComment,
+                        onValueChange = { reportComment = it.take(1_000) },
+                        label = { Text(stringResource(R.string.content_report_comment)) },
+                        minLines = 2,
+                        maxLines = 4,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        stringResource(R.string.content_report_privacy),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onReport(reportCategory, reportComment)
+                    showReportDialog = false
+                    reportComment = ""
+                    reportCategory = ContentReportCategory.OTHER
+                }) {
+                    Text(stringResource(R.string.content_report_send))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showReportDialog = false }) {
+                    Text(stringResource(R.string.content_report_cancel))
+                }
+            }
+        )
+    }
 
     // Estado para controlar si se muestra el reasoning
     var showReasoningExpanded by remember { mutableStateOf(false) }
@@ -1845,6 +1943,19 @@ fun MessageBubble(
                                     },
                                     modifier = Modifier.size(18.dp),
                                     tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        if (!isUser && !isTool && onReport != null) {
+                            IconButton(
+                                onClick = { showReportDialog = true },
+                                modifier = Modifier.size(30.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Flag,
+                                    contentDescription = stringResource(R.string.content_report_action),
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -2980,7 +3091,8 @@ fun CommandPermissionDialog(
     request: PermissionRequest,
     onAllowOnce: () -> Unit,
     onAllowAlways: () -> Unit,
-    onDeny: () -> Unit
+    onDeny: () -> Unit,
+    onDenyAlways: () -> Unit
 ) {
     val riskColor = when (request.riskLevel) {
         CommandRiskLevel.SAFE -> Color(0xFF4CAF50)
@@ -3060,6 +3172,9 @@ fun CommandPermissionDialog(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onDeny) {
                     Text("Rechazar")
+                }
+                TextButton(onClick = onDenyAlways) {
+                    Text("Denegar siempre")
                 }
                 FilledTonalButton(onClick = onAllowOnce) {
                     Text("Una vez")

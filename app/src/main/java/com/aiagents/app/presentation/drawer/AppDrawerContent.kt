@@ -43,6 +43,7 @@ fun AppDrawerContent(
     onConversationClick: (Long) -> Unit,
     onDeleteConversation: (Long) -> Unit,
     onRenameConversation: (Long, String) -> Unit,
+    onTogglePin: (Long) -> Unit,
     onWorkspacesClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onGoToGlobal: () -> Unit = {},
@@ -153,19 +154,30 @@ fun AppDrawerContent(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.Chat,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp),
-                                tint = contentColor
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
+                            if (conversation.isPinned) {
+                                Icon(
+                                    Icons.Default.PushPin,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                            } else {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Chat,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = contentColor
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                            }
                             Text(
                                 text = conversation.title,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 color = contentColor,
-                                style = MaterialTheme.typography.labelLarge
+                                style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.weight(1f, fill = false)
                             )
                         }
                     }
@@ -216,6 +228,25 @@ fun AppDrawerContent(
             },
             text = {
                 Column {
+                    TextButton(
+                        onClick = {
+                            showOptionsFor = null
+                            onTogglePin(conversation.id)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            Icons.Default.PushPin,
+                            contentDescription = null,
+                            tint = if (conversation.isPinned) MaterialTheme.colorScheme.primary
+                            else LocalContentColor.current
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            text = if (conversation.isPinned) "Quitar pin" else "Fijar",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                     TextButton(
                         onClick = {
                             showOptionsFor = null
@@ -307,12 +338,14 @@ private fun groupConversationsByDate(conversations: List<Conversation>): List<Pa
     val todayStart = cal.timeInMillis
     val sevenDaysAgo = todayStart - TimeUnit.DAYS.toMillis(7)
 
+    val pinned = mutableListOf<Conversation>()
     val today = mutableListOf<Conversation>()
     val lastWeek = mutableListOf<Conversation>()
     val older = mutableListOf<Conversation>()
 
     conversations.forEach { c ->
         when {
+            c.isPinned -> pinned.add(c)
             c.updatedAt >= todayStart -> today.add(c)
             c.updatedAt >= sevenDaysAgo -> lastWeek.add(c)
             else -> older.add(c)
@@ -320,6 +353,7 @@ private fun groupConversationsByDate(conversations: List<Conversation>): List<Pa
     }
 
     return buildList {
+        if (pinned.isNotEmpty()) add("Fijados" to pinned)
         if (today.isNotEmpty()) add("Hoy" to today)
         if (lastWeek.isNotEmpty()) add("Ultimos 7 dias" to lastWeek)
         if (older.isNotEmpty()) add("Anteriores" to older)
