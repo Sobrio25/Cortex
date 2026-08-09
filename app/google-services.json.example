@@ -1,0 +1,5 @@
+{
+  "_note": "This file is a TEMPLATE. Copy it to app/google-services.json and fill in your real Firebase values. NEVER commit the real app/google-services.json — it is gitignored.",
+  "how_to_get_it": "Firebase Console → Project settings → Your apps → Android app (package com.aiagents.app) → download google-services.json",
+  "required_for_build": "The Android build (Google Services Gradle plugin) fails without app/google-services.json. On CI, provide it via a secret, not the repo."
+}

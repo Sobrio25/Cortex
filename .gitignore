@@ -25,6 +25,8 @@ keystore.properties
 
 # Secrets
 *.env
+google-services.json
+app/google-services.json
 
 # Misc
 nohup.out
