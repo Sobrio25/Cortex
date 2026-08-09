@@ -1,114 +1,88 @@
-# Cortex
+# Cortex — Native AI Agent Manager for Android
 
-Aplicación Android nativa para gestionar múltiples agentes de IA con workspaces especializados.
+A native Android app that turns your device into a multi-agent AI workspace: specialized agents with editable system prompts, persistent per-project workspaces, **17+ LLM providers**, **on-device voice and local models**, and **multi-agent delegation** orchestrated from a central coordinator.
 
-## Características
+[![CI](https://github.com/Sobrio25/Cortex/actions/workflows/ci.yml/badge.svg)](https://github.com/Sobrio25/Cortex/actions/workflows/ci.yml)
+[![Quality gate](https://github.com/Sobrio25/Cortex/actions/workflows/beta-quality-gate.yml/badge.svg)](https://github.com/Sobrio25/Cortex/actions/workflows/beta-quality-gate.yml)
+[![Instrumentation](https://github.com/Sobrio25/Cortex/actions/workflows/android-instrumentation.yml/badge.svg)](https://github.com/Sobrio25/Cortex/actions/workflows/android-instrumentation.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-### 🤖 Multi-agente
-- Crea agentes con roles especializados (contador, abogado, programador, etc.)
-- **Edita y elimina** agentes existentes fácilmente
-- Cada agente tiene instrucciones de sistema personalizables
-- Configuración de temperatura y tokens máximos
+## Highlights
 
-### 📁 Workspaces (Espacios de trabajo)
-- Crea múltiples workspaces para diferentes proyectos
-- Cada workspace puede tener un agente activo asignado
-- Historial de conversaciones persistente por workspace
-- Gestión de archivos adjuntos por workspace
+### 🤖 Multi-agent system
+- Create agents with specialized roles (developer, accountant, lawyer, tutor, researcher, …) and fully editable system prompts
+- Per-agent temperature and max-token configuration
+- A central coordinator delegates work across agents:
+  - `DELEGATE: [Agent]` — single agent
+  - `DELEGATE_SEQ: [A] -> [B]` — sequential chains (output chaining)
+  - `DELEGATE_PAR: [A], [B]` — parallel execution
 
-### 🔌 Múltiples proveedores de IA
-Soporta Cortex administrado, OpenRouter, Google AI, OpenAI, NVIDIA, Anthropic, Moonshot, MiniMax,
-DeepSeek, xAI, Ollama, LM Studio, Kilo, Alibaba, OpenCode, Z.AI y modelos locales en el dispositivo.
+### 🗂️ Workspaces
+- Separate workspaces per project, each with its own active agent and model
+- Persistent conversation history and file attachments per workspace
 
-### 🔒 Seguridad
-- API Keys almacenadas con **EncryptedSharedPreferences**
-- Sistema de permisos para ejecución de comandos
-- Niveles de riesgo para comandos del terminal
+### 🔌 17+ LLM providers
+Managed Cortex, OpenRouter, Google AI, OpenAI, NVIDIA, Anthropic, Moonshot, MiniMax, DeepSeek, xAI (Grok), Ollama, LM Studio, Kilo, Alibaba, OpenCode, Z.AI — plus **on-device local models** (MediaPipe, downloaded from HuggingFace) for fully offline inference.
 
-### 🎙️ Cortex como asistente
-- Invocación mediante el rol oficial de asistente de Android
-- Burbuja translúcida compacta y conversación expandida por voz o texto
-- Reconocimiento local con Android on-device y fallback Vosk
-- Respuestas con voces TTS embebidas, sin API keys de voz
+### 🎙️ Voice, on-device first
+- 4 STT backends with automatic hardware detection: Sherpa-ONNX (Snapdragon NPU), MediaPipe Whisper, Vosk, and cloud fallback
+- Embedded TTS voices — no voice API keys required
+- Invoke Cortex as the Android system assistant role, or use the floating bubble for hands-free conversation
 
-### 💻 Terminal integrado
-- Los agentes pueden ejecutar comandos del sistema (opcional)
-- Sistema de aprobación de comandos con niveles de riesgo
-- Visualización de salida de comandos en el chat
+### 🔒 Security
+- API keys stored in `EncryptedSharedPreferences` (AndroidX Security Crypto)
+- Integrated terminal with **risk-level command approval** before any shell access
+- Optional per-tool execution permissions
 
-### 📊 Gestión de recursos
-- Contador de tokens por conversación
-- Límites de contexto configurables
-- Múltiples modelos por proveedor
+### 🧩 Extensible
+- MCP server support, persistent memory (FTS + links), scheduled tasks, skills, and subagent executions
+- Tool integrations: shell, files, search, calendar, GitHub, Notion, Slack, Google Drive, memory, todos, finance, skills, delegation, app controls
 
-## Arquitectura
+### ☁️ Backend + dashboard
+- Firebase Cloud Functions backend (Node.js 22) with automated tests
+- Web dashboard for monitoring and voice-pack distribution
 
-- **MVVM** + Clean Architecture
-- **Jetpack Compose** para UI declarativa
-- **Hilt** para inyección de dependencias
-- **Room** para base de datos local
-- **Retrofit** para APIs REST
-- **KSP** para procesamiento de anotaciones
+## Architecture
 
-## Compilar
+**MVVM + Clean Architecture** — Jetpack Compose · Hilt · Room (v52, 17 entities) · Retrofit · KSP
 
-```bash
-./gradlew assembleDebug
-```
+- `data/` — Room database + migrations, Retrofit clients, repositories, orchestration, tool handlers, STT services
+- `domain/` — pure domain models (Agent, Workspace, Message, Provider, MCPServer, LocalModel)
+- `presentation/` — Compose screens + ViewModels, one package per screen (13 modules)
+- `di/` — Hilt modules
 
-O instalar directamente en un dispositivo conectado:
+## Build
 
 ```bash
-./gradlew installDebug
+./gradlew assembleDebug          # debug APK
+./gradlew installDebug           # install on a connected device
+./gradlew test                   # unit tests
+./gradlew connectedAndroidTest   # on-device instrumentation tests
 ```
 
-## Configuración
+A `sideload` build variant distributes the app outside Google Play together with a hosted STT/TTS voice pack (`./gradlew prepareSideloadVoicePack`).
 
-### 1. Configurar proveedores
-1. Abre la app y ve a la pestaña **"Proveedores"**
-2. Toca el proveedor que deseas configurar
-3. Ingresa tu API Key (no requerida para Ollama)
-4. Para OpenAI y Ollama puedes configurar URL base personalizada
-5. Selecciona el proveedor activo con el botón radial
+## Firebase setup
 
-### 2. Crear agentes
-1. Ve a la pestaña **"Agentes"**
-2. Toca el botón **+** para crear un nuevo agente
-3. Ingresa nombre, rol e instrucciones del sistema
-4. Los agentes pueden editarse o eliminarse en cualquier momento
+1. Copy `app/google-services.json.example` → `app/google-services.json` and fill in your Firebase Android app values (package `com.aiagents.app`).
+2. **Never commit the real `google-services.json`** — it is gitignored; provide it via CI secrets instead.
+3. Deploy backend secrets with `firebase functions:secrets:set`.
 
-### 3. Crear workspaces
-1. Ve a la pestaña **"Workspaces"**
-2. Crea un nuevo workspace con nombre y descripción
-3. Asigna un agente y selecciona el modelo a usar
-4. ¡Comienza a chatear!
+## CI
 
-## Proveedores soportados
+Three GitHub Actions workflows: `ci` (build + unit tests), `beta-quality-gate`, and `android-instrumentation` (on-device tests).
 
-El catálogo de modelos se obtiene dinámicamente cuando el proveedor lo permite. Ollama, LM Studio
-y los modelos en el dispositivo funcionan como rutas locales; los demás usan el plan administrado
-o credenciales aportadas por el usuario.
-
-## Estructura del proyecto
+## Project layout
 
 ```
-app/src/main/java/com/aiagents/app/
-├── data/
-│   ├── local/         # Base de datos Room, DAOs, EncryptedSharedPreferences
-│   ├── remote/        # Clientes API (Retrofit)
-│   ├── repository/    # Repositorios de datos
-│   └── terminal/      # Ejecución de comandos del sistema
-├── domain/
-│   └── model/         # Modelos de dominio (Agent, Workspace, Provider, etc.)
-├── presentation/
-│   ├── agents/        # Pantalla de gestión de agentes
-│   ├── providers/     # Pantalla de configuración de proveedores
-│   ├── workspaces/    # Pantalla de workspaces
-│   ├── workspace_detail/  # Chat y detalle del workspace
-│   └── MainScreen.kt  # Navegación principal
-└── di/                # Módulos de Hilt para inyección de dependencias
+app/          Android app (Kotlin, Jetpack Compose)
+functions/    Firebase Cloud Functions backend (Node.js 22)
+dashboard/    Web dashboard
+voice/        Voice pack sources
+docs/         Design docs and plans
+benchmark/    Performance benchmarks
 ```
 
-## Licencia
+## License
 
-MIT License - Libre para uso personal y comercial.
+[MIT](LICENSE) © 2026 Gabriel Hernandez
