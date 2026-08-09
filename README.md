@@ -65,7 +65,7 @@ A `sideload` build variant distributes the app outside Google Play together with
 ## Firebase setup
 
 1. Copy `app/google-services.json.example` → `app/google-services.json` and fill in your Firebase Android app values (package `com.aiagents.app`).
-2. **Never commit the real `google-services.json`** — it is gitignored; provide it via CI secrets instead.
+2. **Never commit the real `google-services.json`** — it is gitignored; CI injects it from the `GOOGLE_SERVICES_JSON` repository secret.
 3. Deploy backend secrets with `firebase functions:secrets:set`.
 
 ## CI
