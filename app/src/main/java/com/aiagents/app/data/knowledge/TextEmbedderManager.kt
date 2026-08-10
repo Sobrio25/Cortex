@@ -34,7 +34,7 @@ class TextEmbedderManager @Inject constructor(
             "Embedding model is not downloaded. Open Settings > Knowledge Base and download it."
         )
         return texts.map { text ->
-            task.embed(text).embeddingResult().embeddingAt(0).embeddingAsFloatArray()
+            task.embed(text).embeddingResult().embeddings().first().floatEmbedding()
         }
     }
 
