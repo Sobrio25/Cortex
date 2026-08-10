@@ -4,8 +4,9 @@ package com.aiagents.app.data.knowledge
  * Splits document text into overlapping chunks sized for embedding and retrieval.
  *
  * Strategy: split on sentence/paragraph boundaries, greedily pack sentences into
- * chunks of ~[TARGET_CHARS] characters, carrying the tail of the previous chunk as
- * overlap so retrieval never loses context across a boundary.
+ * chunks of ~[TARGET_CHARS] characters. Oversized single sentences (no boundary
+ * available) are hard-split. Each chunk after the first carries the tail of the
+ * previous chunk as overlap so retrieval never loses context across a boundary.
  */
 object KnowledgeChunker {
 
@@ -27,36 +28,47 @@ object KnowledgeChunker {
 
         val chunks = mutableListOf<String>()
         val current = StringBuilder()
-        var carriedOverlap = ""
+
+        fun flush() {
+            val value = current.toString().trim()
+            if (value.isNotEmpty()) chunks.add(value)
+            current.setLength(0)
+        }
 
         for (sentence in sentences) {
-            val candidate = if (current.isEmpty()) {
-                sentence
-            } else {
-                "$current $sentence"
+            if (sentence.length > TARGET_CHARS) {
+                // A single oversized sentence with no internal boundary: hard-split.
+                flush()
+                chunks.addAll(hardSplit(sentence))
+                continue
             }
-            if (candidate.length > TARGET_CHARS && current.isNotEmpty()) {
-                chunks.add(current.toString())
-                carriedOverlap = overlapOf(current.toString())
-                current.setLength(0)
-                current.append(carriedOverlap)
-                if (carriedOverlap.isNotEmpty()) current.append(' ')
-                current.append(sentence)
+            val candidate = if (current.isEmpty()) sentence else "$current $sentence"
+            if (candidate.length > TARGET_CHARS) flush()
+            if (current.isEmpty()) current.append(sentence) else current.append(' ').append(sentence)
+        }
+        flush()
+
+        // Overlap: prepend the tail of the previous chunk to every subsequent chunk.
+        return chunks.mapIndexed { index, chunk ->
+            if (index == 0) {
+                chunk
             } else {
-                if (current.isEmpty() && carriedOverlap.isNotEmpty()) {
-                    current.append(carriedOverlap).append(' ')
-                }
-                current.append(if (current.isEmpty()) sentence else " $sentence")
+                val overlap = chunks[index - 1].takeLast(OVERLAP_CHARS).trim()
+                if (overlap.isNotEmpty()) "$overlap $chunk" else chunk
             }
         }
-        if (current.isNotBlank()) chunks.add(current.toString().trim())
-        return chunks
     }
 
-    /** Trailing ~[OVERLAP_CHARS] chars of a chunk, bounded to the last sentence(s). */
-    private fun overlapOf(chunk: String): String {
-        val tail = chunk.takeLast(OVERLAP_CHARS).trim()
-        val lastBoundary = tail.lastIndexOf(' ')
-        return (if (lastBoundary > 0) tail.substring(lastBoundary + 1) else tail).trim()
+    /** Splits a single oversized sentence into ~[TARGET_CHARS] pieces with [OVERLAP_CHARS] overlap. */
+    private fun hardSplit(sentence: String): List<String> {
+        val pieces = mutableListOf<String>()
+        var start = 0
+        while (start < sentence.length) {
+            val end = minOf(start + TARGET_CHARS, sentence.length)
+            pieces.add(sentence.substring(start, end))
+            if (end == sentence.length) break
+            start = end - OVERLAP_CHARS
+        }
+        return pieces
     }
 }
