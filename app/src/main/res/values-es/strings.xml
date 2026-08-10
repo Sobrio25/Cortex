@@ -154,6 +154,8 @@
     <string name="settings_mcp_subtitle">MCP, búsqueda web, servicios externos y API keys</string>
     <string name="settings_memory_title">Identidad y memoria</string>
     <string name="settings_memory_subtitle">SOUL.md, USER.md, MEMORY.md y archivo histórico</string>
+    <string name="settings_knowledge_base_title">Base de conocimiento (RAG)</string>
+    <string name="settings_knowledge_base_subtitle">Búsqueda semántica on-device sobre tus documentos</string>
     <string name="settings_skills_title">Skills</string>
     <string name="settings_skills_subtitle">Biblioteca, creación y aprendizaje automático</string>
     <string name="settings_capabilities_title">Capabilities</string>
