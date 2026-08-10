@@ -1,6 +1,7 @@
 package com.aiagents.app.data.terminal
 
 import com.aiagents.app.data.knowledge.KnowledgeRepository
+import com.aiagents.app.domain.model.ToolResult
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject

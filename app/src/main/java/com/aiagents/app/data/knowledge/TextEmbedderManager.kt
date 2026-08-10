@@ -2,8 +2,7 @@ package com.aiagents.app.data.knowledge
 
 import android.content.Context
 import com.google.mediapipe.tasks.core.BaseOptions
-import com.google.mediapipe.tasks.text.TextEmbedder
-import com.google.mediapipe.tasks.text.TextEmbedderOptions
+import com.google.mediapipe.tasks.text.textembedder.TextEmbedder
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import javax.inject.Inject
@@ -43,7 +42,7 @@ class TextEmbedderManager @Inject constructor(
     private fun ensureEmbedder(): TextEmbedder? {
         embedder?.let { return it }
         if (!isModelReady()) return null
-        val options = TextEmbedderOptions.builder()
+        val options = TextEmbedder.TextEmbedderOptions.builder()
             .setBaseOptions(
                 BaseOptions.builder()
                     .setModelAssetPath(modelFile().absolutePath)
