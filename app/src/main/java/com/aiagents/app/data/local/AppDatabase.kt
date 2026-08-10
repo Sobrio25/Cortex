@@ -7,6 +7,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.aiagents.app.data.model.AgentEntity
 import com.aiagents.app.data.model.CommandPermissionEntity
 import com.aiagents.app.data.model.FileEntity
+import com.aiagents.app.data.model.KnowledgeChunkEntity
+import com.aiagents.app.data.model.KnowledgeDocumentEntity
 import com.aiagents.app.data.model.MemoryEntity
 import com.aiagents.app.data.model.MemoryFtsEntity
 import com.aiagents.app.data.model.MemoryLinkEntity
@@ -45,9 +47,11 @@ import com.aiagents.app.domain.model.WeatherWidgetsBuiltin
         DownloadProgressEntity::class,
         SkillEntity::class,
         SkillReviewEntity::class,
-        SubagentExecutionEntity::class
+        SubagentExecutionEntity::class,
+        KnowledgeDocumentEntity::class,
+        KnowledgeChunkEntity::class
     ],
-    version = 52,
+    version = 53,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -66,6 +70,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun skillDao(): SkillDao
     abstract fun skillReviewDao(): SkillReviewDao
     abstract fun subagentExecutionDao(): SubagentExecutionDao
+    abstract fun knowledgeDao(): KnowledgeDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -1391,6 +1396,40 @@ SIEMPRE usa la herramienta pubmed_search para buscar estudios científicos relev
                 )
                 db.execSQL(
                     "ALTER TABLE skills ADD COLUMN lastUsedAt INTEGER"
+                )
+            }
+        }
+
+        // On-device knowledge base (semantic RAG): documents + embedded chunks.
+        val MIGRATION_52_53 = object : Migration(52, 53) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS knowledge_documents (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        title TEXT NOT NULL,
+                        sourceType TEXT NOT NULL,
+                        chunkCount INTEGER NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS knowledge_chunks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        documentId INTEGER NOT NULL,
+                        chunkIndex INTEGER NOT NULL,
+                        text TEXT NOT NULL,
+                        embedding BLOB NOT NULL,
+                        FOREIGN KEY(documentId) REFERENCES knowledge_documents(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_knowledge_chunks_documentId " +
+                        "ON knowledge_chunks (documentId)"
                 )
             }
         }

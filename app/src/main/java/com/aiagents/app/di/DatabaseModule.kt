@@ -14,6 +14,7 @@ import com.aiagents.app.data.local.DownloadProgressDao
 import com.aiagents.app.data.local.FileDao
 import com.aiagents.app.data.local.FinanceDao
 import com.aiagents.app.data.local.FinanceDatabase
+import com.aiagents.app.data.local.KnowledgeDao
 import com.aiagents.app.data.local.MCPDao
 import com.aiagents.app.data.local.MemoryDao
 import com.aiagents.app.data.local.MessageDao
@@ -105,7 +106,8 @@ object DatabaseModule {
                 AppDatabase.MIGRATION_48_49,
                 AppDatabase.MIGRATION_49_50,
                 AppDatabase.MIGRATION_50_51,
-                AppDatabase.MIGRATION_51_52
+                AppDatabase.MIGRATION_51_52,
+                AppDatabase.MIGRATION_52_53
             )
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onCreate(db: SupportSQLiteDatabase) {
@@ -275,4 +277,7 @@ object DatabaseModule {
 
     @Provides
     fun provideSkillReviewDao(database: AppDatabase): SkillReviewDao = database.skillReviewDao()
+
+    @Provides
+    fun provideKnowledgeDao(database: AppDatabase): KnowledgeDao = database.knowledgeDao()
 }

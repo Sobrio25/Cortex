@@ -38,13 +38,19 @@ Managed Cortex, OpenRouter, Google AI, OpenAI, NVIDIA, Anthropic, Moonshot, Mini
 - MCP server support, persistent memory (FTS + links), scheduled tasks, skills, and subagent executions
 - Tool integrations: shell, files, search, calendar, GitHub, Notion, Slack, Google Drive, memory, todos, finance, skills, delegation, app controls
 
+### 🧠 Knowledge base (on-device RAG)
+- Semantic search over your own documents and notes, **fully on-device** (MediaPipe Text Embedder, Universal Sentence Encoder — multilingual)
+- Documents are chunked, embedded, and stored in Room; retrieval is tool-called with **mandatory SOURCE citations**, and retrieved content is treated as user data, never as instructions
+- No API keys, no cloud calls, no data leaves the device; brute-force cosine search is fine for personal-scale collections
+- Add documents from *Settings → Knowledge base (RAG)*, then ask Cortex about them in any chat
+
 ### ☁️ Backend + dashboard
 - Firebase Cloud Functions backend (Node.js 22) with automated tests
 - Web dashboard for monitoring and voice-pack distribution
 
 ## Architecture
 
-**MVVM + Clean Architecture** — Jetpack Compose · Hilt · Room (v52, 17 entities) · Retrofit · KSP
+**MVVM + Clean Architecture** — Jetpack Compose · Hilt · Room (v53, 19 entities) · Retrofit · KSP
 
 - `data/` — Room database + migrations, Retrofit clients, repositories, orchestration, tool handlers, STT services
 - `domain/` — pure domain models (Agent, Workspace, Message, Provider, MCPServer, LocalModel)

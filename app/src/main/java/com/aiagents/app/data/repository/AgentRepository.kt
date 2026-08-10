@@ -58,6 +58,7 @@ import com.aiagents.app.data.terminal.CortexMemoryToolHandler
 import com.aiagents.app.data.terminal.AcademicSearchToolHandler
 import com.aiagents.app.data.terminal.WeatherToolHandler
 import com.aiagents.app.data.terminal.ImageGenerationToolHandler
+import com.aiagents.app.data.terminal.KnowledgeBaseToolHandler
 import com.aiagents.app.data.auth.GoogleWorkspaceOAuthManager
 import com.aiagents.app.data.terminal.CalendarToolHandler
 import com.aiagents.app.data.terminal.FileToolHandler
@@ -135,6 +136,7 @@ class AgentRepository @Inject constructor(
     private val reminderToolHandler: ReminderToolHandler,
     private val memoryToolHandler: MemoryToolHandler,
     private val cortexMemoryToolHandler: CortexMemoryToolHandler,
+    private val knowledgeBaseToolHandler: KnowledgeBaseToolHandler,
     private val presentationToolHandler: PresentationToolHandler,
     private val financeToolHandler: FinanceToolHandler,
     private val toolSearchHandler: ToolSearchHandler,
@@ -1126,6 +1128,7 @@ class AgentRepository @Inject constructor(
     fun getReminderToolHandler(): ReminderToolHandler = reminderToolHandler
     fun getMemoryToolHandler(): MemoryToolHandler = memoryToolHandler
     fun getCortexMemoryToolHandler(): CortexMemoryToolHandler = cortexMemoryToolHandler
+    fun getKnowledgeBaseToolHandler(): KnowledgeBaseToolHandler = knowledgeBaseToolHandler
 
     fun getToolSearchHandler(): ToolSearchHandler = toolSearchHandler
     fun getUnifiedWebToolHandler(): UnifiedWebToolHandler = unifiedWebToolHandler
@@ -1547,6 +1550,9 @@ class AgentRepository @Inject constructor(
             addAll(AgentCreatorToolHandler.getToolDefinitionsJson())
             addAll(LocationToolHandler.getToolDefinitionsJson())
             addAll(ReminderToolHandler.getToolDefinitionsJson())
+            // Knowledge base (semantic RAG over user documents) — always available;
+            // the tools themselves report when the model or documents are missing.
+            addAll(KnowledgeBaseToolHandler.getToolDefinitionsJson())
             // Room is the searchable secondary tier. The orchestrator's single memory tool curates
             // both active Markdown and lower-priority/demoted SQLite entries.
             addAll(MemoryToolHandler.getReadToolDefinitionsJson())

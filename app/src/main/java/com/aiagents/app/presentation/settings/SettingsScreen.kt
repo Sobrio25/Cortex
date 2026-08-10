@@ -71,6 +71,7 @@ fun SettingsScreen(
     onNavigateToDefaultChatModel: () -> Unit,
     onNavigateToLocalModels: () -> Unit,
     onNavigateToMemory: () -> Unit,
+    onNavigateToKnowledgeBase: () -> Unit,
     onNavigateToVoice: () -> Unit,
     onNavigateToCapabilities: () -> Unit,
     onNavigateToScheduledTasks: () -> Unit,
@@ -173,6 +174,12 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_memory_title),
                             subtitle = stringResource(R.string.settings_memory_subtitle),
                             onClick = onNavigateToMemory
+                        ),
+                        SettingsEntry.Navigation(
+                            icon = null,
+                            title = stringResource(R.string.settings_knowledge_base_title),
+                            subtitle = stringResource(R.string.settings_knowledge_base_subtitle),
+                            onClick = onNavigateToKnowledgeBase
                         ),
                         SettingsEntry.Navigation(
                             icon = Icons.Default.GraphicEq,

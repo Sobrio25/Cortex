@@ -385,6 +385,8 @@ dependencies {
 
     // Local LLM inference via MediaPipe (Google)
     implementation("com.google.mediapipe:tasks-genai:0.10.27")
+    // On-device semantic embeddings (Knowledge Base RAG)
+    implementation("com.google.mediapipe:tasks-text:0.10.27")
     
     // LiteRT-LM for Gemma 4 and newer .litertlm models
     // Keep the Kotlin API and its JNI runtime on the same current LiteRT-LM release. Older

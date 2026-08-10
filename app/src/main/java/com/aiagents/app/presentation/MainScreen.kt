@@ -25,6 +25,7 @@ import com.aiagents.app.presentation.drawer.DrawerViewModel
 import com.aiagents.app.presentation.local_models.LocalModelsScreen
 import com.aiagents.app.presentation.mcp.MCPScreen
 import com.aiagents.app.presentation.memory.MemoryScreen
+import com.aiagents.app.presentation.knowledge.KnowledgeBaseScreen
 import com.aiagents.app.presentation.onboarding.OnboardingScreen
 import com.aiagents.app.presentation.onboarding.OnboardingViewModel
 import com.aiagents.app.presentation.providers.ProvidersScreen
@@ -55,6 +56,7 @@ sealed class Screen(val route: String) {
     data object LocalModels : Screen("settings/local_models")
     data object MCP : Screen("settings/mcp")
     data object Memory : Screen("settings/memory")
+    data object KnowledgeBase : Screen("settings/knowledge_base")
     data object Skills : Screen("settings/skills")
     data object ScheduledTasks : Screen("settings/scheduled_tasks")
     data object Assistant : Screen("settings/assistant")
@@ -310,6 +312,9 @@ private fun MainAppContent(
                     },
                     onNavigateToLocalModels = { navController.navigate(Screen.LocalModels.route) },
                     onNavigateToMemory = { navController.navigate(Screen.Memory.route) },
+                    onNavigateToKnowledgeBase = {
+                        navController.navigate(Screen.KnowledgeBase.route)
+                    },
                     onNavigateToVoice = { navController.navigate(Screen.Voice.route) },
                     onNavigateToCapabilities = {
                         navController.navigate(Screen.Capabilities.route)
@@ -357,6 +362,11 @@ private fun MainAppContent(
             }
             composable(Screen.Memory.route) {
                 MemoryScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.KnowledgeBase.route) {
+                KnowledgeBaseScreen(
                     onBack = { navController.popBackStack() }
                 )
             }

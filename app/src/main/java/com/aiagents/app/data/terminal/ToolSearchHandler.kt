@@ -77,6 +77,10 @@ class ToolSearchHandler @Inject constructor() {
         ToolEntry("memory_search", "memory_archive", "Search lower-priority or demoted secondary memory in SQLite", setOf("memory", "archive", "secondary", "search", "history", "past", "memoria", "archivo", "secundaria", "buscar", "historial")),
         ToolEntry("memory_list", "memory_archive", "List lower-priority or demoted secondary memory", setOf("memory", "archive", "secondary", "list", "history", "memoria", "archivo", "secundaria", "listar", "historial")),
 
+        // Knowledge Base (on-device RAG)
+        ToolEntry("search_knowledge_base", "knowledge_base", "Semantic search over the user's own documents and notes in the knowledge base (RAG)", setOf("knowledge", "base", "document", "note", "rag", "semantic", "search", "query", "my notes", "my documents", "resume", "summarize", "base de conocimiento", "documento", "nota", "rag", "semantico", "buscar", "preguntar", "resumir", "mis notas", "mis documentos")),
+        ToolEntry("knowledge_base_status", "knowledge_base", "Check the knowledge base status: documents, chunks and embedding model", setOf("knowledge", "base", "status", "documents", "embedding", "model", "base de conocimiento", "estado", "documentos", "modelo")),
+
         // Skills
         ToolEntry("skill_create", "skills", "Create a reusable skill as a draft for user review", setOf("skill", "create", "workflow", "reusable", "habilidad", "crear", "automatizar", "flujo")),
         ToolEntry("skill_list", "skills", "List installed skills and their states", setOf("skill", "list", "installed", "draft", "active", "habilidades", "listar", "borrador")),

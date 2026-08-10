@@ -62,6 +62,7 @@ import com.aiagents.app.data.terminal.ReminderToolHandler
 import com.aiagents.app.data.terminal.CodeExecutionHandler
 import com.aiagents.app.data.terminal.PresentationToolHandler
 import com.aiagents.app.data.terminal.MemoryToolHandler
+import com.aiagents.app.data.terminal.KnowledgeBaseToolHandler
 import com.aiagents.app.data.terminal.CortexMemoryToolHandler
 import com.aiagents.app.data.terminal.AppControlToolHandler
 import com.aiagents.app.data.terminal.AssistantIdentityToolHandler
@@ -3115,6 +3116,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         toolName in ReminderToolHandler.ALL_TOOL_NAMES -> "Gestionando recordatorio..."
         toolName == CortexMemoryToolHandler.TOOL_NAME -> "Curando MEMORY.md..."
         toolName in MemoryToolHandler.ALL_TOOL_NAMES -> "Accediendo a memoria..."
+        toolName in KnowledgeBaseToolHandler.ALL_TOOL_NAMES -> "Buscando en la base de conocimiento..."
         toolName in CodeExecutionHandler.ALL_TOOL_NAMES -> "Ejecutando código..."
         toolName in PresentationToolHandler.ALL_TOOL_NAMES -> "Creando presentación..."
         toolName in FinanceToolHandler.ALL_TOOL_NAMES -> "Gestionando finanzas..."
@@ -3510,6 +3512,10 @@ Directorio de trabajo: $workspacePath""".trimIndent())
                         handleMemoryToolCall(agent, toolCall)
                     }
 
+                    in KnowledgeBaseToolHandler.ALL_TOOL_NAMES -> {
+                        handleKnowledgeBaseToolCall(agent, toolCall)
+                    }
+
                     in CodeExecutionHandler.ALL_TOOL_NAMES -> {
                         handleCodeExecutionToolCall(agent, toolCall)
                     }
@@ -3716,6 +3722,7 @@ Directorio de trabajo: $workspacePath""".trimIndent())
             when (tc.function.name) {
                 CortexMemoryToolHandler.TOOL_NAME -> handleCortexMemoryToolCall(orchestrator, tc)
                 in MemoryToolHandler.ALL_TOOL_NAMES -> handleMemoryToolCall(orchestrator, tc)
+                in KnowledgeBaseToolHandler.ALL_TOOL_NAMES -> handleKnowledgeBaseToolCall(orchestrator, tc)
                 in TodoToolHandler.ALL_TOOL_NAMES -> handleTodoToolCall(orchestrator, tc)
                 in FILE_TOOL_NAMES -> handleFileToolCall(orchestrator, tc)
                 "duckduckgo_search" -> handleDuckDuckGoSearchToolCall(orchestrator, tc)
@@ -5036,6 +5043,20 @@ Directorio de trabajo: $workspacePath""".trimIndent())
         )
         val toolMessage = Message(role = MessageRole.TOOL, content = result.content,
             toolResults = listOf(ToolResult(result.toolCallId, toolCall.function.name, result.content)))
+        repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
+    }
+
+    private suspend fun handleKnowledgeBaseToolCall(agent: Agent, toolCall: ToolCall) {
+        val result = repository.getKnowledgeBaseToolHandler().executeTool(
+            toolCallId = toolCall.id,
+            toolName = toolCall.function.name,
+            arguments = toolCall.function.arguments
+        )
+        val toolMessage = Message(
+            role = MessageRole.TOOL,
+            content = result.content,
+            toolResults = listOf(ToolResult(result.toolCallId, toolCall.function.name, result.content))
+        )
         repository.addMessage(workspaceId, _conversationId.value, toolMessage, agent.id)
     }
 
